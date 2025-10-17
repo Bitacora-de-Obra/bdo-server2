@@ -1,0 +1,164 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  fullName    String
+  email       String   @unique
+  password    String
+  projectRole UserRole
+  avatarUrl   String
+  appRole     AppRole
+  status      String
+  lastLoginAt DateTime?
+
+  logEntries  LogEntry[]
+  comments    Comment[]
+  commitments Commitment[]
+  signatures  Signature[]
+}
+
+enum UserRole {
+  RESIDENT
+  SUPERVISOR
+  CONTRACTOR_REP
+  ADMIN
+}
+
+enum AppRole {
+  admin
+  editor
+  viewer
+}
+
+model Project {
+  id         String @id @default(cuid())
+  name       String
+  contractId String @unique
+  logEntries LogEntry[]
+}
+
+model LogEntry {
+  id                      String      @id @default(cuid())
+  folioNumber             Int         @unique @default(autoincrement())
+  title                   String
+  description             String      @db.Text
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+  activityStartDate       DateTime
+  activityEndDate         DateTime
+  location                String
+  subject                 String
+  type                    EntryType
+  status                  EntryStatus
+  isConfidential          Boolean     @default(false)
+  requiredSignatoriesJson String?     @db.Text
+
+  authorId    String
+  author      User      @relation(fields: [authorId], references: [id])
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id])
+  comments    Comment[]
+  attachments Attachment[]
+  signatures  Signature[]
+}
+
+enum EntryType {
+  QUALITY
+  ADMINISTRATIVE
+  SAFETY
+  GENERAL
+}
+
+enum EntryStatus {
+  APPROVED
+  NEEDS_REVIEW
+  SUBMITTED
+  REJECTED
+  DRAFT
+}
+
+model Comment {
+  id          String       @id @default(cuid())
+  content     String       @db.Text
+  timestamp   DateTime     @default(now())
+  authorId    String
+  author      User         @relation(fields: [authorId], references: [id])
+  logEntryId  String
+  logEntry    LogEntry     @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+  attachments Attachment[]
+}
+
+model Attachment {
+  id         String  @id @default(cuid())
+  fileName   String
+  url        String  @db.Text
+  size       Int
+  type       String
+  logEntryId String?
+  logEntry   LogEntry? @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+  commentId  String?
+  comment    Comment?  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  actaId     String?
+  acta       Acta?     @relation(fields: [actaId], references: [id], onDelete: Cascade)
+}
+
+model Acta {
+  id          String     @id @default(cuid())
+  number      String     @unique
+  title       String
+  date        DateTime
+  area        ActaArea
+  status      ActaStatus
+  summary     String     @db.Text
+  commitments Commitment[]
+  attachments Attachment[]
+}
+
+model Commitment {
+  id            String           @id @default(cuid())
+  description   String           @db.Text
+  dueDate       DateTime
+  status        CommitmentStatus @default(PENDING)
+  actaId        String
+  acta          Acta             @relation(fields: [actaId], references: [id], onDelete: Cascade)
+  responsibleId String
+  responsible   User             @relation(fields: [responsibleId], references: [id])
+}
+
+model Signature {
+  id         String   @id @default(cuid())
+  signedAt   DateTime @default(now())
+  signerId   String
+  signer     User     @relation(fields: [signerId], references: [id], onDelete: Cascade)
+  logEntryId String?
+  logEntry   LogEntry? @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+}
+
+enum ActaArea {
+  COMITE_OBRA
+  HSE
+  AMBIENTAL
+  SOCIAL
+  JURIDICO
+  TECNICO
+  OTHER
+}
+
+enum ActaStatus {
+  SIGNED
+  DRAFT
+  FOR_SIGNATURES
+  CLOSED
+}
+
+enum CommitmentStatus {
+  PENDING
+  COMPLETED
+}
