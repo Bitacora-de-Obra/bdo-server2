@@ -1,11 +1,14 @@
 import express from 'express';
 import cors from 'cors';
-import { PrismaClient, EntryType, EntryStatus, ActaArea, ActaStatus, CommitmentStatus } from '@prisma/client';
+// Se elimina la importación directa de los enums individuales que ahora se manejan en los mapas
+import { PrismaClient, UserRole } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import 'dotenv/config';
 import multer from 'multer';
 import path from 'path';
+// Importamos los mapas desde el nuevo archivo de utilidades
+import { roleMap, actaAreaMap, actaStatusMap } from './utils/enum-maps';
 
 const app = express();
 const prisma = new PrismaClient();
@@ -80,33 +83,69 @@ app.post('/api/actas', async (req, res) => {
   try {
     const { number, title, date, area, status, summary, commitments = [], attachments = [] } = req.body;
 
-    // --- CORRECCIÓN: Mapas rellenados ---
-    const areaMap: { [key: string]: ActaArea } = {
-      'Comité de Obra': 'COMITE_OBRA', 'Comité HSE': 'HSE', 'Comité Ambiental': 'AMBIENTAL',
-      'Comité Social': 'SOCIAL', 'Comité Jurídico': 'JURIDICO', 'Comité Técnico': 'TECNICO', 'Otro': 'OTHER',
-    };
-    const statusMap: { [key: string]: ActaStatus } = {
-      'Firmada': 'SIGNED', 'En Borrador': 'DRAFT', 'Para Firmas': 'FOR_SIGNATURES', 'Cerrada': 'CLOSED',
-    };
-    const prismaArea = areaMap[area] || 'OTHER';
-    const prismaStatus = statusMap[status] || 'DRAFT';
-    
-    // El resto de la lógica para crear usuarios y el acta está bien
+    // Usamos los mapas importados
+    const prismaArea = actaAreaMap[area] || 'OTHER';
+    const prismaStatus = actaStatusMap[status] || 'DRAFT';
+
     const defaultPassword = await bcrypt.hash('password123', 10);
-    for (const c of commitments) { /* ... */ }
+    for (const c of commitments) {
+        const responsibleUser = c.responsible;
+        if (responsibleUser && responsibleUser.id) {
+            await prisma.user.upsert({
+                where: { id: responsibleUser.id },
+                update: {},
+                create: {
+                    id: responsibleUser.id,
+                    email: responsibleUser.email || `${responsibleUser.id}@example.com`,
+                    fullName: responsibleUser.fullName || 'Usuario Auto-Creado',
+                    password: defaultPassword,
+                    appRole: responsibleUser.appRole || 'editor',
+                    // Usamos el mapa de roles importado
+                    projectRole: roleMap[responsibleUser.projectRole] || 'RESIDENT',
+                    status: 'active',
+                    avatarUrl: responsibleUser.avatarUrl || '',
+                }
+            });
+        }
+    }
 
     const newActa = await prisma.acta.create({
       data: {
-        number, title, date: new Date(date), area: prismaArea, status: prismaStatus, summary,
-        commitments: { create: commitments.map((c: any) => ({ description: c.description, dueDate: new Date(c.dueDate), status: 'PENDING', responsible: { connect: { id: c.responsible.id } } })) },
-        attachments: { create: attachments.map((att: any) => ({ fileName: att.fileName, url: att.url, size: att.size, type: att.type })) }
+        number,
+        title,
+        date: new Date(date),
+        area: prismaArea,
+        status: prismaStatus,
+        summary,
+        commitments: {
+          create: commitments.map((c: any) => ({
+            description: c.description,
+            dueDate: new Date(c.dueDate),
+            status: 'PENDING',
+            responsible: {
+              connect: { id: c.responsible.id }
+            }
+          }))
+        },
+        attachments: {
+          create: attachments.map((att: any) => ({
+            fileName: att.fileName,
+            url: att.url,
+            size: att.size,
+            type: att.type,
+          }))
+        }
       },
-      include: { attachments: true, commitments: { include: { responsible: true } } }
+      include: {
+        commitments: { include: { responsible: true } },
+        attachments: true
+      }
     });
+
     res.status(201).json(newActa);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'No se pudo crear el acta.' });
+    res.status(500).json({ error: 'No se pudo crear el acta con sus compromisos.' });
   }
 });
 

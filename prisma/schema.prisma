@@ -29,7 +29,9 @@ enum UserRole {
   SUPERVISOR
   CONTRACTOR_REP
   ADMIN
+  GUEST // <-- AÑADE ESTA LÍNEA
 }
+
 
 enum AppRole {
   admin
