@@ -18,14 +18,17 @@ model User {
   status      String
   lastLoginAt DateTime?
 
-  logEntries  LogEntry[]
-  comments    Comment[]
-  commitments Commitment[]
-  signatures  Signature[]
-  assignedLogEntries LogEntry[] @relation("LogEntryAssignees") // <-- AÑADE ESTA LÍNEA
-  observations       Observation[] // <-- AÑADE ESTA LÍNEA (Un usuario puede hacer muchas observaciones)
-  communications     Communication[] @relation("UploadedCommunications") // <-- AÑADE ESTA LÍNEA
-  drawingVersions  DrawingVersion[] // <-- AÑADE ESTA LÍNEA
+  logEntries         LogEntry[]     @relation("AuthoredLogEntries") // Nombre explícito para la autoría
+  comments           Comment[]
+  commitments        Commitment[]
+  signatures         Signature[]    // Firmas realizadas por este usuario (relación genérica)
+  assignedLogEntries LogEntry[]     @relation("LogEntryAssignees")
+  authoredReports    Report[]       @relation("AuthoredReports")
+  // reportSignatures   Signature[] @relation("ReportSignatures") // <-- ELIMINA O COMENTA ESTA LÍNEA (Redundante con 'signatures')
+  observations       Observation[]
+  communications     Communication[] @relation("UploadedCommunications")
+  drawingVersions    DrawingVersion[]
+  authoredPhotos PhotoEntry[] @relation("AuthoredPhotos") // <-- AÑADE ESTA LÍNEA
 }
 
 enum UserRole {
@@ -67,12 +70,12 @@ model LogEntry {
   requiredSignatoriesJson String?     @db.Text
 
   authorId    String
-  author      User      @relation(fields: [authorId], references: [id])
+  author      User      @relation("AuthoredLogEntries", fields: [authorId], references: [id]) // Usa el nombre explícito
   projectId   String
   project     Project   @relation(fields: [projectId], references: [id])
   comments    Comment[]
   attachments Attachment[]
-  signatures  Signature[]
+  signatures  Signature[] @relation("LogEntrySignatures") // Nombre explícito
   assignees   User[]    @relation("LogEntryAssignees") // <-- AÑADE ESTA LÍNEA
 }
 
@@ -109,9 +112,9 @@ model Comment {
 }
 
 model Attachment {
-  id         String  @id @default(cuid())
+  id         String    @id @default(cuid())
   fileName   String
-  url        String  @db.Text
+  url        String    @db.Text
   size       Int
   type       String
   logEntryId String?
@@ -120,8 +123,14 @@ model Attachment {
   comment    Comment?  @relation(fields: [commentId], references: [id], onDelete: Cascade)
   actaId     String?
   acta       Acta?     @relation(fields: [actaId], references: [id], onDelete: Cascade)
-  costActaId String? // <-- AÑADE ESTA LÍNEA (Un adjunto puede pertenecer a un acta de costo)
-  costActa   CostActa? @relation(fields: [costActaId], references: [id], onDelete: Cascade) // <-- AÑADE ESTA LÍNEA
+
+  // --- CORRECCIÓN AQUÍ ---
+  costActaId String?   // Este campo solo guarda el ID
+  costActa   CostActa? @relation(fields: [costActaId], references: [id], onDelete: Cascade) // El @relation va aquí
+
+  reportId   String?   // Para informes (Paso 18)
+  report     Report?   @relation(fields: [reportId], references: [id], onDelete: Cascade) // Para informes (Paso 18)
+  photoEntry PhotoEntry? // <-- AÑADE ESTA LÍNEA (Un attachment puede ser una foto)
 }
 
 model Acta {
@@ -134,7 +143,7 @@ model Acta {
   summary     String     @db.Text
   commitments Commitment[]
   attachments Attachment[]
-  signatures  Signature[]
+  signatures              Signature[] @relation("ActaSignatures") // Nombre explícito
   requiredSignatoriesJson String?    @db.Text // <-- AÑADE ESTA LÍNEA
   createdAt   DateTime   @default(now()) // <-- AÑADE ESTA LÍNEA
   updatedAt   DateTime   @updatedAt      // <-- AÑADE ESTA LÍNEA
@@ -155,11 +164,19 @@ model Signature {
   id         String   @id @default(cuid())
   signedAt   DateTime @default(now())
   signerId   String
-  signer     User     @relation(fields: [signerId], references: [id], onDelete: Cascade)
+  signer     User     @relation(fields: [signerId], references: [id], onDelete: Cascade) // Relación general con el firmante
+
   logEntryId String?
-  logEntry   LogEntry? @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
-  actaId     String? // <-- AÑADE ESTA LÍNEA
-  acta       Acta?     @relation(fields: [actaId], references: [id], onDelete: Cascade) // <-- AÑADE ESTA LÍNEA
+  // Añade map para nombre único de constraint
+  logEntry   LogEntry? @relation("LogEntrySignatures", fields: [logEntryId], references: [id], onDelete: Cascade, map: "Signature_logEntryId_fkey")
+
+  actaId     String?
+  // Añade map para nombre único de constraint
+  acta       Acta?     @relation("ActaSignatures", fields: [actaId], references: [id], onDelete: Cascade, map: "Signature_actaId_fkey")
+
+  reportId   String?
+  // Añade map para nombre único de constraint
+  report     Report?   @relation("ReportSignatures", fields: [reportId], references: [id], onDelete: Cascade, map: "Signature_reportId_fkey")
 }
 
 enum ActaArea {
@@ -348,4 +365,64 @@ model Observation {
 
   costActaId String
   costActa   CostActa @relation(fields: [costActaId], references: [id], onDelete: Cascade) // A qué acta pertenece
+}
+
+enum ReportStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  OBSERVED
+}
+
+enum ReportScope { // Asegúrate que este enum exista
+  OBRA
+  INTERVENTORIA
+}
+
+model Report {
+  id                  String       @id @default(cuid())
+  type                String       // "Weekly" or "Monthly"
+  reportScope         ReportScope
+  number              String       @unique // Aseguramos que el número sea único
+  period              String
+  submissionDate      DateTime
+  status              ReportStatus @default(DRAFT)
+  summary             String       @db.Text
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  // --- Relaciones ---
+  authorId            String
+  author              User         @relation("AuthoredReports", fields: [authorId], references: [id])
+
+  attachments         Attachment[] // Relación con Adjuntos
+  signatures          Signature[]  @relation("ReportSignatures") // <-- ASEGÚRATE QUE ESTA LÍNEA ESTÉ CORRECTA Y CON EL NOMBRE
+  requiredSignatoriesJson String?  @db.Text // Para guardar IDs de firmantes requeridos
+}
+
+model ControlPoint {
+  id          String       @id @default(cuid())
+  name        String
+  description String?      @db.Text
+  location    String?
+  photos      PhotoEntry[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model PhotoEntry {
+  id        String   @id @default(cuid())
+  url       String   @db.Text // URL del archivo subido
+  date      DateTime @default(now())
+  notes     String?  @db.Text
+
+  authorId  String
+  author    User     @relation("AuthoredPhotos", fields: [authorId], references: [id])
+
+  controlPointId String
+  controlPoint   ControlPoint @relation(fields: [controlPointId], references: [id], onDelete: Cascade)
+
+  // También asociamos la foto al Attachment para mantener la consistencia (opcional pero recomendado)
+  attachmentId String? @unique // Cada foto corresponde a un único attachment
+  attachment   Attachment? @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
 }

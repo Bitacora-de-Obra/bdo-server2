@@ -1,4 +1,4 @@
-import { UserRole, ActaArea, ActaStatus, EntryType, EntryStatus, DeliveryMethod, DrawingDiscipline, WorkActaStatus, CostActaStatus } from '@prisma/client'; // <-- MODIFICA ESTA LÍNEA
+import { UserRole, ActaArea, ActaStatus, EntryType, EntryStatus, DeliveryMethod, DrawingDiscipline, WorkActaStatus, CostActaStatus, ReportScope , ReportStatus} from '@prisma/client'; // <-- MODIFICA ESTA LÍNEA
 /**
  * Mapea los valores de rol del frontend (en español) a los valores del enum de Prisma.
  * Este es el "traductor" entre el cliente y la base de datos.
@@ -84,4 +84,16 @@ export const costActaStatusMap: { [key: string]: CostActaStatus } = { // <-- AÑ
     'Aprobada': 'APPROVED',
     'En Trámite de Pago': 'IN_PAYMENT',
     'Pagada': 'PAID',
+};
+
+export const reportScopeMap: { [key: string]: ReportScope } = { // <-- AÑADE ESTE BLOQUE
+    'Obra': 'OBRA',
+    'Interventoría': 'INTERVENTORIA',
+};
+
+export const reportStatusMap: { [key: string]: ReportStatus } = { // <-- AÑADE ESTE BLOQUE
+    'Borrador': 'DRAFT',
+    'Presentado': 'SUBMITTED',
+    'Aprobado': 'APPROVED',
+    'Con Observaciones': 'OBSERVED',
 };
