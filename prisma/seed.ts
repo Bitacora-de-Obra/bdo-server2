@@ -1,5 +1,5 @@
 // bdo-server-develop/prisma/seed.ts
-import { PrismaClient, UserRole, AppRole } from '@prisma/client';
+import { PrismaClient, UserRole, AppRole, ProjectTask } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
@@ -64,6 +64,38 @@ async function main() {
   console.log(`Seeded ${contractItems.length} Contract Items.`);
 
   console.log(`Seeding finished.`);
+
+  console.log('Seeding Project Tasks...');
+ const mockTasks = [
+    // Copia aquí el contenido EXACTO de MOCK_PROJECT_TASKS de tu frontend,
+    // pero SIN la propiedad 'children' en cada objeto.
+    // Ejemplo de una tarea:
+    // { id: "task-1", taskId: "task-1", name: "Fase 1: Preliminares y Movimiento de Tierras", startDate: "2024-07-01", endDate: "2024-08-15", progress: 100, duration: 46, isSummary: true, outlineLevel: 1 },
+    // ... (todas las demás tareas)
+ ];
+
+ // Asegúrate de tener el array MOCK_PROJECT_TASKS copiado aquí sin 'children'
+
+ for (const task of mockTasks) {
+     // Convertimos fechas string a Date y nos aseguramos que isSummary sea boolean
+     const taskData = {
+         ...task,
+         startDate: new Date(task.startDate),
+         endDate: new Date(task.endDate),
+         isSummary: !!task.isSummary, // Convierte a boolean por si acaso
+         // Omitimos parentId y dependencias por ahora en el seed
+     };
+     await prisma.projectTask.upsert({
+         where: { taskId: task.id }, // Usamos el ID original como identificador único
+         update: taskData,
+         create: taskData,
+     });
+ }
+ console.log(`Seeded ${mockTasks.length} Project Tasks (flat).`);
+
+
+ console.log(`Seeding finished.`);
+
 }
 
 main()

@@ -51,6 +51,7 @@ model Project {
   name       String
   contractId String @unique
   logEntries LogEntry[]
+  ProjectTasks ProjectTask[]
 }
 
 model LogEntry {
@@ -425,4 +426,32 @@ model PhotoEntry {
   // También asociamos la foto al Attachment para mantener la consistencia (opcional pero recomendado)
   attachmentId String? @unique // Cada foto corresponde a un único attachment
   attachment   Attachment? @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+}
+
+model ProjectTask {
+  id           String   @id @default(cuid())
+  taskId       String   @unique // ID único de la tarea (puede venir de MS Project)
+  name         String
+  startDate    DateTime
+  endDate      DateTime
+  progress     Int      @default(0) // 0 a 100
+  duration     Int      // Duración en días
+  isSummary    Boolean  @default(false)
+  outlineLevel Int      @default(1)
+
+  // Relación Padre-Hijo (para jerarquía)
+  parentId     String?
+  parent       ProjectTask?  @relation("TaskHierarchy", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  children     ProjectTask[] @relation("TaskHierarchy")
+
+  // Relación de Dependencias (Muchos a Muchos)
+  successors   ProjectTask[] @relation("TaskDependencies", references: [id]) // Tareas que dependen de esta
+  predecessors ProjectTask[] @relation("TaskDependencies", references: [id]) // Tareas de las que esta depende
+
+  // Relación con el Proyecto General (si cada proyecto tiene su propio cronograma)
+  // projectId String?
+  // project   Project? @relation(fields: [projectId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
