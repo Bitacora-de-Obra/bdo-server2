@@ -22,6 +22,10 @@ model User {
   comments    Comment[]
   commitments Commitment[]
   signatures  Signature[]
+  assignedLogEntries LogEntry[] @relation("LogEntryAssignees") // <-- AÑADE ESTA LÍNEA
+  observations       Observation[] // <-- AÑADE ESTA LÍNEA (Un usuario puede hacer muchas observaciones)
+  communications     Communication[] @relation("UploadedCommunications") // <-- AÑADE ESTA LÍNEA
+  drawingVersions  DrawingVersion[] // <-- AÑADE ESTA LÍNEA
 }
 
 enum UserRole {
@@ -69,6 +73,7 @@ model LogEntry {
   comments    Comment[]
   attachments Attachment[]
   signatures  Signature[]
+  assignees   User[]    @relation("LogEntryAssignees") // <-- AÑADE ESTA LÍNEA
 }
 
 enum EntryType {
@@ -92,8 +97,14 @@ model Comment {
   timestamp   DateTime     @default(now())
   authorId    String
   author      User         @relation(fields: [authorId], references: [id])
-  logEntryId  String
-  logEntry    LogEntry     @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+
+  logEntryId  String?
+  logEntry    LogEntry?    @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+
+  // --- LA CORRECCIÓN ESTÁ AQUÍ ---
+  drawingId   String?      // Este campo solo guarda el ID
+  drawing     Drawing?     @relation("DrawingComments", fields: [drawingId], references: [id], onDelete: Cascade) // El @relation va en el campo del objeto
+
   attachments Attachment[]
 }
 
@@ -109,6 +120,8 @@ model Attachment {
   comment    Comment?  @relation(fields: [commentId], references: [id], onDelete: Cascade)
   actaId     String?
   acta       Acta?     @relation(fields: [actaId], references: [id], onDelete: Cascade)
+  costActaId String? // <-- AÑADE ESTA LÍNEA (Un adjunto puede pertenecer a un acta de costo)
+  costActa   CostActa? @relation(fields: [costActaId], references: [id], onDelete: Cascade) // <-- AÑADE ESTA LÍNEA
 }
 
 model Acta {
@@ -121,6 +134,10 @@ model Acta {
   summary     String     @db.Text
   commitments Commitment[]
   attachments Attachment[]
+  signatures  Signature[]
+  requiredSignatoriesJson String?    @db.Text // <-- AÑADE ESTA LÍNEA
+  createdAt   DateTime   @default(now()) // <-- AÑADE ESTA LÍNEA
+  updatedAt   DateTime   @updatedAt      // <-- AÑADE ESTA LÍNEA
 }
 
 model Commitment {
@@ -141,6 +158,8 @@ model Signature {
   signer     User     @relation(fields: [signerId], references: [id], onDelete: Cascade)
   logEntryId String?
   logEntry   LogEntry? @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+  actaId     String? // <-- AÑADE ESTA LÍNEA
+  acta       Acta?     @relation(fields: [actaId], references: [id], onDelete: Cascade) // <-- AÑADE ESTA LÍNEA
 }
 
 enum ActaArea {
@@ -163,4 +182,170 @@ enum ActaStatus {
 enum CommitmentStatus {
   PENDING
   COMPLETED
+}
+
+enum CommunicationStatus {
+  PENDIENTE
+  EN_TRAMITE
+  RESUELTO
+}
+
+enum DeliveryMethod {
+  MAIL
+  PRINTED
+  SYSTEM
+  FAX
+}
+
+model Communication {
+  id               String              @id @default(cuid())
+  radicado         String              @unique
+  subject          String
+  description      String?             @db.Text
+  senderEntity     String
+  senderName       String
+  senderTitle      String
+  recipientEntity  String
+  recipientName    String
+  recipientTitle   String
+  signerName       String
+  sentDate         DateTime
+  dueDate          DateTime?
+  deliveryMethod   DeliveryMethod
+  notes            String?             @db.Text
+  status           CommunicationStatus @default(PENDIENTE)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  // Relación con el usuario que subió el registro
+  uploaderId       String
+  uploader         User                @relation("UploadedCommunications", fields: [uploaderId], references: [id]) // <-- MODIFICA ESTA LÍNEA
+  // Relación para respuestas (hilo de conversación)
+  parentId         String?
+  parent           Communication?      @relation("CommunicationThread", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  responses        Communication[]     @relation("CommunicationThread")
+
+  // Relaciones futuras para adjuntos e historial
+  // attachments      Attachment[]
+  // statusHistory    StatusChange[]
+}
+
+enum DrawingDiscipline {
+  ARQUITECTONICO
+  ESTRUCTURAL
+  ELECTRICO
+  HIDROSANITARIO
+  MECANICO
+  URBANISMO
+  SEÑALIZACION
+  GEOTECNIA
+  OTHER
+}
+
+enum DrawingStatus {
+  VIGENTE
+  OBSOLETO
+}
+
+model Drawing {
+  id         String            @id @default(cuid())
+  code       String            @unique // ej. "EST-001-A"
+  title      String
+  discipline DrawingDiscipline
+  status     DrawingStatus     @default(VIGENTE)
+  versions   DrawingVersion[]
+  comments   Comment[]         @relation("DrawingComments") // <-- AÑADE ESTA LÍNEA
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+}
+
+model DrawingVersion {
+  id            String   @id @default(cuid())
+  versionNumber Int
+  fileName      String
+  url           String   @db.Text
+  size          Int
+  uploadDate    DateTime @default(now())
+
+  drawingId     String
+  drawing       Drawing  @relation(fields: [drawingId], references: [id], onDelete: Cascade)
+
+  uploaderId    String
+  uploader      User     @relation(fields: [uploaderId], references: [id])
+}
+
+enum WorkActaStatus {
+  APPROVED
+  IN_REVIEW
+  DRAFT
+}
+
+model ContractItem {
+  id               String         @id @default(cuid())
+  itemCode         String         @unique
+  description      String         @db.Text
+  unit             String
+  unitPrice        Float
+  contractQuantity Float
+  workActaItems    WorkActaItem[]
+}
+
+model WorkActa {
+  id        String         @id @default(cuid())
+  number    String         @unique
+  period    String
+  date      DateTime
+  status    WorkActaStatus @default(DRAFT)
+  items     WorkActaItem[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model WorkActaItem {
+  id        String @id @default(cuid())
+  quantity  Float
+
+  workActaId String
+  workActa   WorkActa @relation(fields: [workActaId], references: [id], onDelete: Cascade)
+
+  contractItemId String
+  contractItem   ContractItem @relation(fields: [contractItemId], references: [id], onDelete: Cascade)
+}
+
+enum CostActaStatus {
+  SUBMITTED    // Radicada
+  IN_REVIEW    // En Revisión
+  OBSERVED     // Observada
+  APPROVED     // Aprobada
+  IN_PAYMENT   // En Trámite de Pago
+  PAID         // Pagada
+}
+
+model CostActa {
+  id                 String         @id @default(cuid())
+  number             String         @unique
+  period             String
+  submissionDate     DateTime
+  approvalDate       DateTime?
+  paymentDueDate     DateTime?
+  billedAmount       Float
+  totalContractValue Float          // Guardamos el valor total *en el momento* de crear el acta
+  status             CostActaStatus @default(SUBMITTED)
+  relatedProgress    String?        @db.Text
+  observations       Observation[]
+  attachments        Attachment[]   // Reutilizamos el modelo Attachment
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+}
+
+model Observation {
+  id        String   @id @default(cuid())
+  text      String   @db.Text
+  timestamp DateTime @default(now())
+
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id]) // Quién hizo la observación
+
+  costActaId String
+  costActa   CostActa @relation(fields: [costActaId], references: [id], onDelete: Cascade) // A qué acta pertenece
 }
