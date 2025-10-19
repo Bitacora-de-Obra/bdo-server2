@@ -22,13 +22,17 @@ import {
   
 } from "./utils/enum-maps";
 // Importa el middleware de autenticación (suponiendo que está en src/middleware/auth.ts)
-// import { authMiddleware } from './middleware/auth'; // Descomenta cuando lo implementes
-
+import { authMiddleware, AuthRequest } from './middleware/auth'; // Asegúrate que la ruta sea correcta
 const app = express();
 const prisma = new PrismaClient();
 const port = 4000;
 
-app.use(cors()); // 1. Habilita CORS para todas las rutas
+app.use(cors({
+    origin: 'http://localhost:3000', // Permite solo tu frontend
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Incluye OPTIONS para preflight
+    allowedHeaders: ['Content-Type', 'Authorization'], // Headers permitidos
+    credentials: true // Si planeas usar cookies/sesiones más adelante
+}));
 app.use(express.json()); // 2. Permite que Express entienda JSON en el body
 app.use('/uploads', express.static(path.join(__dirname, '../uploads'))); // 3. Sirve archivos estáticos (si aplica)
 
@@ -92,9 +96,97 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
 app.post("/api/auth/register", async (req, res) => {
   res.status(501).json({ message: "Not Implemented" });
 });
+
 app.post("/api/auth/login", async (req, res) => {
-  res.status(501).json({ message: "Not Implemented" });
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email y contraseña son requeridos." });
+  }
+
+  try {
+    // 1. Buscar al usuario por email
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      return res.status(401).json({ error: "Credenciales inválidas." }); // Usuario no encontrado
+    }
+
+    // 2. Comparar la contraseña proporcionada con la hasheada en la BD
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: "Credenciales inválidas." }); // Contraseña incorrecta
+    }
+
+    // 3. Verificar si el usuario está activo (opcional pero recomendado)
+    if (user.status !== 'active') {
+        return res.status(403).json({ error: "La cuenta de usuario está inactiva." });
+    }
+
+    // 4. Generar el JWT
+    const token = jwt.sign(
+      { userId: user.id }, // Payload: incluimos el ID del usuario
+      process.env.JWT_SECRET!, // Usamos la clave secreta del .env
+      { expiresIn: "24h" } // El token expira en 24 horas (puedes ajustarlo)
+    );
+
+    // 5. Devolver el token y la información del usuario (sin la contraseña)
+    const { password: _, ...userWithoutPassword } = user; // Excluimos la contraseña
+    res.json({ token, user: userWithoutPassword });
+
+  } catch (error) {
+    console.error("Error en el login:", error);
+    res.status(500).json({ error: "Error interno del servidor." });
+  }
 });
+
+// --- RUTA PARA VERIFICAR TOKEN Y OBTENER DATOS DEL USUARIO ---
+app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
+  // Si el middleware authMiddleware pasa, significa que el token es válido
+  // y req.user contiene el payload ( { userId: '...' } )
+  const userId = req.user?.userId;
+
+  if (!userId) {
+    // Esto no debería ocurrir si authMiddleware funciona, pero es una guarda de seguridad
+    return res.status(401).json({ error: "No se pudo identificar al usuario desde el token." });
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      // Seleccionamos los campos a devolver (excluimos la contraseña)
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        projectRole: true,
+        avatarUrl: true,
+        appRole: true,
+        status: true,
+        lastLoginAt: true,
+        // Agrega otros campos que necesites en el frontend
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "Usuario no encontrado." });
+    }
+
+    if (user.status !== 'active') {
+        return res.status(403).json({ error: "La cuenta de usuario está inactiva." });
+    }
+
+    res.json(user); // Devolvemos los datos del usuario autenticado
+
+  } catch (error) {
+    console.error("Error al obtener datos del usuario (/api/auth/me):", error);
+    res.status(500).json({ error: "Error interno del servidor." });
+  }
+});
+
 app.get("/api/users", async (req, res) => {
   try {
     const users = await prisma.user.findMany({
@@ -466,7 +558,9 @@ app.post("/api/actas", async (req, res) => {
 // TODO: Añadir PUT /api/commitments/:id
 
 // --- RUTAS DE BITÁCORA ---
-app.get("/api/log-entries", async (req, res) => {
+app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => { // <-- Añade authMiddleware y AuthRequest
+  // Ahora puedes acceder a req.user.userId si lo necesitas
+  console.log("Usuario autenticado:", req.user?.userId);
   try {
     const entries = await prisma.logEntry.findMany({
       orderBy: { createdAt: "desc" },
