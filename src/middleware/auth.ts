@@ -1,36 +1,34 @@
+// En bdo-server/src/middleware/auth.ts
+
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
-// Extendemos la interfaz de Request de Express para incluir la propiedad `user`
 export interface AuthRequest extends Request {
   user?: { userId: string };
 }
 
-/**
- * Middleware para verificar el token JWT en las rutas protegidas.
- */
 export const authMiddleware = (req: AuthRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers['authorization'];
-  
-  // El token usualmente viene en el formato "Bearer <token>"
   const token = authHeader && authHeader.split(' ')[1];
 
+
   if (!token) {
-    // 401 Unauthorized: No se proporcionó token
+    console.log('Auth Middleware: No token provided.'); // Log si no hay token
     return res.status(401).json({ error: 'Acceso denegado. No se proporcionó token.' });
   }
 
   try {
-    // Verificamos el token con nuestra clave secreta
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string };
-    
-    // Adjuntamos el payload decodificado (que contiene el userId) al objeto `req`
     req.user = { userId: decoded.userId };
-    
-    // Pasamos al siguiente middleware o controlador de la ruta
     next();
-  } catch (error) {
-    // 403 Forbidden: El token no es válido o ha expirado
-    res.status(403).json({ error: 'Token inválido o expirado.' });
+  } catch (error: any) { // Captura el error específico
+    // --- LOGS DE ERROR DETALLADOS ---
+    console.error('Auth Middleware: Token verification FAILED.');
+    console.error('Error Name:', error.name); // Ej: TokenExpiredError, JsonWebTokenError
+    console.error('Error Message:', error.message); // Ej: jwt expired, invalid signature
+    // console.error('Error completo:', error); // Descomenta si necesitas más detalle
+    // --------------------------------
+
+    res.status(403).json({ error: 'Token inválido o expirado.' }); // Mantenemos el mensaje genérico al frontend
   }
 };

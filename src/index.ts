@@ -1,6 +1,14 @@
 import express from "express";
 import cors from "cors";
-import { PrismaClient, UserRole, WorkActaStatus, CostActaStatus, ReportStatus, ReportScope, ProjectTask} from '@prisma/client';
+import {
+  PrismaClient,
+  UserRole,
+  WorkActaStatus,
+  CostActaStatus,
+  ReportStatus,
+  ReportScope,
+  ProjectTask,
+} from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import "dotenv/config";
@@ -18,23 +26,24 @@ import {
   workActaStatusMap,
   costActaStatusMap,
   reportScopeMap,
-  reportStatusMap
-  
+  reportStatusMap,
 } from "./utils/enum-maps";
 // Importa el middleware de autenticación (suponiendo que está en src/middleware/auth.ts)
-import { authMiddleware, AuthRequest } from './middleware/auth'; // Asegúrate que la ruta sea correcta
+import { authMiddleware, AuthRequest } from "./middleware/auth"; // Asegúrate que la ruta sea correcta
 const app = express();
 const prisma = new PrismaClient();
 const port = 4000;
 
-app.use(cors({
-    origin: 'http://localhost:3000', // Permite solo tu frontend
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Incluye OPTIONS para preflight
-    allowedHeaders: ['Content-Type', 'Authorization'], // Headers permitidos
-    credentials: true // Si planeas usar cookies/sesiones más adelante
-}));
+app.use(
+  cors({
+    origin: "http://localhost:3000", // Permite solo tu frontend
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // Incluye OPTIONS para preflight
+    allowedHeaders: ["Content-Type", "Authorization"], // Headers permitidos
+    credentials: true, // Si planeas usar cookies/sesiones más adelante
+  })
+);
 app.use(express.json()); // 2. Permite que Express entienda JSON en el body
-app.use('/uploads', express.static(path.join(__dirname, '../uploads'))); // 3. Sirve archivos estáticos (si aplica)
+app.use("/uploads", express.static(path.join(__dirname, "../uploads"))); // 3. Sirve archivos estáticos (si aplica)
 
 // --- CONFIGURACIÓN DE MULTER (Subida de Archivos) ---
 
@@ -53,9 +62,9 @@ const upload = multer({ storage });
 
 // Servir archivos estáticos desde la carpeta 'uploads'
 // __dirname se refiere al directorio actual del archivo (dist/ en tiempo de ejecución)
-app.get('/api/ping', (req, res) => {
+app.get("/api/ping", (req, res) => {
   console.log("!!! PING RECIBIDO !!!");
-  res.json({ message: 'pong' });
+  res.json({ message: "pong" });
 });
 
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
@@ -98,6 +107,10 @@ app.post("/api/auth/register", async (req, res) => {
 });
 
 app.post("/api/auth/login", async (req, res) => {
+  // --- LOG INICIAL (Ya lo tienes) ---
+  console.log("!!! RUTA /api/auth/login ALCANZADA !!!");
+  // ---------------------------------
+
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -105,40 +118,51 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   try {
-    // 1. Buscar al usuario por email
+    // --- LOG ANTES DE BUSCAR USUARIO ---
+    // -----------------------------------
     const user = await prisma.user.findUnique({
       where: { email },
     });
 
     if (!user) {
-      return res.status(401).json({ error: "Credenciales inválidas." }); // Usuario no encontrado
+      return res.status(401).json({ error: "Credenciales inválidas." });
     }
+    // --- LOG USUARIO ENCONTRADO ---
+    // ----------------------------
 
-    // 2. Comparar la contraseña proporcionada con la hasheada en la BD
+    // --- LOG ANTES DE COMPARAR PASSWORD ---
+    // ------------------------------------
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
-      return res.status(401).json({ error: "Credenciales inválidas." }); // Contraseña incorrecta
+      return res.status(401).json({ error: "Credenciales inválidas." });
     }
+    // --- LOG PASSWORD VÁLIDO ---
+    // ---------------------------
 
-    // 3. Verificar si el usuario está activo (opcional pero recomendado)
-    if (user.status !== 'active') {
-        return res.status(403).json({ error: "La cuenta de usuario está inactiva." });
+    if (user.status !== "active") {
+      console.log(`!!! Login Backend: Usuario ${user.id} INACTIVO.`); // <-- LOG USUARIO INACTIVO
+      return res.status(403).json({ error: "La cuenta de usuario está inactiva." });
     }
+    // --- LOG USUARIO ACTIVO ---
+    console.log(`!!! Login Backend: Usuario ${user.id} ACTIVO.`);
+    // --------------------------
 
-    // 4. Generar el JWT
-    const token = jwt.sign(
-      { userId: user.id }, // Payload: incluimos el ID del usuario
-      process.env.JWT_SECRET!, // Usamos la clave secreta del .env
-      { expiresIn: "24h" } // El token expira en 24 horas (puedes ajustarlo)
-    );
+    // --- LOG ANTES DE GENERAR TOKEN ---
+    console.log(`!!! Login Backend: Generando token para usuario ${user.id}...`);
+    // --------------------------------
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, {
+      expiresIn: "24h",
+    });
 
-    // 5. Devolver el token y la información del usuario (sin la contraseña)
-    const { password: _, ...userWithoutPassword } = user; // Excluimos la contraseña
+
+    const { password: _, ...userWithoutPassword } = user;
     res.json({ token, user: userWithoutPassword });
 
   } catch (error) {
-    console.error("Error en el login:", error);
+    // --- LOG ERROR EN CATCH ---
+    console.error("!!! Login Backend: ERROR en bloque catch:", error); // <-- LOG ERROR GENERAL
+    // -------------------------
     res.status(500).json({ error: "Error interno del servidor." });
   }
 });
@@ -151,7 +175,9 @@ app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
 
   if (!userId) {
     // Esto no debería ocurrir si authMiddleware funciona, pero es una guarda de seguridad
-    return res.status(401).json({ error: "No se pudo identificar al usuario desde el token." });
+    return res
+      .status(401)
+      .json({ error: "No se pudo identificar al usuario desde el token." });
   }
 
   try {
@@ -168,19 +194,20 @@ app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
         status: true,
         lastLoginAt: true,
         // Agrega otros campos que necesites en el frontend
-      }
+      },
     });
 
     if (!user) {
       return res.status(404).json({ error: "Usuario no encontrado." });
     }
 
-    if (user.status !== 'active') {
-        return res.status(403).json({ error: "La cuenta de usuario está inactiva." });
+    if (user.status !== "active") {
+      return res
+        .status(403)
+        .json({ error: "La cuenta de usuario está inactiva." });
     }
 
     res.json(user); // Devolvemos los datos del usuario autenticado
-
   } catch (error) {
     console.error("Error al obtener datos del usuario (/api/auth/me):", error);
     res.status(500).json({ error: "Error interno del servidor." });
@@ -558,7 +585,8 @@ app.post("/api/actas", async (req, res) => {
 // TODO: Añadir PUT /api/commitments/:id
 
 // --- RUTAS DE BITÁCORA ---
-app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => { // <-- Añade authMiddleware y AuthRequest
+app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
+  // <-- Añade authMiddleware y AuthRequest
   // Ahora puedes acceder a req.user.userId si lo necesitas
   console.log("Usuario autenticado:", req.user?.userId);
   try {
@@ -1038,7 +1066,7 @@ app.get("/api/reports", async (req, res) => {
 
     const whereClause: any = {};
     if (type) whereClause.type = type as string;
-    
+
     // Traduce el scope del query param al enum de Prisma ANTES de hacer la consulta
     if (scope) {
       const prismaScope = reportScopeMap[scope as string];
@@ -1049,25 +1077,31 @@ app.get("/api/reports", async (req, res) => {
 
     const reports = await prisma.report.findMany({
       where: whereClause,
-      orderBy: { submissionDate: 'desc' },
+      orderBy: { submissionDate: "desc" },
       include: {
         author: true,
         attachments: true,
-        signatures: { include: { signer: true } }
-      }
+        signatures: { include: { signer: true } },
+      },
     });
 
     // Formatea la respuesta para que los enums vuelvan a ser texto legible por el frontend
-    const formattedReports = reports.map(report => ({
-        ...report,
-        reportScope: Object.keys(reportScopeMap).find(key => reportScopeMap[key] === report.reportScope) || report.reportScope,
-        status: Object.keys(reportStatusMap).find(key => reportStatusMap[key] === report.status) || report.status,
+    const formattedReports = reports.map((report) => ({
+      ...report,
+      reportScope:
+        Object.keys(reportScopeMap).find(
+          (key) => reportScopeMap[key] === report.reportScope
+        ) || report.reportScope,
+      status:
+        Object.keys(reportStatusMap).find(
+          (key) => reportStatusMap[key] === report.status
+        ) || report.status,
     }));
 
     res.json(formattedReports);
   } catch (error) {
     console.error("Error al obtener los informes:", error);
-    res.status(500).json({ error: 'No se pudieron obtener los informes.' });
+    res.status(500).json({ error: "No se pudieron obtener los informes." });
   }
 });
 
@@ -1075,18 +1109,37 @@ app.get("/api/reports", async (req, res) => {
 app.post("/api/reports", async (req, res) => {
   try {
     const {
-      type, reportScope, number, period, submissionDate, summary, authorId,
-      requiredSignatories = [], attachments = [] // Recibe IDs de adjuntos
+      type,
+      reportScope,
+      number,
+      period,
+      submissionDate,
+      summary,
+      authorId,
+      requiredSignatories = [],
+      attachments = [], // Recibe IDs de adjuntos
     } = req.body;
 
-    if (!type || !reportScope || !number || !period || !submissionDate || !summary || !authorId) {
-      return res.status(400).json({ error: 'Faltan datos obligatorios para crear el informe.' });
+    if (
+      !type ||
+      !reportScope ||
+      !number ||
+      !period ||
+      !submissionDate ||
+      !summary ||
+      !authorId
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Faltan datos obligatorios para crear el informe." });
     }
 
     // --- TRADUCCIÓN DE ENUMS ---
     const prismaReportScope = reportScopeMap[reportScope];
     if (!prismaReportScope) {
-        return res.status(400).json({ error: `El valor de reportScope '${reportScope}' no es válido.` });
+      return res.status(400).json({
+        error: `El valor de reportScope '${reportScope}' no es válido.`,
+      });
     }
     // No necesitamos traducir 'status' al crear, porque siempre será DRAFT.
     // ----------------------------
@@ -1101,228 +1154,278 @@ app.post("/api/reports", async (req, res) => {
         summary,
         status: "DRAFT", // Estado inicial por defecto es DRAFT (borrador)
         author: { connect: { id: authorId } },
-        requiredSignatoriesJson: JSON.stringify(requiredSignatories.map((u: any) => u.id)),
+        requiredSignatoriesJson: JSON.stringify(
+          requiredSignatories.map((u: any) => u.id)
+        ),
         attachments: {
-          connect: attachments.map((att: { id: string }) => ({ id: att.id }))
-        }
+          connect: attachments.map((att: { id: string }) => ({ id: att.id })),
+        },
       },
-      include: { // Devolvemos el informe creado completo
+      include: {
+        // Devolvemos el informe creado completo
         author: true,
         attachments: true,
-        signatures: { include: { signer: true } }
-      }
+        signatures: { include: { signer: true } },
+      },
     });
 
     // Formatea la respuesta para que el frontend la entienda
-     const formattedReport = {
-        ...newReport,
-        reportScope: Object.keys(reportScopeMap).find(key => reportScopeMap[key] === newReport.reportScope) || newReport.reportScope,
-        status: Object.keys(reportStatusMap).find(key => reportStatusMap[key] === newReport.status) || newReport.status,
+    const formattedReport = {
+      ...newReport,
+      reportScope:
+        Object.keys(reportScopeMap).find(
+          (key) => reportScopeMap[key] === newReport.reportScope
+        ) || newReport.reportScope,
+      status:
+        Object.keys(reportStatusMap).find(
+          (key) => reportStatusMap[key] === newReport.status
+        ) || newReport.status,
     };
 
     res.status(201).json(formattedReport);
-
   } catch (error) {
     console.error("Error al crear el informe:", error);
-    if ((error as any).code === 'P2002') { // Error de número único duplicado
-         return res.status(409).json({ error: 'Ya existe un informe con este número.' });
+    if ((error as any).code === "P2002") {
+      // Error de número único duplicado
+      return res
+        .status(409)
+        .json({ error: "Ya existe un informe con este número." });
     }
-    res.status(500).json({ error: 'No se pudo crear el informe.' });
+    res.status(500).json({ error: "No se pudo crear el informe." });
   }
 });
 
 // Actualizar un informe (principalmente estado)
-app.put('/api/reports/:id', async (req, res) => {
+app.put("/api/reports/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { status, summary, requiredSignatories = [] } = req.body; // Campos que permitimos actualizar
 
     const prismaStatus = reportStatusMap[status] || undefined;
     if (!prismaStatus || !Object.values(ReportStatus).includes(prismaStatus)) {
-      return res.status(400).json({ error: 'Estado inválido proporcionado.' });
+      return res.status(400).json({ error: "Estado inválido proporcionado." });
     }
 
     const updateData: any = {
       status: prismaStatus,
       summary, // Permite actualizar el resumen si viene
-      requiredSignatoriesJson: JSON.stringify(requiredSignatories.map((u: any) => u.id)) // Actualiza firmantes requeridos
+      requiredSignatoriesJson: JSON.stringify(
+        requiredSignatories.map((u: any) => u.id)
+      ), // Actualiza firmantes requeridos
     };
 
     const updatedReport = await prisma.report.update({
       where: { id: id },
       data: updateData,
-      include: { // Devolvemos el informe completo actualizado
+      include: {
+        // Devolvemos el informe completo actualizado
         author: true,
         attachments: true,
-        signatures: { include: { signer: true } }
-      }
+        signatures: { include: { signer: true } },
+      },
     });
 
     // Formatear respuesta
     const formattedReport = {
-        ...updatedReport,
-        reportScope: Object.keys(reportScopeMap).find(key => reportScopeMap[key] === updatedReport.reportScope) || updatedReport.reportScope,
-        status: Object.keys(reportStatusMap).find(key => reportStatusMap[key] === updatedReport.status) || updatedReport.status,
+      ...updatedReport,
+      reportScope:
+        Object.keys(reportScopeMap).find(
+          (key) => reportScopeMap[key] === updatedReport.reportScope
+        ) || updatedReport.reportScope,
+      status:
+        Object.keys(reportStatusMap).find(
+          (key) => reportStatusMap[key] === updatedReport.status
+        ) || updatedReport.status,
     };
     res.json(formattedReport);
-
   } catch (error) {
     console.error("Error al actualizar el informe:", error);
-    if ((error as any).code === 'P2025') {
-        return res.status(404).json({ error: 'El informe no fue encontrado.' });
+    if ((error as any).code === "P2025") {
+      return res.status(404).json({ error: "El informe no fue encontrado." });
     }
-    res.status(500).json({ error: 'No se pudo actualizar el informe.' });
+    res.status(500).json({ error: "No se pudo actualizar el informe." });
   }
 });
 
 // Añadir una firma a un informe
-app.post('/api/reports/:id/signatures', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { signerId, password } = req.body; // Recibimos el ID del firmante y su contraseña
+app.post("/api/reports/:id/signatures", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { signerId, password } = req.body; // Recibimos el ID del firmante y su contraseña
 
-        if (!signerId || !password) {
-            return res.status(400).json({ error: 'Se requiere ID del firmante y contraseña.' });
-        }
-
-        // 1. Verificar contraseña del firmante
-        const signer = await prisma.user.findUnique({ where: { id: signerId } });
-        if (!signer) {
-            return res.status(404).json({ error: 'Usuario firmante no encontrado.' });
-        }
-        const passwordMatch = await bcrypt.compare(password, signer.password);
-        if (!passwordMatch) {
-            return res.status(401).json({ error: 'Contraseña incorrecta.' });
-        }
-
-        // 2. Verificar que el informe exista
-        const report = await prisma.report.findUnique({ where: { id } });
-        if (!report) {
-            return res.status(404).json({ error: 'Informe no encontrado.' });
-        }
-
-        // 3. Añadir la firma (evita duplicados si ya firmó)
-        const existingSignature = await prisma.signature.findFirst({
-            where: { reportId: id, signerId: signerId }
-        });
-
-        if (existingSignature) {
-            // Si ya existe, simplemente devolvemos el informe actual
-             const currentReport = await prisma.report.findUnique({
-                where: { id },
-                include: { author: true, attachments: true, signatures: { include: { signer: true } } }
-            });
-             const formattedReport = {
-                ...currentReport,
-                reportScope: Object.keys(reportScopeMap).find(key => reportScopeMap[key] === currentReport!.reportScope) || currentReport!.reportScope,
-                status: Object.keys(reportStatusMap).find(key => reportStatusMap[key] === currentReport!.status) || currentReport!.status,
-            };
-            return res.json(formattedReport); // Ya estaba firmado
-        }
-
-        await prisma.signature.create({
-            data: {
-                signer: { connect: { id: signerId } },
-                report: { connect: { id: id } }
-            }
-        });
-
-        // 4. (Opcional) Lógica para cambiar el estado a 'APROBADO' si todos firman
-        // Necesitarías leer 'requiredSignatoriesJson', parsearlo,
-        // contar las firmas actuales y comparar. Si coinciden, actualiza el estado.
-        // const requiredIds = JSON.parse(report.requiredSignatoriesJson || '[]');
-        // const currentSignatures = await prisma.signature.count({ where: { reportId: id } });
-        // let finalStatus = report.status;
-        // if (requiredIds.length > 0 && currentSignatures + 1 >= requiredIds.length && report.status === 'SUBMITTED') {
-        //     finalStatus = ReportStatus.APPROVED;
-        //     await prisma.report.update({ where: { id }, data: { status: finalStatus } });
-        // }
-        // Por ahora, no cambiaremos el estado automáticamente al firmar.
-
-        // 5. Devolver el informe actualizado con la nueva firma
-        const updatedReport = await prisma.report.findUnique({
-            where: { id },
-            include: { author: true, attachments: true, signatures: { include: { signer: true } } }
-        });
-
-         const formattedReport = {
-            ...updatedReport,
-            reportScope: Object.keys(reportScopeMap).find(key => reportScopeMap[key] === updatedReport!.reportScope) || updatedReport!.reportScope,
-            status: Object.keys(reportStatusMap).find(key => reportStatusMap[key] === updatedReport!.status) || updatedReport!.status,
-        };
-        res.status(201).json(formattedReport); // Código 201 porque se creó una firma
-
-    } catch (error) {
-        console.error("Error al añadir la firma al informe:", error);
-        res.status(500).json({ error: 'No se pudo añadir la firma.' });
+    if (!signerId || !password) {
+      return res
+        .status(400)
+        .json({ error: "Se requiere ID del firmante y contraseña." });
     }
+
+    // 1. Verificar contraseña del firmante
+    const signer = await prisma.user.findUnique({ where: { id: signerId } });
+    if (!signer) {
+      return res.status(404).json({ error: "Usuario firmante no encontrado." });
+    }
+    const passwordMatch = await bcrypt.compare(password, signer.password);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: "Contraseña incorrecta." });
+    }
+
+    // 2. Verificar que el informe exista
+    const report = await prisma.report.findUnique({ where: { id } });
+    if (!report) {
+      return res.status(404).json({ error: "Informe no encontrado." });
+    }
+
+    // 3. Añadir la firma (evita duplicados si ya firmó)
+    const existingSignature = await prisma.signature.findFirst({
+      where: { reportId: id, signerId: signerId },
+    });
+
+    if (existingSignature) {
+      // Si ya existe, simplemente devolvemos el informe actual
+      const currentReport = await prisma.report.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          signatures: { include: { signer: true } },
+        },
+      });
+      const formattedReport = {
+        ...currentReport,
+        reportScope:
+          Object.keys(reportScopeMap).find(
+            (key) => reportScopeMap[key] === currentReport!.reportScope
+          ) || currentReport!.reportScope,
+        status:
+          Object.keys(reportStatusMap).find(
+            (key) => reportStatusMap[key] === currentReport!.status
+          ) || currentReport!.status,
+      };
+      return res.json(formattedReport); // Ya estaba firmado
+    }
+
+    await prisma.signature.create({
+      data: {
+        signer: { connect: { id: signerId } },
+        report: { connect: { id: id } },
+      },
+    });
+
+    // 4. (Opcional) Lógica para cambiar el estado a 'APROBADO' si todos firman
+    // Necesitarías leer 'requiredSignatoriesJson', parsearlo,
+    // contar las firmas actuales y comparar. Si coinciden, actualiza el estado.
+    // const requiredIds = JSON.parse(report.requiredSignatoriesJson || '[]');
+    // const currentSignatures = await prisma.signature.count({ where: { reportId: id } });
+    // let finalStatus = report.status;
+    // if (requiredIds.length > 0 && currentSignatures + 1 >= requiredIds.length && report.status === 'SUBMITTED') {
+    //     finalStatus = ReportStatus.APPROVED;
+    //     await prisma.report.update({ where: { id }, data: { status: finalStatus } });
+    // }
+    // Por ahora, no cambiaremos el estado automáticamente al firmar.
+
+    // 5. Devolver el informe actualizado con la nueva firma
+    const updatedReport = await prisma.report.findUnique({
+      where: { id },
+      include: {
+        author: true,
+        attachments: true,
+        signatures: { include: { signer: true } },
+      },
+    });
+
+    const formattedReport = {
+      ...updatedReport,
+      reportScope:
+        Object.keys(reportScopeMap).find(
+          (key) => reportScopeMap[key] === updatedReport!.reportScope
+        ) || updatedReport!.reportScope,
+      status:
+        Object.keys(reportStatusMap).find(
+          (key) => reportStatusMap[key] === updatedReport!.status
+        ) || updatedReport!.status,
+    };
+    res.status(201).json(formattedReport); // Código 201 porque se creó una firma
+  } catch (error) {
+    console.error("Error al añadir la firma al informe:", error);
+    res.status(500).json({ error: "No se pudo añadir la firma." });
+  }
 });
 
 // --- RUTAS PARA AVANCE FOTOGRÁFICO ---
 
 // Obtener todos los puntos de control con sus fotos
-app.get('/api/control-points', async (req, res) => {
+app.get("/api/control-points", async (req, res) => {
   try {
     const points = await prisma.controlPoint.findMany({
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: "asc" },
       include: {
-        photos: { // Incluye las fotos asociadas
-          orderBy: { date: 'asc' }, // Ordena las fotos por fecha
+        photos: {
+          // Incluye las fotos asociadas
+          orderBy: { date: "asc" }, // Ordena las fotos por fecha
           include: {
-            author: true // Incluye quién tomó la foto
-          }
-        }
-      }
+            author: true, // Incluye quién tomó la foto
+          },
+        },
+      },
     });
     res.json(points);
   } catch (error) {
     console.error("Error al obtener los puntos de control:", error);
-    res.status(500).json({ error: 'No se pudieron obtener los puntos de control.' });
+    res
+      .status(500)
+      .json({ error: "No se pudieron obtener los puntos de control." });
   }
 });
 
 // Crear un nuevo punto de control
-app.post('/api/control-points', async (req, res) => {
+app.post("/api/control-points", async (req, res) => {
   try {
     const { name, description, location } = req.body;
 
     if (!name) {
-      return res.status(400).json({ error: 'El nombre del punto de control es obligatorio.' });
+      return res
+        .status(400)
+        .json({ error: "El nombre del punto de control es obligatorio." });
     }
 
     const newPoint = await prisma.controlPoint.create({
       data: { name, description, location },
-      include: { photos: { include: { author: true } } } // Devuelve el punto nuevo (vacío de fotos)
+      include: { photos: { include: { author: true } } }, // Devuelve el punto nuevo (vacío de fotos)
     });
     res.status(201).json(newPoint);
-
   } catch (error) {
     console.error("Error al crear el punto de control:", error);
-    res.status(500).json({ error: 'No se pudo crear el punto de control.' });
+    res.status(500).json({ error: "No se pudo crear el punto de control." });
   }
 });
 
 // Añadir una foto a un punto de control existente
-app.post('/api/control-points/:id/photos', async (req, res) => {
+app.post("/api/control-points/:id/photos", async (req, res) => {
   try {
     const { id } = req.params; // ID del ControlPoint
     // Recibe el ID del Attachment y las notas
-    const { notes, authorId, attachmentId } = req.body; 
+    const { notes, authorId, attachmentId } = req.body;
 
     if (!authorId || !attachmentId) {
-      return res.status(400).json({ error: 'Faltan datos del autor o del archivo adjunto.' });
+      return res
+        .status(400)
+        .json({ error: "Faltan datos del autor o del archivo adjunto." });
     }
 
     // Verifica que el punto de control exista (opcional pero bueno)
-    const controlPointExists = await prisma.controlPoint.findUnique({ where: { id } });
+    const controlPointExists = await prisma.controlPoint.findUnique({
+      where: { id },
+    });
     if (!controlPointExists) {
-      return res.status(404).json({ error: 'Punto de control no encontrado.' });
+      return res.status(404).json({ error: "Punto de control no encontrado." });
     }
 
     // Busca el Attachment para obtener su URL
-    const attachment = await prisma.attachment.findUnique({ where: { id: attachmentId } });
+    const attachment = await prisma.attachment.findUnique({
+      where: { id: attachmentId },
+    });
     if (!attachment) {
-        return res.status(404).json({ error: 'Archivo adjunto no encontrado.' });
+      return res.status(404).json({ error: "Archivo adjunto no encontrado." });
     }
 
     // Crea la PhotoEntry
@@ -1332,60 +1435,64 @@ app.post('/api/control-points/:id/photos', async (req, res) => {
         url: attachment.url, // <-- ¡AÑADE ESTA LÍNEA! Pasa la URL del attachment
         author: { connect: { id: authorId } },
         controlPoint: { connect: { id: id } },
-        attachment: { connect: { id: attachmentId } } 
+        attachment: { connect: { id: attachmentId } },
       },
-      include: { 
-          author: true,
-          attachment: true // Incluye el attachment en la respuesta
-      } 
+      include: {
+        author: true,
+        attachment: true, // Incluye el attachment en la respuesta
+      },
     });
 
     // Formatea la respuesta para incluir la URL directamente si el frontend la necesita así
     const formattedPhoto = {
-        ...newPhoto,
-        url: newPhoto.attachment?.url || newPhoto.url // Asegura que la URL esté disponible
+      ...newPhoto,
+      url: newPhoto.attachment?.url || newPhoto.url, // Asegura que la URL esté disponible
     };
 
     res.status(201).json(formattedPhoto);
-
   } catch (error) {
     console.error("Error al añadir la foto:", error);
-     if ((error as any).code === 'P2025') { 
-        return res.status(404).json({ error: 'El autor, punto de control o archivo adjunto no fueron encontrados.' });
+    if ((error as any).code === "P2025") {
+      return res.status(404).json({
+        error:
+          "El autor, punto de control o archivo adjunto no fueron encontrados.",
+      });
     }
-    res.status(500).json({ error: 'No se pudo añadir la foto.' });
+    res.status(500).json({ error: "No se pudo añadir la foto." });
   }
 });
 
-app.get('/api/project-tasks', async (req, res) => {
+app.get("/api/project-tasks", async (req, res) => {
   console.log("!!! RUTA /api/project-tasks ALCANZADA !!!"); // <-- Log súper temprano
   console.log("--> GET /api/project-tasks received");
   console.log("--> GET /api/project-tasks received"); // <-- Log 1: Petición recibida
   try {
     console.log("   Querying database for tasks..."); // <-- Log 2: Antes de la consulta
     const tasks = await prisma.projectTask.findMany({
-      orderBy: { outlineLevel: 'asc' }
+      orderBy: { outlineLevel: "asc" },
     });
     console.log(`   Found ${tasks.length} tasks in database.`); // <-- Log 3: Después de la consulta
 
     // Formatear fechas a ISO string antes de enviar
-const formattedTasks = tasks.map((task: ProjectTask) => ({ // <-- Añade ': ProjectTask'
-        ...task,
-        startDate: task.startDate.toISOString(),
-        endDate: task.endDate.toISOString(),
-        children: [],
-        // 'dependencies' no existe en el modelo Prisma, lo quitamos por ahora
-        // dependencies: []
+    const formattedTasks = tasks.map((task: ProjectTask) => ({
+      // <-- Añade ': ProjectTask'
+      ...task,
+      startDate: task.startDate.toISOString(),
+      endDate: task.endDate.toISOString(),
+      children: [],
+      // 'dependencies' no existe en el modelo Prisma, lo quitamos por ahora
+      // dependencies: []
     }));
     // ---------------------------------------------
     console.log("   Tasks formatted for response.");
 
     res.json(formattedTasks);
     console.log("<-- GET /api/project-tasks response sent successfully.");
-
   } catch (error) {
     console.error("!!! ERROR in GET /api/project-tasks:", error);
-    res.status(500).json({ error: 'No se pudieron obtener las tareas del proyecto.' });
+    res
+      .status(500)
+      .json({ error: "No se pudieron obtener las tareas del proyecto." });
   }
 });
 
