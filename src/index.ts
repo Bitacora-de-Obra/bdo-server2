@@ -18,6 +18,7 @@ import jwt from "jsonwebtoken";
 import "dotenv/config";
 import multer from "multer";
 import path from "path";
+import { randomUUID } from "crypto";
 import { authMiddleware, refreshAuthMiddleware, createAccessToken, createRefreshToken, AuthRequest } from "./middleware/auth";
 
 // Importamos los mapas desde el nuevo archivo de utilidades
@@ -186,6 +187,52 @@ const formatCommunication = (communication: any) => {
     updatedAt: communication.updatedAt instanceof Date ? communication.updatedAt.toISOString() : communication.updatedAt,
   };
 };
+
+const formatReportRecord = (report: any) => {
+  const formattedSignatures = (report.signatures || []).map((signature: any) => ({
+    ...signature,
+    signedAt:
+      signature.signedAt instanceof Date
+        ? signature.signedAt.toISOString()
+        : signature.signedAt,
+  }));
+
+  return {
+    ...report,
+    reportScope:
+      reportScopeReverseMap[report.reportScope] || report.reportScope,
+    status:
+      reportStatusReverseMap[report.status] || report.status,
+    submissionDate:
+      report.submissionDate instanceof Date
+        ? report.submissionDate.toISOString()
+        : report.submissionDate,
+    createdAt:
+      report.createdAt instanceof Date
+        ? report.createdAt.toISOString()
+        : report.createdAt,
+    updatedAt:
+      report.updatedAt instanceof Date
+        ? report.updatedAt.toISOString()
+        : report.updatedAt,
+    attachments: (report.attachments || []).map(buildAttachmentResponse),
+    signatures: formattedSignatures,
+  };
+};
+
+const mapReportVersionSummary = (report: any) => ({
+  id: report.id,
+  version: report.version,
+  status: reportStatusReverseMap[report.status] || report.status,
+  submissionDate:
+    report.submissionDate instanceof Date
+      ? report.submissionDate.toISOString()
+      : report.submissionDate,
+  createdAt:
+    report.createdAt instanceof Date
+      ? report.createdAt.toISOString()
+      : report.createdAt,
+});
 
 app.use(
   cors({
@@ -512,6 +559,85 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+// Endpoint para verificar email (pendiente de implementación)
+app.post("/api/auth/verify-email/:token", async (req, res) => {
+  const { token } = req.params;
+  console.log("Verificación de email solicitada con token:", token);
+  // TODO: Implementar lógica de verificación de email
+  res.status(501).json({ error: "Verificación de email aún no implementada." });
+});
+
+// Endpoint para solicitar restablecimiento de contraseña (pendiente)
+app.post("/api/auth/forgot-password", async (req, res) => {
+  const { email } = req.body;
+  console.log("Solicitud de restablecimiento de contraseña para:", email);
+  // TODO: Implementar lógica de envío de correo para restablecimiento
+  res.status(501).json({ error: "Restablecimiento de contraseña aún no implementado." });
+});
+
+// Endpoint para restablecer contraseña con token (pendiente)
+app.post("/api/auth/reset-password/:token", async (req, res) => {
+  const { token } = req.params;
+  const { password } = req.body;
+  console.log("Restablecimiento de contraseña solicitado con token:", token);
+  // TODO: Implementar lógica para cambiar la contraseña usando el token
+  res.status(501).json({ error: "Restablecimiento de contraseña aún no implementado." });
+});
+
+// Endpoint para cambiar contraseña (usuario autenticado)
+app.post("/api/auth/change-password", authMiddleware, async (req: AuthRequest, res) => {
+  const userId = req.user?.userId;
+  const { oldPassword, newPassword } = req.body;
+  console.log("Cambio de contraseña solicitado por usuario:", userId);
+  // TODO: Implementar lógica para verificar contraseña antigua y cambiarla
+  res.status(501).json({ error: "Cambio de contraseña aún no implementado." });
+});
+
+// Endpoint para actualizar perfil de usuario
+app.put("/api/auth/profile", authMiddleware, async (req: AuthRequest, res) => {
+    const userId = req.user?.userId;
+    const { fullName, avatarUrl } = req.body; // Campos permitidos para actualizar
+    console.log("Actualización de perfil solicitada por usuario:", userId, req.body);
+    
+    if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+    }
+    
+    try {
+        const updateData: { fullName?: string; avatarUrl?: string } = {};
+        if (fullName) updateData.fullName = fullName;
+        if (avatarUrl) updateData.avatarUrl = avatarUrl; // Considera validación de URL
+
+        if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({ error: "No se proporcionaron datos para actualizar." });
+        }
+
+        const updatedUser = await prisma.user.update({
+            where: { id: userId },
+            data: updateData,
+            select: { // Devuelve solo los datos públicos
+                id: true,
+                fullName: true,
+                email: true,
+                projectRole: true,
+                avatarUrl: true,
+                appRole: true,
+                status: true,
+                lastLoginAt: true,
+            }
+        });
+        
+        res.json(updatedUser);
+        
+    } catch (error) {
+        console.error("Error al actualizar perfil:", error);
+         if ((error as any)?.code === 'P2025') {
+            return res.status(404).json({ error: "Usuario no encontrado." });
+        }
+        res.status(500).json({ error: "Error interno al actualizar el perfil." });
+    }
+});
+
 // --- RUTA PARA VERIFICAR TOKEN Y OBTENER DATOS DEL USUARIO ---
 app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
   // Si el middleware authMiddleware pasa, significa que el token es válido
@@ -725,6 +851,31 @@ app.get("/api/communications", async (req, res) => {
   }
 });
 
+app.get("/api/communications/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const communication = await prisma.communication.findUnique({
+      where: { id },
+      include: {
+        uploader: true,
+        attachments: true,
+        statusHistory: { include: { user: true }, orderBy: { timestamp: "asc" } },
+      },
+    });
+
+    if (!communication) {
+      return res.status(404).json({ error: "Comunicación no encontrada." });
+    }
+
+    const formattedComm = formatCommunication(communication);
+    formattedComm.attachments = (communication.attachments || []).map(buildAttachmentResponse);
+    res.json(formattedComm);
+  } catch (error) {
+    console.error("Error al obtener la comunicación:", error);
+    res.status(500).json({ error: "No se pudo obtener la comunicación solicitada." });
+  }
+});
+
 app.post("/api/communications", async (req, res) => {
   try {
     const {
@@ -862,6 +1013,39 @@ app.get("/api/drawings", async (req, res) => {
   } catch (error) {
     console.error("Error al obtener los planos:", error);
     res.status(500).json({ error: "No se pudieron obtener los planos." });
+  }
+});
+
+app.get("/api/drawings/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const drawing = await prisma.drawing.findUnique({
+      where: { id },
+      include: {
+        versions: {
+          orderBy: { versionNumber: "desc" },
+          include: { uploader: true },
+        },
+        comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
+      },
+    });
+
+    if (!drawing) {
+      return res.status(404).json({ error: "Plano no encontrado." });
+    }
+
+    const formattedDrawing = {
+      ...drawing,
+      discipline:
+        Object.keys(drawingDisciplineMap).find(
+          (key) => drawingDisciplineMap[key] === drawing.discipline
+        ) || drawing.discipline,
+    };
+
+    res.json(formattedDrawing);
+  } catch (error) {
+    console.error("Error al obtener el plano:", error);
+    res.status(500).json({ error: "No se pudo obtener el plano solicitado." });
   }
 });
 
@@ -1363,6 +1547,21 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
           formData.signatures = [];
         }
       }
+
+      const parseBoolean = (value: unknown): boolean => {
+        if (typeof value === "boolean") return value;
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
+        }
+        if (typeof value === "number") {
+          return value === 1;
+        }
+        return false;
+      };
+
+      const isConfidentialValue = parseBoolean((formData as any).isConfidential);
+      (formData as any).isConfidential = isConfidentialValue;
     
     // Validar campos requeridos
     if (!formData.title?.trim()) {
@@ -1451,13 +1650,13 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
         data: {
           title: formData.title.trim(),
           description: formData.description?.trim() || "",
-          type: entryTypeMap[formData.type] || "GENERAL",
+          type: prismaType,
           subject: formData.subject?.trim() || "",
           location: formData.location?.trim() || "",
           activityStartDate: new Date(formData.activityStartDate),
           activityEndDate: new Date(formData.activityEndDate),
-          isConfidential: !!formData.isConfidential,
-          status: entryStatusMap[formData.status] || "DRAFT",
+          isConfidential: isConfidentialValue,
+          status: prismaStatus,
           author: { connect: { id: formData.authorId } },
           project: { connect: { id: formData.projectId } },
           assignees: {
@@ -1915,6 +2114,29 @@ app.get("/api/work-actas", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+app.get("/api/work-actas/:id", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const acta = await prisma.workActa.findUnique({
+      where: { id },
+      include: {
+        items: { include: { contractItem: true } },
+        attachments: true,
+      },
+    });
+
+    if (!acta) {
+      return res.status(404).json({ error: "Acta de avance no encontrada." });
+    }
+
+    const formattedActa = formatWorkActa(acta);
+    res.json(formattedActa);
+  } catch (error) {
+    console.error("Error al obtener el detalle del acta de avance:", error);
+    res.status(500).json({ error: "No se pudo obtener el acta solicitada." });
+  }
+});
+
 app.post("/api/work-actas", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { number, period, date, status, items, attachments = [] } = req.body;
@@ -2030,6 +2252,36 @@ app.get("/api/cost-actas", async (req, res) => {
     res
       .status(500)
       .json({ error: "No se pudieron obtener las actas de costo." });
+  }
+});
+
+app.get("/api/cost-actas/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const acta = await prisma.costActa.findUnique({
+      where: { id },
+      include: {
+        observations: { include: { author: true }, orderBy: { timestamp: "asc" } },
+        attachments: true,
+      },
+    });
+
+    if (!acta) {
+      return res.status(404).json({ error: "Acta de costo no encontrada." });
+    }
+
+    const formattedActa = {
+      ...acta,
+      status:
+        Object.keys(costActaStatusMap).find(
+          (key) => costActaStatusMap[key] === acta.status
+        ) || acta.status,
+    };
+
+    res.json(formattedActa);
+  } catch (error) {
+    console.error("Error al obtener el acta de costo:", error);
+    res.status(500).json({ error: "No se pudo obtener el acta solicitada." });
   }
 });
 
@@ -2208,7 +2460,10 @@ app.get("/api/reports", async (req, res) => {
 
     const reports = await prisma.report.findMany({
       where: whereClause,
-      orderBy: { submissionDate: "desc" },
+      orderBy: [
+        { number: "asc" },
+        { version: "desc" },
+      ],
       include: {
         author: true,
         attachments: true,
@@ -2216,23 +2471,77 @@ app.get("/api/reports", async (req, res) => {
       },
     });
 
-    // Formatea la respuesta para que los enums vuelvan a ser texto legible por el frontend
-    const formattedReports = reports.map((report) => ({
+    const groupedReports = new Map<string, any>();
+
+    reports.forEach((report) => {
+      const formatted = formatReportRecord(report);
+      const summary = mapReportVersionSummary(report);
+
+      if (!groupedReports.has(report.number)) {
+        groupedReports.set(report.number, {
+          ...formatted,
+          versions: [summary],
+        });
+      } else {
+        const existing = groupedReports.get(report.number);
+        existing.versions.push(summary);
+      }
+    });
+
+    const latestReports = Array.from(groupedReports.values()).map((report) => ({
       ...report,
-      reportScope:
-        Object.keys(reportScopeMap).find(
-          (key) => reportScopeMap[key] === report.reportScope
-        ) || report.reportScope,
-      status:
-        Object.keys(reportStatusMap).find(
-          (key) => reportStatusMap[key] === report.status
-        ) || report.status,
+      versions: report.versions.sort((a: any, b: any) => b.version - a.version),
     }));
 
-    res.json(formattedReports);
+    latestReports.sort(
+      (a, b) =>
+        new Date(b.submissionDate).getTime() -
+        new Date(a.submissionDate).getTime()
+    );
+
+    res.json(latestReports);
   } catch (error) {
     console.error("Error al obtener los informes:", error);
     res.status(500).json({ error: "No se pudieron obtener los informes." });
+  }
+});
+
+app.get("/api/reports/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const report = await prisma.report.findUnique({
+      where: { id },
+      include: {
+        author: true,
+        attachments: true,
+        signatures: { include: { signer: true } },
+      },
+    });
+
+    if (!report) {
+      return res.status(404).json({ error: "Informe no encontrado." });
+    }
+
+    const formattedReport = formatReportRecord(report);
+
+    const versionHistory = await prisma.report.findMany({
+      where: { number: report.number },
+      select: {
+        id: true,
+        version: true,
+        status: true,
+        submissionDate: true,
+        createdAt: true,
+      },
+      orderBy: { version: "desc" },
+    });
+
+    formattedReport.versions = versionHistory.map(mapReportVersionSummary);
+
+    res.json(formattedReport);
+  } catch (error) {
+    console.error("Error al obtener el informe:", error);
+    res.status(500).json({ error: "No se pudo obtener el informe solicitado." });
   }
 });
 
@@ -2248,42 +2557,79 @@ app.post("/api/reports", async (req, res) => {
       summary,
       authorId,
       requiredSignatories = [],
-      attachments = [], // Recibe IDs de adjuntos
+      attachments = [],
+      previousReportId,
     } = req.body;
 
-    if (
-      !type ||
-      !reportScope ||
-      !number ||
-      !period ||
-      !submissionDate ||
-      !summary ||
-      !authorId
-    ) {
+    if (!period || !submissionDate || !summary || !authorId) {
       return res
         .status(400)
         .json({ error: "Faltan datos obligatorios para crear el informe." });
     }
 
-    // --- TRADUCCIÓN DE ENUMS ---
-    const prismaReportScope = reportScopeMap[reportScope];
-    if (!prismaReportScope) {
+    let resolvedType = type as string | undefined;
+    let resolvedScopeDbValue = reportScope
+      ? reportScopeMap[reportScope as string]
+      : undefined;
+    let resolvedNumber = number as string | undefined;
+    let resolvedVersion = 1;
+    let previousReportConnect:
+      | { connect: { id: string } }
+      | undefined = undefined;
+
+    if (previousReportId) {
+      const previousReport = await prisma.report.findUnique({
+        where: { id: previousReportId },
+      });
+
+      if (!previousReport) {
+        return res
+          .status(404)
+          .json({ error: "El informe anterior no fue encontrado." });
+      }
+
+      resolvedType = previousReport.type;
+      resolvedScopeDbValue = previousReport.reportScope;
+      resolvedNumber = previousReport.number;
+      resolvedVersion = previousReport.version + 1;
+      previousReportConnect = { connect: { id: previousReport.id } };
+    } else {
+      if (!resolvedType || !reportScope || !resolvedNumber) {
+        return res.status(400).json({
+          error:
+            "Faltan type, reportScope o number para crear la primera versión del informe.",
+        });
+      }
+
+      if (!resolvedScopeDbValue) {
+        const mappedScope = reportScopeMap[reportScope as string];
+        if (!mappedScope) {
+          return res.status(400).json({
+            error: `El valor de reportScope '${reportScope}' no es válido.`,
+          });
+        }
+        resolvedScopeDbValue = mappedScope;
+      }
+    }
+
+    if (!Array.isArray(attachments)) {
       return res.status(400).json({
-        error: `El valor de reportScope '${reportScope}' no es válido.`,
+        error:
+          "El formato de los adjuntos no es válido. Debe ser un arreglo de objetos { id }.",
       });
     }
-    // No necesitamos traducir 'status' al crear, porque siempre será DRAFT.
-    // ----------------------------
 
     const newReport = await prisma.report.create({
       data: {
-        type,
-        reportScope: prismaReportScope, // Usa la variable traducida
-        number,
+        type: resolvedType!,
+        reportScope: resolvedScopeDbValue!,
+        number: resolvedNumber!,
+        version: resolvedVersion,
+        previousReport: previousReportConnect,
         period,
         submissionDate: new Date(submissionDate),
         summary,
-        status: "DRAFT", // Estado inicial por defecto es DRAFT (borrador)
+        status: "DRAFT",
         author: { connect: { id: authorId } },
         requiredSignatoriesJson: JSON.stringify(
           requiredSignatories.map((u: any) => u.id)
@@ -2293,25 +2639,27 @@ app.post("/api/reports", async (req, res) => {
         },
       },
       include: {
-        // Devolvemos el informe creado completo
         author: true,
         attachments: true,
         signatures: { include: { signer: true } },
       },
     });
 
-    // Formatea la respuesta para que el frontend la entienda
-    const formattedReport = {
-      ...newReport,
-      reportScope:
-        Object.keys(reportScopeMap).find(
-          (key) => reportScopeMap[key] === newReport.reportScope
-        ) || newReport.reportScope,
-      status:
-        Object.keys(reportStatusMap).find(
-          (key) => reportStatusMap[key] === newReport.status
-        ) || newReport.status,
-    };
+    const formattedReport = formatReportRecord(newReport);
+
+    const versionHistory = await prisma.report.findMany({
+      where: { number: newReport.number },
+      select: {
+        id: true,
+        version: true,
+        status: true,
+        submissionDate: true,
+        createdAt: true,
+      },
+      orderBy: { version: "desc" },
+    });
+
+    formattedReport.versions = versionHistory.map(mapReportVersionSummary);
 
     res.status(201).json(formattedReport);
   } catch (error) {
@@ -2320,7 +2668,7 @@ app.post("/api/reports", async (req, res) => {
       // Error de número único duplicado
       return res
         .status(409)
-        .json({ error: "Ya existe un informe con este número." });
+        .json({ error: "Ya existe un informe con este número y versión." });
     }
     res.status(500).json({ error: "No se pudo crear el informe." });
   }
@@ -2357,17 +2705,22 @@ app.put("/api/reports/:id", async (req, res) => {
     });
 
     // Formatear respuesta
-    const formattedReport = {
-      ...updatedReport,
-      reportScope:
-        Object.keys(reportScopeMap).find(
-          (key) => reportScopeMap[key] === updatedReport.reportScope
-        ) || updatedReport.reportScope,
-      status:
-        Object.keys(reportStatusMap).find(
-          (key) => reportStatusMap[key] === updatedReport.status
-        ) || updatedReport.status,
-    };
+    const formattedReport = formatReportRecord(updatedReport);
+
+    const versionHistory = await prisma.report.findMany({
+      where: { number: updatedReport.number },
+      select: {
+        id: true,
+        version: true,
+        status: true,
+        submissionDate: true,
+        createdAt: true,
+      },
+      orderBy: { version: "desc" },
+    });
+
+    formattedReport.versions = versionHistory.map(mapReportVersionSummary);
+
     res.json(formattedReport);
   } catch (error) {
     console.error("Error al actualizar el informe:", error);
@@ -2412,7 +2765,6 @@ app.post("/api/reports/:id/signatures", async (req, res) => {
     });
 
     if (existingSignature) {
-      // Si ya existe, simplemente devolvemos el informe actual
       const currentReport = await prisma.report.findUnique({
         where: { id },
         include: {
@@ -2421,18 +2773,30 @@ app.post("/api/reports/:id/signatures", async (req, res) => {
           signatures: { include: { signer: true } },
         },
       });
-      const formattedReport = {
-        ...currentReport,
-        reportScope:
-          Object.keys(reportScopeMap).find(
-            (key) => reportScopeMap[key] === currentReport!.reportScope
-          ) || currentReport!.reportScope,
-        status:
-          Object.keys(reportStatusMap).find(
-            (key) => reportStatusMap[key] === currentReport!.status
-          ) || currentReport!.status,
-      };
-      return res.json(formattedReport); // Ya estaba firmado
+
+      if (!currentReport) {
+        return res
+          .status(404)
+          .json({ error: "Informe no encontrado tras validar firma." });
+      }
+
+      const formattedReport = formatReportRecord(currentReport);
+
+      const versionHistory = await prisma.report.findMany({
+        where: { number: currentReport.number },
+        select: {
+          id: true,
+          version: true,
+          status: true,
+          submissionDate: true,
+          createdAt: true,
+        },
+        orderBy: { version: "desc" },
+      });
+
+      formattedReport.versions = versionHistory.map(mapReportVersionSummary);
+
+      return res.json(formattedReport);
     }
 
     await prisma.signature.create({
@@ -2464,18 +2828,29 @@ app.post("/api/reports/:id/signatures", async (req, res) => {
       },
     });
 
-    const formattedReport = {
-      ...updatedReport,
-      reportScope:
-        Object.keys(reportScopeMap).find(
-          (key) => reportScopeMap[key] === updatedReport!.reportScope
-        ) || updatedReport!.reportScope,
-      status:
-        Object.keys(reportStatusMap).find(
-          (key) => reportStatusMap[key] === updatedReport!.status
-        ) || updatedReport!.status,
-    };
-    res.status(201).json(formattedReport); // Código 201 porque se creó una firma
+    if (!updatedReport) {
+      return res
+        .status(404)
+        .json({ error: "Informe no encontrado tras añadir la firma." });
+    }
+
+    const formattedReport = formatReportRecord(updatedReport);
+
+    const versionHistory = await prisma.report.findMany({
+      where: { number: updatedReport.number },
+      select: {
+        id: true,
+        version: true,
+        status: true,
+        submissionDate: true,
+        createdAt: true,
+      },
+      orderBy: { version: "desc" },
+    });
+
+    formattedReport.versions = versionHistory.map(mapReportVersionSummary);
+
+    res.status(201).json(formattedReport);
   } catch (error) {
     console.error("Error al añadir la firma al informe:", error);
     res.status(500).json({ error: "No se pudo añadir la firma." });
@@ -2606,13 +2981,11 @@ app.get("/api/project-tasks", async (req, res) => {
 
     // Formatear fechas a ISO string antes de enviar
     const formattedTasks = tasks.map((task: ProjectTask) => ({
-      // <-- Añade ': ProjectTask'
       ...task,
       startDate: task.startDate.toISOString(),
       endDate: task.endDate.toISOString(),
       children: [],
-      // 'dependencies' no existe en el modelo Prisma, lo quitamos por ahora
-      // dependencies: []
+      dependencies: task.dependencies ? JSON.parse(task.dependencies) : [],
     }));
     // ---------------------------------------------
     console.log("   Tasks formatted for response.");
@@ -2624,6 +2997,82 @@ app.get("/api/project-tasks", async (req, res) => {
     res
       .status(500)
       .json({ error: "No se pudieron obtener las tareas del proyecto." });
+  }
+});
+
+app.post("/api/project-tasks/import", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { tasks } = req.body as { tasks?: any[] };
+
+    if (!Array.isArray(tasks)) {
+      return res.status(400).json({ error: "Formato inválido. Se esperaba un arreglo de tareas." });
+    }
+
+    const MAX_NAME_LENGTH = 191;
+
+    const sanitizedTasks = tasks.map((task: any, index: number) => {
+      const id = typeof task?.id === "string" && task.id.trim().length > 0 ? task.id.trim() : randomUUID();
+      const name = typeof task?.name === "string" && task.name.trim().length > 0 ? task.name.trim() : `Tarea ${index + 1}`;
+      const safeName = name.length > MAX_NAME_LENGTH ? name.slice(0, MAX_NAME_LENGTH) : name;
+
+      const parsedStart = new Date(task?.startDate);
+      if (Number.isNaN(parsedStart.getTime())) {
+        throw new Error(`La tarea "${safeName}" no tiene una fecha de inicio válida.`);
+      }
+
+      const parsedEnd = new Date(task?.endDate || task?.startDate);
+      if (Number.isNaN(parsedEnd.getTime())) {
+        throw new Error(`La tarea "${safeName}" no tiene una fecha de fin válida.`);
+      }
+      if (parsedEnd < parsedStart) {
+        parsedEnd.setTime(parsedStart.getTime());
+      }
+
+      const progressValue = Math.max(0, Math.min(100, parseInt(`${task?.progress ?? 0}`, 10) || 0));
+      const durationValue = Math.max(1, parseInt(`${task?.duration ?? 1}`, 10) || 1);
+      const outlineLevelValue = Math.max(1, parseInt(`${task?.outlineLevel ?? 1}`, 10) || 1);
+      const isSummaryValue =
+        task?.isSummary === true ||
+        task?.isSummary === 1 ||
+        (typeof task?.isSummary === "string" && task.isSummary.toLowerCase() === "true");
+
+      const dependencyArray = Array.isArray(task?.dependencies)
+        ? task.dependencies.map((dep: any) => `${dep}`.trim()).filter((dep: string) => dep.length > 0)
+        : [];
+
+      return {
+        id,
+        name: safeName,
+        startDate: parsedStart,
+        endDate: parsedEnd,
+        progress: progressValue,
+        duration: durationValue,
+        isSummary: isSummaryValue,
+        outlineLevel: outlineLevelValue,
+        dependencies: dependencyArray.length ? JSON.stringify(dependencyArray) : null,
+      };
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.projectTask.deleteMany();
+      if (sanitizedTasks.length) {
+        await tx.projectTask.createMany({ data: sanitizedTasks });
+      }
+    });
+
+    const updatedTasks = await prisma.projectTask.findMany({ orderBy: { outlineLevel: "asc" } });
+    const formattedTasks = updatedTasks.map((task) => ({
+      ...task,
+      startDate: task.startDate.toISOString(),
+      endDate: task.endDate.toISOString(),
+      dependencies: task.dependencies ? JSON.parse(task.dependencies) : [],
+      children: [],
+    }));
+
+    res.status(201).json(formattedTasks);
+  } catch (error) {
+    console.error("Error al importar tareas del cronograma:", error);
+    res.status(500).json({ error: "No se pudo importar el cronograma." });
   }
 });
 
