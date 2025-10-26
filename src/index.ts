@@ -20,6 +20,7 @@ import multer from "multer";
 import path from "path";
 import { randomUUID } from "crypto";
 import { authMiddleware, refreshAuthMiddleware, createAccessToken, createRefreshToken, AuthRequest } from "./middleware/auth";
+import { generateWeeklyReportExcel } from "./services/reports/weeklyExcelGenerator";
 
 // Importamos los mapas desde el nuevo archivo de utilidades
 import {
@@ -2856,6 +2857,75 @@ app.post("/api/reports/:id/signatures", async (req, res) => {
     res.status(500).json({ error: "No se pudo añadir la firma." });
   }
 });
+
+app.post(
+  "/api/reports/:id/generate-weekly-excel",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const baseUrl =
+        process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+
+      const result = await generateWeeklyReportExcel({
+        prisma,
+        reportId: id,
+        uploadsDir,
+        baseUrl,
+      });
+
+      const updatedReport = await prisma.report.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          signatures: { include: { signer: true } },
+        },
+      });
+
+      if (!updatedReport) {
+        return res
+          .status(404)
+          .json({ error: "Informe no encontrado tras generar el Excel." });
+      }
+
+      const formattedReport = formatReportRecord(updatedReport);
+      const versionHistory = await prisma.report.findMany({
+        where: { number: updatedReport.number },
+        select: {
+          id: true,
+          version: true,
+          status: true,
+          submissionDate: true,
+          createdAt: true,
+        },
+        orderBy: { version: "desc" },
+      });
+      formattedReport.versions = versionHistory.map(mapReportVersionSummary);
+
+      res.json({
+        report: formattedReport,
+        attachment: buildAttachmentResponse(result.attachment),
+      });
+    } catch (error) {
+      console.error(
+        "Error al generar el Excel del informe semanal:",
+        error
+      );
+      if (error instanceof Error) {
+        if (error.message === "Informe no encontrado.") {
+          return res.status(404).json({ error: error.message });
+        }
+        if (error.message.includes("semanales")) {
+          return res.status(400).json({ error: error.message });
+        }
+      }
+      res
+        .status(500)
+        .json({ error: "No se pudo generar el Excel del informe semanal." });
+    }
+  }
+);
 
 // --- RUTAS PARA AVANCE FOTOGRÁFICO ---
 
