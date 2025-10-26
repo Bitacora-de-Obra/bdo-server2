@@ -305,10 +305,25 @@ app.get("/api/attachments/:id/download", async (req, res) => {
     if (attachment.url) {
       try {
         const parsedUrl = new URL(attachment.url);
-        filePath = path.join(uploadsDir, path.basename(parsedUrl.pathname));
+        let candidatePath = parsedUrl.pathname || "";
+        if (candidatePath.startsWith("/uploads/")) {
+          candidatePath = candidatePath.replace("/uploads/", "");
+        } else {
+          candidatePath = candidatePath.replace(/^\/+/, "");
+        }
+        const resolvedPath = path.resolve(uploadsDir, candidatePath);
+        if (resolvedPath.startsWith(uploadsDir)) {
+          filePath = resolvedPath;
+        }
       } catch (error) {
         // Si la URL no es válida, intentamos usarla directamente como ruta relativa
-        filePath = path.join(uploadsDir, path.basename(attachment.url));
+        const relativePath = attachment.url.startsWith("/uploads/")
+          ? attachment.url.replace("/uploads/", "")
+          : attachment.url.replace(/^\/+/, "");
+        const resolvedPath = path.resolve(uploadsDir, relativePath);
+        if (resolvedPath.startsWith(uploadsDir)) {
+          filePath = resolvedPath;
+        }
       }
     }
 
