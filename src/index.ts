@@ -39,7 +39,7 @@ import {
 // El middleware de autenticación ya está importado arriba
 const app = express();
 const prisma = new PrismaClient();
-const port = 4000;
+const port = 4001;
 
 const reverseMap = (map: Record<string, string>) => {
   const reversed: Record<string, string> = {};

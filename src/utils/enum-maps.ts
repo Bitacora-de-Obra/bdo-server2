@@ -127,11 +127,13 @@ export const communicationStatusMap: { [key: string]: CommunicationStatus } = {
 export const modificationTypeMap: { [key: string]: ModificationType } = {
     'ADDITION': 'ADDITION',
     'TIME_EXTENSION': 'TIME_EXTENSION',
+    'SCOPE_CHANGE': 'SCOPE_CHANGE',
     'SUSPENSION': 'SUSPENSION',
     'REINSTATEMENT': 'REINSTATEMENT',
     'OTHER': 'OTHER',
     'Adición en Valor': 'ADDITION',
     'Prórroga en Tiempo': 'TIME_EXTENSION',
+    'Cambio de Alcance': 'SCOPE_CHANGE',
     'Suspensión': 'SUSPENSION',
     'Reinicio': 'REINSTATEMENT',
     'Otro': 'OTHER',
