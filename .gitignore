@@ -1,0 +1,9 @@
+node_modules
+# Keep environment variables out of version control
+.env
+.uploads
+uploads
+/src/generated/prisma
+.DS_Store
+.cookies.txt
+node_modules
