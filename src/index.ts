@@ -1,4 +1,4 @@
-import express, { NextFunction, Response } from "express";
+import express, { CookieOptions, NextFunction, Request, Response } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import fs from "fs";
@@ -19,10 +19,18 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import "dotenv/config";
 import multer from "multer";
-import path from "path";
 import { randomUUID, randomBytes } from "crypto";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import cron from "node-cron";
+import swaggerUi from "swagger-ui-express";
+import path from "path";
 import { authMiddleware, refreshAuthMiddleware, createAccessToken, createRefreshToken, AuthRequest } from "./middleware/auth";
 import { generateWeeklyReportExcel } from "./services/reports/weeklyExcelGenerator";
+import { generateReportPdf } from "./services/reports/pdfExport";
+import { validateCronogramaXml, CronogramaValidationError } from "./utils/xmlValidator";
+import { logger } from "./logger";
+import fsPromises from "fs/promises";
 
 // Importamos los mapas desde el nuevo archivo de utilidades
 import {
@@ -45,6 +53,11 @@ import {
 const app = express();
 const prisma = new PrismaClient();
 const port = 4001;
+const isProduction = process.env.NODE_ENV === "production";
+
+if (process.env.TRUST_PROXY === "true" || isProduction) {
+  app.set("trust proxy", 1);
+}
 
 const reverseMap = (map: Record<string, string>) => {
   const reversed: Record<string, string> = {};
@@ -78,6 +91,69 @@ const DEFAULT_APP_SETTINGS = {
   photoIntervalDays: 3,
   defaultProjectVisibility: "private",
 };
+
+const REFRESH_TOKEN_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 días
+const REFRESH_COOKIE_PATH = "/api/auth/refresh";
+
+const buildRefreshCookieOptions = (
+  overrides: Partial<CookieOptions> = {},
+  includeMaxAge = true
+): CookieOptions => {
+  const secureCookie =
+    process.env.COOKIE_SECURE === "true" || isProduction;
+
+  const requestedSameSite = process.env.COOKIE_SAMESITE?.toLowerCase();
+  const defaultSameSite = secureCookie ? "none" : "lax";
+  const sameSiteValue = (requestedSameSite === "strict" || requestedSameSite === "lax" || requestedSameSite === "none"
+    ? requestedSameSite
+    : defaultSameSite) as CookieOptions["sameSite"];
+
+  const baseOptions: CookieOptions = {
+    httpOnly: true,
+    secure: secureCookie,
+    sameSite: sameSiteValue,
+    path: REFRESH_COOKIE_PATH,
+  };
+
+  if (includeMaxAge) {
+    baseOptions.maxAge = REFRESH_TOKEN_MAX_AGE;
+  }
+
+  const cookieDomain = process.env.COOKIE_DOMAIN?.trim();
+  if (cookieDomain) {
+    baseOptions.domain = cookieDomain;
+  }
+
+  return { ...baseOptions, ...overrides };
+};
+
+const loginRateLimiter = rateLimit({
+  windowMs: Number(process.env.LOGIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
+  max: Number(process.env.LOGIN_RATE_LIMIT_MAX || 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({
+      error:
+        "Demasiados intentos de inicio de sesión. Inténtalo nuevamente en unos minutos.",
+      code: "RATE_LIMIT",
+    });
+  },
+});
+
+const refreshRateLimiter = rateLimit({
+  windowMs: Number(process.env.REFRESH_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
+  max: Number(process.env.REFRESH_RATE_LIMIT_MAX || 30),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({
+      error:
+        "Demasiadas solicitudes de renovación de sesión. Inténtalo nuevamente en unos minutos.",
+      code: "RATE_LIMIT",
+    });
+  },
+});
 
 const generateTemporaryPassword = () => {
   const randomPart = randomBytes(4).toString("hex").toUpperCase();
@@ -209,9 +285,60 @@ const recordAuditEvent = async ({
   }
 };
 
+const scheduleDailyCommitmentReminder = () => {
+  const cronExpression = process.env.COMMITMENT_REMINDER_CRON || "0 6 * * *";
+
+  cron.schedule(
+    cronExpression,
+    async () => {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const target = new Date(today);
+      target.setDate(target.getDate() + (Number(process.env.COMMITMENT_REMINDER_DAYS_AHEAD || 2)));
+
+      try {
+        const upcoming = await prisma.commitment.findMany({
+          where: {
+            dueDate: {
+              gte: today,
+              lte: target,
+            },
+            status: "PENDING",
+          },
+          include: {
+            acta: true,
+            responsible: true,
+          },
+        });
+
+        if (!upcoming.length) {
+          logger.debug("ReminderJob: sin compromisos próximos.");
+          return;
+        }
+
+        upcoming.forEach((commitment) => {
+          logger.info("ReminderJob compromiso próximo", {
+            commitmentId: commitment.id,
+            description: commitment.description,
+            dueDate: commitment.dueDate,
+            responsible: commitment.responsible?.email,
+          });
+        });
+      } catch (error) {
+        logger.error("ReminderJob falló al consultar compromisos", { error });
+      }
+    },
+    {
+      timezone: process.env.REMINDER_TIMEZONE || "America/Bogota",
+    }
+  );
+};
+
 ensureAppSettings().catch((error) => {
   console.error("No se pudo inicializar la configuración principal:", error);
 });
+
+scheduleDailyCommitmentReminder();
 
 const resolveProjectRole = (value?: string): UserRole | undefined => {
   if (!value) return undefined;
@@ -405,6 +532,40 @@ app.use(
     exposedHeaders: ["Content-Type", "Authorization"], // Headers expuestos al cliente
   })
 );
+
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
+app.use("/api/auth/login", loginRateLimiter);
+app.use("/api/auth/refresh", refreshRateLimiter);
+
+const openApiDocumentPath = path.join(__dirname, "../openapi/openapi.json");
+app.use("/api/docs", async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    await fsPromises.access(openApiDocumentPath);
+    next();
+  } catch (error) {
+    console.warn("No se encontró openapi/openapi.json. Usa npm run generate-docs para generarlo.");
+    res.status(503).json({ error: "Documentación no disponible." });
+  }
+}, swaggerUi.serve, swaggerUi.setup(undefined, {
+  swaggerOptions: {
+    url: "/api/docs/json",
+  },
+}));
+
+app.get("/api/docs/json", async (_req: Request, res: Response) => {
+  try {
+    const spec = await fsPromises.readFile(openApiDocumentPath, "utf-8");
+    res.type("application/json").send(spec);
+  } catch (error) {
+    console.error("Error leyendo la especificación OpenAPI:", error);
+    res.status(503).json({ error: "Especificación OpenAPI no disponible." });
+  }
+});
 
 // Crear directorio de uploads si no existe
 const uploadsDir = path.join(__dirname, "../uploads");
@@ -646,13 +807,7 @@ app.post("/api/auth/refresh", refreshAuthMiddleware, async (req: AuthRequest, re
     console.log('New tokens created');
 
     // Actualizar cookie de refresh token
-    res.cookie('jid', refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/api/auth/refresh',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 días
-    });
+    res.cookie('jid', refreshToken, buildRefreshCookieOptions());
 
     console.log('Refresh token cookie set');
 
@@ -664,9 +819,7 @@ app.post("/api/auth/refresh", refreshAuthMiddleware, async (req: AuthRequest, re
 });
 
 app.post("/api/auth/logout", (req, res) => {
-  res.clearCookie('jid', {
-    path: '/api/auth/refresh'
-  });
+  res.clearCookie('jid', buildRefreshCookieOptions({}, false));
   res.json({ message: "Logged out successfully" });
 });
 
@@ -713,13 +866,7 @@ app.post("/api/auth/login", async (req, res) => {
     });
 
     // Enviar refresh token como cookie httpOnly
-    res.cookie('jid', refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/api/auth/refresh',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 días
-    });
+    res.cookie('jid', refreshToken, buildRefreshCookieOptions());
 
     const { password: _, ...userWithoutPassword } = user;
     
@@ -3611,18 +3758,28 @@ app.get("/api/project-tasks", async (req, res) => {
 
 app.post("/api/project-tasks/import", authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { tasks } = req.body as { tasks?: any[] };
-
-    if (!Array.isArray(tasks)) {
-      return res.status(400).json({ error: "Formato inválido. Se esperaba un arreglo de tareas." });
+    let incomingTasks: any[] | undefined;
+    if (Array.isArray((req.body as any)?.tasks)) {
+      incomingTasks = (req.body as any).tasks;
+    } else if (typeof (req.body as any)?.xml === "string") {
+      const parsed = await validateCronogramaXml((req.body as any).xml);
+      incomingTasks = parsed;
     }
 
-    const MAX_NAME_LENGTH = 191;
+    if (!Array.isArray(incomingTasks)) {
+      return res.status(400).json({ error: "Formato inválido. Envía tareas normalizadas o XML válido." });
+    }
 
-    const sanitizedTasks = tasks.map((task: any, index: number) => {
+    const MAX_NAME_LENGTH = Number(process.env.CRON_XML_MAX_NAME_LENGTH || 512);
+
+    const sanitizedTasks = incomingTasks.map((task: any, index: number) => {
       const id = typeof task?.id === "string" && task.id.trim().length > 0 ? task.id.trim() : randomUUID();
       const name = typeof task?.name === "string" && task.name.trim().length > 0 ? task.name.trim() : `Tarea ${index + 1}`;
-      const safeName = name.length > MAX_NAME_LENGTH ? name.slice(0, MAX_NAME_LENGTH) : name;
+      let safeName = name;
+      if (name.length > MAX_NAME_LENGTH) {
+        safeName = name.slice(0, MAX_NAME_LENGTH);
+        console.warn(`Truncating task name "${name}" to ${MAX_NAME_LENGTH} characters during import.`);
+      }
 
       const parsedStart = new Date(task?.startDate);
       if (Number.isNaN(parsedStart.getTime())) {
@@ -3681,6 +3838,9 @@ app.post("/api/project-tasks/import", authMiddleware, async (req: AuthRequest, r
     res.status(201).json(formattedTasks);
   } catch (error) {
     console.error("Error al importar tareas del cronograma:", error);
+    if (error instanceof CronogramaValidationError) {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: "No se pudo importar el cronograma." });
   }
 });
@@ -3689,3 +3849,22 @@ app.listen(port, () => {
   console.log(`Servidor escuchando en http://localhost:${port}`);
 });
 import mime from "mime-types";
+
+app.post(
+  "/api/reports/:id/export-pdf",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const pdf = await generateReportPdf({ reportId: id });
+      res.json({
+        message: "Generación de PDF en desarrollo.",
+        fileName: pdf.fileName,
+        path: pdf.filePath,
+      });
+    } catch (error) {
+      console.error("Error al generar PDF del informe:", error);
+      res.status(500).json({ error: "No se pudo generar el PDF." });
+    }
+  }
+);

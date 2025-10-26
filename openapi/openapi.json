@@ -1,0 +1,127 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Bitácora Digital de Obra API",
+    "version": "0.1.0",
+    "description": "Documentación inicial de endpoints disponibles en el backend."
+  },
+  "servers": [
+    { "url": "http://localhost:4001/api" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "summary": "Inicia sesión y devuelve tokens de acceso",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                  "email": { "type": "string", "format": "email" },
+                  "password": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tokens generados",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accessToken": { "type": "string" },
+                    "user": {
+                      "$ref": "#/components/schemas/User"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Credenciales inválidas" }
+        }
+      }
+    },
+    "/reports": {
+      "post": {
+        "summary": "Crea un informe (semanal/mensual)",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Informe creado",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Report" }
+              }
+            }
+          },
+          "400": { "description": "Datos inválidos" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "email": { "type": "string" },
+          "fullName": { "type": "string" },
+          "appRole": { "type": "string" },
+          "projectRole": { "type": "string" }
+        }
+      },
+      "Report": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "number": { "type": "string" },
+          "period": { "type": "string" },
+          "submissionDate": { "type": "string", "format": "date-time" },
+          "summary": { "type": "string" },
+          "type": { "type": "string", "enum": ["Weekly", "Monthly"] },
+          "reportScope": { "type": "string" },
+          "version": { "type": "integer" }
+        }
+      },
+      "CreateReportRequest": {
+        "type": "object",
+        "required": ["number", "period", "submissionDate", "summary", "type", "reportScope"],
+        "properties": {
+          "number": { "type": "string" },
+          "period": { "type": "string" },
+          "submissionDate": { "type": "string", "format": "date-time" },
+          "summary": { "type": "string" },
+          "type": { "type": "string", "enum": ["Weekly", "Monthly"] },
+          "reportScope": { "type": "string" }
+        }
+      }
+    }
+  }
+}
