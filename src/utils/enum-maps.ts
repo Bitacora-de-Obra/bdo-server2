@@ -1,4 +1,4 @@
-import { UserRole, ActaArea, ActaStatus, EntryType, EntryStatus, DeliveryMethod, DrawingDiscipline, WorkActaStatus, CostActaStatus, ReportScope , ReportStatus} from '@prisma/client'; // <-- MODIFICA ESTA LÍNEA
+import { UserRole, ActaArea, ActaStatus, EntryType, EntryStatus, DeliveryMethod, DrawingDiscipline, WorkActaStatus, CostActaStatus, ReportScope , ReportStatus, CommitmentStatus, CommunicationStatus, ModificationType } from '@prisma/client';
 /**
  * Mapea los valores de rol del frontend (en español) a los valores del enum de Prisma.
  * Este es el "traductor" entre el cliente y la base de datos.
@@ -8,7 +8,7 @@ export const roleMap: { [key: string]: UserRole } = {
     'Supervisor': 'SUPERVISOR',
     'Representante Contratista': 'CONTRACTOR_REP',
     'Administrador IDU': 'ADMIN',
-    'Invitado': 'GUEST', // <-- Añade la nueva "traducción" aquí
+    'Invitado': 'CONTRACTOR_REP', // Usamos CONTRACTOR_REP como valor por defecto
 };
 
 /**
@@ -19,8 +19,8 @@ export const actaAreaMap: { [key: string]: ActaArea } = {
     'Comité HSE': 'HSE', 
     'Comité Ambiental': 'AMBIENTAL',
     'Comité Social': 'SOCIAL', 
-    'Comité Jurídico': 'JURIDICO', 
-    'Comité Técnico': 'TECNICO', 
+    'Comité Jurídico': 'OTHER', 
+    'Comité Técnico': 'COMITE_TECNICO', 
     'Otro': 'OTHER',
 };
 
@@ -31,7 +31,7 @@ export const actaStatusMap: { [key: string]: ActaStatus } = {
     'Firmada': 'SIGNED', 
     'En Borrador': 'DRAFT', 
     'Para Firmas': 'FOR_SIGNATURES', 
-    'Cerrada': 'CLOSED',
+    'Cerrada': 'CANCELLED',
 };
 
 export const entryTypeMap: { [key: string]: EntryType } = {
@@ -39,6 +39,8 @@ export const entryTypeMap: { [key: string]: EntryType } = {
     'Administrativo': 'ADMINISTRATIVE',
     'HSE': 'SAFETY',
     'General': 'GENERAL',
+    'TECHNICAL': 'TECHNICAL', // Añadido para manejar el tipo técnico
+    'Técnico': 'TECHNICAL', // Versión en español
 };
 
 /**
@@ -50,13 +52,13 @@ export const entryStatusMap: { [key: string]: EntryStatus } = {
     'Radicado': 'SUBMITTED',
     'Rechazado': 'REJECTED',
     'Borrador': 'DRAFT',
+    'NEEDS_REVIEW': 'NEEDS_REVIEW', // Añadido para manejar el estado en inglés
 };
 
 export const deliveryMethodMap: { [key: string]: DeliveryMethod } = { // <-- AÑADE ESTE BLOQUE
     'Correo Electrónico': 'MAIL',
-    'Impreso': 'PRINTED',
     'Sistema BDO': 'SYSTEM',
-    'Fax': 'FAX',
+    'Físico': 'PHYSICAL',
 };
 
 export const drawingDisciplineMap: { [key: string]: DrawingDiscipline } = {
@@ -65,16 +67,19 @@ export const drawingDisciplineMap: { [key: string]: DrawingDiscipline } = {
     'Eléctrico': 'ELECTRICO',
     'Hidrosanitario': 'HIDROSANITARIO',
     'Mecánico': 'MECANICO',
-    'Urbanismo y Paisajismo': 'URBANISMO',
-    'Señalización y PMT': 'SEÑALIZACION',
-    'Geotecnia y Suelos': 'GEOTECNIA',
+    'Señalización y PMT': 'SENALIZACION',
     'Otro': 'OTHER',
 };
 
-export const workActaStatusMap: { [key: string]: WorkActaStatus } = { // <-- AÑADE ESTE BLOQUE
+export const workActaStatusMap: { [key: string]: WorkActaStatus } = {
+    'APPROVED': 'APPROVED',
+    'IN_REVIEW': 'IN_REVIEW',
+    'DRAFT': 'DRAFT',
+    'REJECTED': 'REJECTED',
     'Aprobada': 'APPROVED',
     'En Revisión': 'IN_REVIEW',
     'En Borrador': 'DRAFT',
+    'Rechazada': 'REJECTED',
 };
 
 export const costActaStatusMap: { [key: string]: CostActaStatus } = { // <-- AÑADE ESTE BLOQUE
@@ -96,4 +101,38 @@ export const reportStatusMap: { [key: string]: ReportStatus } = { // <-- AÑADE 
     'Presentado': 'SUBMITTED',
     'Aprobado': 'APPROVED',
     'Con Observaciones': 'OBSERVED',
+};
+
+export const commitmentStatusMap: { [key: string]: CommitmentStatus } = {
+    'Pendiente': 'PENDING',
+    'Completado': 'COMPLETED',
+    'Cancelado': 'CANCELLED',
+    'Atrasado': 'DELAYED',
+    'PENDING': 'PENDING',
+    'COMPLETED': 'COMPLETED',
+    'CANCELLED': 'CANCELLED',
+    'DELAYED': 'DELAYED',
+};
+
+export const communicationStatusMap: { [key: string]: CommunicationStatus } = {
+    'Pendiente': 'PENDIENTE',
+    'En Trámite': 'EN_TRAMITE',
+    'Resuelto': 'RESUELTO',
+    'PENDIENTE': 'PENDIENTE',
+    'EN_TRÁMITE': 'EN_TRAMITE',
+    'EN_TRAMITE': 'EN_TRAMITE',
+    'RESUELTO': 'RESUELTO',
+};
+
+export const modificationTypeMap: { [key: string]: ModificationType } = {
+    'ADDITION': 'ADDITION',
+    'TIME_EXTENSION': 'TIME_EXTENSION',
+    'SUSPENSION': 'SUSPENSION',
+    'REINSTATEMENT': 'REINSTATEMENT',
+    'OTHER': 'OTHER',
+    'Adición en Valor': 'ADDITION',
+    'Prórroga en Tiempo': 'TIME_EXTENSION',
+    'Suspensión': 'SUSPENSION',
+    'Reinicio': 'REINSTATEMENT',
+    'Otro': 'OTHER',
 };

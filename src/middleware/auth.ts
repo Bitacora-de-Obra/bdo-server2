@@ -1,34 +1,122 @@
-// En bdo-server/src/middleware/auth.ts
-
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 export interface AuthRequest extends Request {
-  user?: { userId: string };
+  user?: {
+    userId: string;
+    tokenVersion: number;
+    appRole?: string;
+  };
 }
 
-export const authMiddleware = (req: AuthRequest, res: Response, next: NextFunction) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+export const createAccessToken = (userId: string, tokenVersion: number): string => {
+  return jwt.sign(
+    { userId, tokenVersion },
+    process.env.JWT_SECRET!,
+    { expiresIn: '15m' }
+  );
+};
 
+export const createRefreshToken = (userId: string, tokenVersion: number): string => {
+  return jwt.sign(
+    { userId, tokenVersion },
+    process.env.JWT_SECRET!, // Usamos el mismo secreto por ahora
+    { expiresIn: '7d' }
+  );
+};
 
-  if (!token) {
-    console.log('Auth Middleware: No token provided.'); // Log si no hay token
-    return res.status(401).json({ error: 'Acceso denegado. No se proporcionó token.' });
-  }
-
+export const authMiddleware = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string };
-    req.user = { userId: decoded.userId };
-    next();
-  } catch (error: any) { // Captura el error específico
-    // --- LOGS DE ERROR DETALLADOS ---
-    console.error('Auth Middleware: Token verification FAILED.');
-    console.error('Error Name:', error.name); // Ej: TokenExpiredError, JsonWebTokenError
-    console.error('Error Message:', error.message); // Ej: jwt expired, invalid signature
-    // console.error('Error completo:', error); // Descomenta si necesitas más detalle
-    // --------------------------------
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
 
-    res.status(403).json({ error: 'Token inválido o expirado.' }); // Mantenemos el mensaje genérico al frontend
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: 'Invalid token format' });
+    }
+
+    try {
+      const payload = jwt.verify(token, process.env.JWT_SECRET!) as any;
+      
+      const user = await prisma.user.findUnique({
+        where: { id: payload.userId },
+        select: { id: true, status: true, tokenVersion: true, appRole: true }
+      });
+
+      if (!user) {
+        return res.status(401).json({ error: 'User not found' });
+      }
+
+      if (user.status !== 'active') {
+        return res.status(403).json({ error: 'User account is inactive' });
+      }
+
+      if (user.tokenVersion !== payload.tokenVersion) {
+        return res.status(401).json({ error: 'Token version is invalid' });
+      }
+
+      req.user = {
+        userId: user.id,
+        tokenVersion: user.tokenVersion,
+        appRole: user.appRole
+      };
+
+      next();
+    } catch (err) {
+      if (err instanceof jwt.TokenExpiredError) {
+        return res.status(401).json({ 
+          error: 'Token expired',
+          code: 'TOKEN_EXPIRED'
+        });
+      }
+      throw err;
+    }
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+export const refreshAuthMiddleware = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const refreshToken = req.cookies.jid;
+    if (!refreshToken) {
+      return res.status(401).json({ error: 'No refresh token' });
+    }
+
+    const payload = jwt.verify(refreshToken, process.env.JWT_SECRET!) as any;
+    
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
+      select: { id: true, status: true, tokenVersion: true, appRole: true }
+    });
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    if (user.status !== 'active') {
+      return res.status(403).json({ error: 'User account is inactive' });
+    }
+
+    if (user.tokenVersion !== payload.tokenVersion) {
+      return res.status(401).json({ error: 'Token version is invalid' });
+    }
+
+    req.user = {
+      userId: user.id,
+      tokenVersion: user.tokenVersion,
+      appRole: user.appRole
+    };
+
+    next();
+  } catch (error) {
+    console.error('Refresh middleware error:', error);
+    res.status(401).json({ error: 'Invalid refresh token' });
   }
 };

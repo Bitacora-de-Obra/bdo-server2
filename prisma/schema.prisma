@@ -1,3 +1,6 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,38 +10,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id          String   @id @default(cuid())
-  fullName    String
-  email       String   @unique
-  password    String
-  projectRole UserRole
-  avatarUrl   String
-  appRole     AppRole
-  status      String
-  lastLoginAt DateTime?
-
-  logEntries         LogEntry[]     @relation("AuthoredLogEntries") // Nombre explícito para la autoría
-  comments           Comment[]
-  commitments        Commitment[]
-  signatures         Signature[]    // Firmas realizadas por este usuario (relación genérica)
-  assignedLogEntries LogEntry[]     @relation("LogEntryAssignees")
-  authoredReports    Report[]       @relation("AuthoredReports")
-  // reportSignatures   Signature[] @relation("ReportSignatures") // <-- ELIMINA O COMENTA ESTA LÍNEA (Redundante con 'signatures')
-  observations       Observation[]
-  communications     Communication[] @relation("UploadedCommunications")
-  drawingVersions    DrawingVersion[]
-  authoredPhotos PhotoEntry[] @relation("AuthoredPhotos") // <-- AÑADE ESTA LÍNEA
-}
-
 enum UserRole {
+  ADMIN
   RESIDENT
   SUPERVISOR
   CONTRACTOR_REP
-  ADMIN
-  GUEST // <-- AÑADE ESTA LÍNEA
 }
-
 
 enum AppRole {
   admin
@@ -46,413 +23,500 @@ enum AppRole {
   viewer
 }
 
-model Project {
-  id         String @id @default(cuid())
-  name       String
-  contractId String @unique
-  logEntries LogEntry[]
-  projectTasks ProjectTask[]
-}
-
-model LogEntry {
-  id                      String      @id @default(cuid())
-  folioNumber             Int         @unique @default(autoincrement())
-  title                   String
-  description             String      @db.Text
-  createdAt               DateTime    @default(now())
-  updatedAt               DateTime    @updatedAt
-  activityStartDate       DateTime
-  activityEndDate         DateTime
-  location                String
-  subject                 String
-  type                    EntryType
-  status                  EntryStatus
-  isConfidential          Boolean     @default(false)
-  requiredSignatoriesJson String?     @db.Text
-
-  authorId    String
-  author      User      @relation("AuthoredLogEntries", fields: [authorId], references: [id]) // Usa el nombre explícito
-  projectId   String
-  project     Project   @relation(fields: [projectId], references: [id])
-  comments    Comment[]
-  attachments Attachment[]
-  signatures  Signature[] @relation("LogEntrySignatures") // Nombre explícito
-  assignees   User[]    @relation("LogEntryAssignees") // <-- AÑADE ESTA LÍNEA
-}
-
 enum EntryType {
-  QUALITY
-  ADMINISTRATIVE
-  SAFETY
   GENERAL
+  QUALITY
+  SAFETY
+  ADMINISTRATIVE
+  TECHNICAL
 }
 
 enum EntryStatus {
-  APPROVED
-  NEEDS_REVIEW
-  SUBMITTED
-  REJECTED
   DRAFT
-}
-
-model Comment {
-  id          String       @id @default(cuid())
-  content     String       @db.Text
-  timestamp   DateTime     @default(now())
-  authorId    String
-  author      User         @relation(fields: [authorId], references: [id])
-
-  logEntryId  String?
-  logEntry    LogEntry?    @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
-
-  // --- LA CORRECCIÓN ESTÁ AQUÍ ---
-  drawingId   String?      // Este campo solo guarda el ID
-  drawing     Drawing?     @relation("DrawingComments", fields: [drawingId], references: [id], onDelete: Cascade) // El @relation va en el campo del objeto
-
-  attachments Attachment[]
-}
-
-model Attachment {
-  id         String    @id @default(cuid())
-  fileName   String
-  url        String    @db.Text
-  size       Int
-  type       String
-  logEntryId String?
-  logEntry   LogEntry? @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
-  commentId  String?
-  comment    Comment?  @relation(fields: [commentId], references: [id], onDelete: Cascade)
-  actaId     String?
-  acta       Acta?     @relation(fields: [actaId], references: [id], onDelete: Cascade)
-
-  // --- CORRECCIÓN AQUÍ ---
-  costActaId String?   // Este campo solo guarda el ID
-  costActa   CostActa? @relation(fields: [costActaId], references: [id], onDelete: Cascade) // El @relation va aquí
-
-  reportId   String?   // Para informes (Paso 18)
-  report     Report?   @relation(fields: [reportId], references: [id], onDelete: Cascade) // Para informes (Paso 18)
-  photoEntry PhotoEntry? // <-- AÑADE ESTA LÍNEA (Un attachment puede ser una foto)
-}
-
-model Acta {
-  id          String     @id @default(cuid())
-  number      String     @unique
-  title       String
-  date        DateTime
-  area        ActaArea
-  status      ActaStatus
-  summary     String     @db.Text
-  commitments Commitment[]
-  attachments Attachment[]
-  signatures              Signature[] @relation("ActaSignatures") // Nombre explícito
-  requiredSignatoriesJson String?    @db.Text // <-- AÑADE ESTA LÍNEA
-  createdAt   DateTime   @default(now()) // <-- AÑADE ESTA LÍNEA
-  updatedAt   DateTime   @updatedAt      // <-- AÑADE ESTA LÍNEA
-}
-
-model Commitment {
-  id            String           @id @default(cuid())
-  description   String           @db.Text
-  dueDate       DateTime
-  status        CommitmentStatus @default(PENDING)
-  actaId        String
-  acta          Acta             @relation(fields: [actaId], references: [id], onDelete: Cascade)
-  responsibleId String
-  responsible   User             @relation(fields: [responsibleId], references: [id])
-}
-
-model Signature {
-  id         String   @id @default(cuid())
-  signedAt   DateTime @default(now())
-  signerId   String
-  signer     User     @relation(fields: [signerId], references: [id], onDelete: Cascade) // Relación general con el firmante
-
-  logEntryId String?
-  // Añade map para nombre único de constraint
-  logEntry   LogEntry? @relation("LogEntrySignatures", fields: [logEntryId], references: [id], onDelete: Cascade, map: "Signature_logEntryId_fkey")
-
-  actaId     String?
-  // Añade map para nombre único de constraint
-  acta       Acta?     @relation("ActaSignatures", fields: [actaId], references: [id], onDelete: Cascade, map: "Signature_actaId_fkey")
-
-  reportId   String?
-  // Añade map para nombre único de constraint
-  report     Report?   @relation("ReportSignatures", fields: [reportId], references: [id], onDelete: Cascade, map: "Signature_reportId_fkey")
+  SUBMITTED
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
 }
 
 enum ActaArea {
   COMITE_OBRA
+  COMITE_TECNICO
   HSE
-  AMBIENTAL
+  CALIDAD
   SOCIAL
-  JURIDICO
-  TECNICO
+  AMBIENTAL
   OTHER
 }
 
 enum ActaStatus {
-  SIGNED
   DRAFT
   FOR_SIGNATURES
-  CLOSED
+  SIGNED
+  CANCELLED
 }
 
 enum CommitmentStatus {
   PENDING
   COMPLETED
+  CANCELLED
+  DELAYED
 }
 
 enum CommunicationStatus {
   PENDIENTE
   EN_TRAMITE
   RESUELTO
+  ARCHIVADO
 }
 
 enum DeliveryMethod {
-  MAIL
-  PRINTED
   SYSTEM
-  FAX
-}
-
-model Communication {
-  id               String              @id @default(cuid())
-  radicado         String              @unique
-  subject          String
-  description      String?             @db.Text
-  senderEntity     String
-  senderName       String
-  senderTitle      String
-  recipientEntity  String
-  recipientName    String
-  recipientTitle   String
-  signerName       String
-  sentDate         DateTime
-  dueDate          DateTime?
-  deliveryMethod   DeliveryMethod
-  notes            String?             @db.Text
-  status           CommunicationStatus @default(PENDIENTE)
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
-
-  // Relación con el usuario que subió el registro
-  uploaderId       String
-  uploader         User                @relation("UploadedCommunications", fields: [uploaderId], references: [id]) // <-- MODIFICA ESTA LÍNEA
-  // Relación para respuestas (hilo de conversación)
-  parentId         String?
-  parent           Communication?      @relation("CommunicationThread", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  responses        Communication[]     @relation("CommunicationThread")
-
-  // Relaciones futuras para adjuntos e historial
-  // attachments      Attachment[]
-  // statusHistory    StatusChange[]
+  MAIL
+  PHYSICAL
 }
 
 enum DrawingDiscipline {
   ARQUITECTONICO
   ESTRUCTURAL
-  ELECTRICO
   HIDROSANITARIO
+  ELECTRICO
   MECANICO
-  URBANISMO
-  SEÑALIZACION
-  GEOTECNIA
+  SENALIZACION
   OTHER
 }
 
 enum DrawingStatus {
   VIGENTE
   OBSOLETO
-}
-
-model Drawing {
-  id         String            @id @default(cuid())
-  code       String            @unique // ej. "EST-001-A"
-  title      String
-  discipline DrawingDiscipline
-  status     DrawingStatus     @default(VIGENTE)
-  versions   DrawingVersion[]
-  comments   Comment[]         @relation("DrawingComments") // <-- AÑADE ESTA LÍNEA
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
-}
-
-model DrawingVersion {
-  id            String   @id @default(cuid())
-  versionNumber Int
-  fileName      String
-  url           String   @db.Text
-  size          Int
-  uploadDate    DateTime @default(now())
-
-  drawingId     String
-  drawing       Drawing  @relation(fields: [drawingId], references: [id], onDelete: Cascade)
-
-  uploaderId    String
-  uploader      User     @relation(fields: [uploaderId], references: [id])
-}
-
-enum WorkActaStatus {
-  APPROVED
-  IN_REVIEW
-  DRAFT
-}
-
-model ContractItem {
-  id               String         @id @default(cuid())
-  itemCode         String         @unique
-  description      String         @db.Text
-  unit             String
-  unitPrice        Float
-  contractQuantity Float
-  workActaItems    WorkActaItem[]
-}
-
-model WorkActa {
-  id        String         @id @default(cuid())
-  number    String         @unique
-  period    String
-  date      DateTime
-  status    WorkActaStatus @default(DRAFT)
-  items     WorkActaItem[]
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
-}
-
-model WorkActaItem {
-  id        String @id @default(cuid())
-  quantity  Float
-
-  workActaId String
-  workActa   WorkActa @relation(fields: [workActaId], references: [id], onDelete: Cascade)
-
-  contractItemId String
-  contractItem   ContractItem @relation(fields: [contractItemId], references: [id], onDelete: Cascade)
+  ANULADO
 }
 
 enum CostActaStatus {
-  SUBMITTED    // Radicada
-  IN_REVIEW    // En Revisión
-  OBSERVED     // Observada
-  APPROVED     // Aprobada
-  IN_PAYMENT   // En Trámite de Pago
-  PAID         // Pagada
+  SUBMITTED
+  IN_REVIEW
+  OBSERVED
+  APPROVED
+  IN_PAYMENT
+  PAID
+  REJECTED
 }
 
-model CostActa {
-  id                 String         @id @default(cuid())
-  number             String         @unique
-  period             String
-  submissionDate     DateTime
-  approvalDate       DateTime?
-  paymentDueDate     DateTime?
-  billedAmount       Float
-  totalContractValue Float          // Guardamos el valor total *en el momento* de crear el acta
-  status             CostActaStatus @default(SUBMITTED)
-  relatedProgress    String?        @db.Text
-  observations       Observation[]
-  attachments        Attachment[]   // Reutilizamos el modelo Attachment
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+enum WorkActaStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  REJECTED
 }
 
-model Observation {
-  id        String   @id @default(cuid())
-  text      String   @db.Text
-  timestamp DateTime @default(now())
-
-  authorId  String
-  author    User     @relation(fields: [authorId], references: [id]) // Quién hizo la observación
-
-  costActaId String
-  costActa   CostActa @relation(fields: [costActaId], references: [id], onDelete: Cascade) // A qué acta pertenece
+enum ReportScope {
+  OBRA
+  INTERVENTORIA
 }
 
 enum ReportStatus {
   DRAFT
   SUBMITTED
-  APPROVED
   OBSERVED
+  APPROVED
+  REJECTED
 }
 
-enum ReportScope { // Asegúrate que este enum exista
-  OBRA
-  INTERVENTORIA
+enum ModificationType {
+  ADDITION
+  TIME_EXTENSION
+  SCOPE_CHANGE
+  OTHER
+}
+
+model User {
+  id            String          @id @default(uuid())
+  email         String         @unique
+  password      String
+  fullName      String
+  projectRole   UserRole
+  appRole       AppRole
+  avatarUrl     String?
+  status        String         // "active" | "inactive"
+  lastLoginAt   DateTime?
+  tokenVersion  Int           @default(0)  // Para invalidar tokens
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  
+  // Relaciones
+  logEntries    LogEntry[]     @relation("Author")
+  assignedTo    LogEntry[]     @relation("Assignees")
+  comments      Comment[]
+  signatures    Signature[]
+  communications Communication[] @relation("Uploader")
+  statusChanges CommunicationStatusHistory[]
+  photoEntries  PhotoEntry[]
+  responsibleFor Commitment[]
+  observations  Observation[]
+  reports       Report[]
+  drawingVersions DrawingVersion[]
+  logEntryHistory LogEntryHistory[]
+}
+
+model Project {
+  id              String    @id @default(uuid())
+  name            String
+  contractId      String    @unique
+  object          String
+  contractorName  String
+  supervisorName  String
+  initialValue    Float
+  startDate       DateTime
+  initialEndDate  DateTime
+  keyPersonnel    KeyPersonnel[]
+  logEntries      LogEntry[]
+  interventoriaContractId String
+  interventoriaInitialValue Float
+  technicalSupervisorName String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model KeyPersonnel {
+  id        String   @id @default(uuid())
+  name      String
+  role      String
+  company   String
+  email     String
+  phone     String
+  project   Project  @relation(fields: [projectId], references: [id])
+  projectId String
+}
+
+model Communication {
+  id              String    @id @default(uuid())
+  radicado        String    @unique
+  subject         String
+  description     String
+  senderEntity    String
+  senderName      String
+  senderTitle     String
+  recipientEntity String
+  recipientName   String
+  recipientTitle  String
+  signerName      String
+  sentDate        DateTime
+  dueDate         DateTime?
+  deliveryMethod  DeliveryMethod
+  notes           String?
+  status          CommunicationStatus
+  uploader        User      @relation("Uploader", fields: [uploaderId], references: [id])
+  uploaderId      String
+  parent          Communication? @relation("Replies", fields: [parentId], references: [id])
+  parentId        String?
+  replies         Communication[] @relation("Replies")
+  statusHistory   CommunicationStatusHistory[]
+  attachments     Attachment[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model CommunicationStatusHistory {
+  id              String    @id @default(uuid())
+  status          String    // CommunicationStatus enum
+  timestamp       DateTime  @default(now())
+  communication   Communication @relation(fields: [communicationId], references: [id])
+  communicationId String
+  user            User      @relation(fields: [userId], references: [id])
+  userId          String
+}
+
+model ContractModification {
+  id            String    @id @default(uuid())
+  number        String    @unique
+  type          ModificationType
+  date          DateTime
+  value         Float?
+  days          Int?
+  justification String
+  attachment    Attachment? @relation(fields: [attachmentId], references: [id])
+  attachmentId  String?    @unique
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+model WeeklyReport {
+  id              String    @id @default(uuid())
+  number          String    @unique
+  startDate       DateTime
+  endDate         DateTime
+  summary         String
+  progressSummary String?
+  nextWeekPlan    String?
+  issues          String?
+  attachments     Attachment[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Resto de modelos existentes...
+model LogEntry {
+  id                String      @id @default(uuid())
+  folioNumber       Int        @unique @default(autoincrement())
+  title             String
+  description       String
+  type              EntryType
+  subject           String
+  location          String
+  activityStartDate DateTime
+  activityEndDate   DateTime
+  isConfidential    Boolean     @default(false)
+  status            EntryStatus
+  author            User        @relation("Author", fields: [authorId], references: [id])
+  authorId          String
+  project           Project     @relation(fields: [projectId], references: [id])
+  projectId         String
+  assignees         User[]      @relation("Assignees")
+  comments          Comment[]
+  attachments       Attachment[]
+  signatures        Signature[]
+  history           LogEntryHistory[]
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+}
+
+model LogEntryHistory {
+  id         String    @id @default(uuid())
+  fieldName  String
+  oldValue   String?
+  newValue   String?
+  timestamp  DateTime  @default(now())
+  logEntry   LogEntry  @relation(fields: [logEntryId], references: [id])
+  logEntryId String
+  user       User?     @relation(fields: [userId], references: [id])
+  userId     String?
+}
+
+model Comment {
+  id          String      @id @default(uuid())
+  content     String
+  timestamp   DateTime    @default(now())
+  author      User        @relation(fields: [authorId], references: [id])
+  authorId    String
+  logEntry    LogEntry?   @relation(fields: [logEntryId], references: [id])
+  logEntryId  String?
+  drawing     Drawing?    @relation(fields: [drawingId], references: [id])
+  drawingId   String?
+  attachments Attachment[]
+}
+
+model Signature {
+  id        String    @id @default(uuid())
+  signedAt  DateTime  @default(now())
+  signer    User      @relation(fields: [signerId], references: [id])
+  signerId  String
+  logEntry  LogEntry? @relation(fields: [logEntryId], references: [id])
+  logEntryId String?
+  acta      Acta?     @relation(fields: [actaId], references: [id])
+  actaId    String?
+  report    Report?   @relation(fields: [reportId], references: [id])
+  reportId  String?
+}
+
+model Attachment {
+  id            String    @id @default(uuid())
+  fileName      String
+  url           String
+  size          Int
+  type          String
+  logEntry      LogEntry? @relation(fields: [logEntryId], references: [id])
+  logEntryId    String?
+  communication Communication? @relation(fields: [communicationId], references: [id])
+  communicationId String?
+  acta          Acta?     @relation(fields: [actaId], references: [id])
+  actaId        String?
+  costActa      CostActa? @relation(fields: [costActaId], references: [id])
+  costActaId    String?
+  report        Report?   @relation(fields: [reportId], references: [id])
+  reportId      String?
+  comment       Comment?  @relation(fields: [commentId], references: [id])
+  commentId     String?
+  contractMod   ContractModification? @relation()
+  workActa      WorkActa? @relation(fields: [workActaId], references: [id])
+  workActaId    String?
+  weeklyReport  WeeklyReport? @relation(fields: [weeklyReportId], references: [id])
+  weeklyReportId String?
+  photoEntry    PhotoEntry? @relation("PhotoAttachment")
+  createdAt     DateTime  @default(now())
+
+  @@index([workActaId])
+}
+
+model Acta {
+  id            String    @id @default(uuid())
+  number        String    @unique
+  title         String
+  date          DateTime
+  area          ActaArea
+  status        ActaStatus
+  summary       String
+  attachments   Attachment[]
+  signatures    Signature[]
+  commitments   Commitment[]
+  requiredSignatoriesJson String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Commitment {
+  id          String    @id @default(uuid())
+  description String
+  dueDate     DateTime
+  status      CommitmentStatus
+  responsible User      @relation(fields: [responsibleId], references: [id])
+  responsibleId String
+  acta        Acta      @relation(fields: [actaId], references: [id])
+  actaId      String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model CostActa {
+  id              String    @id @default(uuid())
+  number          String    @unique
+  period          String
+  submissionDate  DateTime
+  approvalDate    DateTime?
+  paymentDueDate  DateTime?
+  billedAmount    Float
+  totalContractValue Float
+  status          CostActaStatus
+  relatedProgress String?
+  observations    Observation[]
+  attachments     Attachment[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Observation {
+  id          String    @id @default(uuid())
+  text        String
+  timestamp   DateTime  @default(now())
+  author      User      @relation(fields: [authorId], references: [id])
+  authorId    String
+  costActa    CostActa  @relation(fields: [costActaId], references: [id])
+  costActaId  String
 }
 
 model Report {
-  id                  String       @id @default(cuid())
-  type                String       // "Weekly" or "Monthly"
-  reportScope         ReportScope
-  number              String       @unique // Aseguramos que el número sea único
-  period              String
-  submissionDate      DateTime
-  status              ReportStatus @default(DRAFT)
-  summary             String       @db.Text
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
-
-  // --- Relaciones ---
-  authorId            String
-  author              User         @relation("AuthoredReports", fields: [authorId], references: [id])
-
-  attachments         Attachment[] // Relación con Adjuntos
-  signatures          Signature[]  @relation("ReportSignatures") // <-- ASEGÚRATE QUE ESTA LÍNEA ESTÉ CORRECTA Y CON EL NOMBRE
-  requiredSignatoriesJson String?  @db.Text // Para guardar IDs de firmantes requeridos
+  id            String    @id @default(uuid())
+  type          String    // "Weekly" | "Monthly"
+  reportScope   ReportScope
+  number        String    @unique
+  period        String
+  submissionDate DateTime
+  summary       String
+  status        ReportStatus
+  author        User      @relation(fields: [authorId], references: [id])
+  authorId      String
+  attachments   Attachment[]
+  signatures    Signature[]
+  requiredSignatoriesJson String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 }
 
-model ControlPoint {
-  id          String       @id @default(cuid())
-  name        String
-  description String?      @db.Text
-  location    String?
-  photos      PhotoEntry[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+model Drawing {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  title       String
+  discipline  DrawingDiscipline
+  status      DrawingStatus
+  versions    DrawingVersion[]
+  comments    Comment[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model DrawingVersion {
+  id            String    @id @default(uuid())
+  versionNumber Int
+  fileName      String
+  url           String
+  size          Int
+  uploadDate    DateTime  @default(now())
+  uploader      User      @relation(fields: [uploaderId], references: [id])
+  uploaderId    String
+  drawing       Drawing   @relation(fields: [drawingId], references: [id])
+  drawingId     String
 }
 
 model PhotoEntry {
-  id        String   @id @default(cuid())
-  url       String   @db.Text // URL del archivo subido
-  date      DateTime @default(now())
-  notes     String?  @db.Text
-
-  authorId  String
-  author    User     @relation("AuthoredPhotos", fields: [authorId], references: [id])
-
+  id            String    @id @default(uuid())
+  url           String
+  date          DateTime  @default(now())
+  notes         String?
+  author        User      @relation(fields: [authorId], references: [id])
+  authorId      String
+  controlPoint  ControlPoint @relation(fields: [controlPointId], references: [id])
   controlPointId String
-  controlPoint   ControlPoint @relation(fields: [controlPointId], references: [id], onDelete: Cascade)
+  attachment    Attachment? @relation("PhotoAttachment", fields: [attachmentId], references: [id])
+  attachmentId  String?    @unique
+}
 
-  // También asociamos la foto al Attachment para mantener la consistencia (opcional pero recomendado)
-  attachmentId String? @unique // Cada foto corresponde a un único attachment
-  attachment   Attachment? @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+model ControlPoint {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  location    String?
+  photos      PhotoEntry[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 model ProjectTask {
-  id           String   @id @default(cuid())
-  taskId       String   @unique
-  name         String
-  startDate    DateTime
-  endDate      DateTime
-  progress     Int      @default(0)
-  duration     Int
-  isSummary    Boolean  @default(false)
-  outlineLevel Int      @default(1)
+  id            String    @id @default(uuid())
+  name          String
+  startDate     DateTime
+  endDate       DateTime
+  progress      Int       @default(0)
+  duration      Int
+  isSummary     Boolean   @default(false)
+  outlineLevel  Int       @default(1)
+  dependencies  String?   // Stored as JSON array of task IDs
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
 
-  // Relación Padre-Hijo (sin cambios)
-  parentId     String?
-  parent       ProjectTask?  @relation("TaskHierarchy", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  children     ProjectTask[] @relation("TaskHierarchy")
+model ContractItem {
+  id              String    @id @default(uuid())
+  itemCode        String    @unique
+  description     String
+  unit            String
+  unitPrice       Float
+  contractQuantity Float
+  workActaItems   WorkActaItem[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
 
-  // --- CORRECCIÓN AQUÍ: Sintaxis correcta para muchos-a-muchos ---
-  // Se elimina 'references: [id]' de ambos campos.
-  successors   ProjectTask[] @relation("TaskDependencies")
-  predecessors ProjectTask[] @relation("TaskDependencies")
+model WorkActa {
+  id            String    @id @default(uuid())
+  number        String    @unique
+  period        String
+  date          DateTime
+  status        WorkActaStatus
+  items         WorkActaItem[]
+  attachments   Attachment[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
 
-  // --- CORRECCIÓN AQUÍ: Relación inversa con Project ---
-  projectId String?
-  project   Project? @relation(fields: [projectId], references: [id])
+model WorkActaItem {
+  id            String    @id @default(uuid())
+  quantity      Float
+  workActa      WorkActa  @relation(fields: [workActaId], references: [id])
+  workActaId    String
+  contractItem  ContractItem @relation(fields: [contractItemId], references: [id])
+  contractItemId String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  @@index([workActaId])
+  @@index([contractItemId])
 }
