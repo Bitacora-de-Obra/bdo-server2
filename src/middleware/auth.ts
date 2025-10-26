@@ -9,6 +9,7 @@ export interface AuthRequest extends Request {
     userId: string;
     tokenVersion: number;
     appRole?: string;
+    email?: string;
   };
 }
 
@@ -45,7 +46,7 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
       
       const user = await prisma.user.findUnique({
         where: { id: payload.userId },
-        select: { id: true, status: true, tokenVersion: true, appRole: true }
+        select: { id: true, status: true, tokenVersion: true, appRole: true, email: true }
       });
 
       if (!user) {
@@ -63,7 +64,8 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
       req.user = {
         userId: user.id,
         tokenVersion: user.tokenVersion,
-        appRole: user.appRole
+        appRole: user.appRole,
+        email: user.email
       };
 
       next();
@@ -93,7 +95,7 @@ export const refreshAuthMiddleware = async (req: AuthRequest, res: Response, nex
     
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
-      select: { id: true, status: true, tokenVersion: true, appRole: true }
+      select: { id: true, status: true, tokenVersion: true, appRole: true, email: true }
     });
 
     if (!user) {
@@ -111,7 +113,8 @@ export const refreshAuthMiddleware = async (req: AuthRequest, res: Response, nex
     req.user = {
       userId: user.id,
       tokenVersion: user.tokenVersion,
-      appRole: user.appRole
+      appRole: user.appRole,
+      email: user.email
     };
 
     next();

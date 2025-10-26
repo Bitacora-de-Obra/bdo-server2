@@ -1,10 +1,12 @@
-import express from "express";
+import express, { NextFunction, Response } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import fs from "fs";
 import {
   PrismaClient,
+  Prisma,
   UserRole,
+  AppRole,
   WorkActaStatus,
   CostActaStatus,
   ReportStatus,
@@ -18,7 +20,7 @@ import jwt from "jsonwebtoken";
 import "dotenv/config";
 import multer from "multer";
 import path from "path";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 import { authMiddleware, refreshAuthMiddleware, createAccessToken, createRefreshToken, AuthRequest } from "./middleware/auth";
 import { generateWeeklyReportExcel } from "./services/reports/weeklyExcelGenerator";
 
@@ -37,6 +39,7 @@ import {
   commitmentStatusMap,
   communicationStatusMap,
   modificationTypeMap,
+  roleMap,
 } from "./utils/enum-maps";
 // El middleware de autenticación ya está importado arriba
 const app = express();
@@ -63,6 +66,164 @@ const reportScopeReverseMap = reverseMap(reportScopeMap);
 const deliveryMethodReverseMap = reverseMap(deliveryMethodMap);
 const communicationStatusReverseMap = reverseMap(communicationStatusMap);
 const modificationTypeReverseMap = reverseMap(modificationTypeMap);
+const roleReverseMap = reverseMap(roleMap);
+
+const DEFAULT_APP_SETTINGS = {
+  companyName: "IDU",
+  timezone: "America/Bogota",
+  locale: "es-ES",
+  requireStrongPassword: true,
+  enable2FA: false,
+  sessionTimeoutMinutes: 60,
+  photoIntervalDays: 3,
+  defaultProjectVisibility: "private",
+};
+
+const generateTemporaryPassword = () => {
+  const randomPart = randomBytes(4).toString("hex").toUpperCase();
+  return `Temp-${randomPart}`;
+};
+
+const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (req.user?.appRole !== "admin") {
+    return res.status(403).json({ error: "Acceso restringido a administradores." });
+  }
+  return next();
+};
+
+const ensureAppSettings = async () => {
+  try {
+    let settings = await prisma.appSetting.findFirst();
+    if (!settings) {
+      settings = await prisma.appSetting.create({
+        data: { ...DEFAULT_APP_SETTINGS },
+      });
+    }
+    return settings;
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2021"
+    ) {
+      console.warn(
+        "La tabla AppSetting no existe todavía. Ejecuta las migraciones (npx prisma migrate deploy) para crearla."
+      );
+      return null;
+    }
+    throw error;
+  }
+};
+
+const formatAppSettings = (settings: any) => ({
+  companyName: settings.companyName,
+  timezone: settings.timezone,
+  locale: settings.locale,
+  requireStrongPassword: settings.requireStrongPassword,
+  enable2FA: settings.enable2FA,
+  sessionTimeoutMinutes: settings.sessionTimeoutMinutes,
+  photoIntervalDays: settings.photoIntervalDays,
+  defaultProjectVisibility: settings.defaultProjectVisibility,
+});
+
+const formatAdminUser = (user: any) => ({
+  id: user.id,
+  fullName: user.fullName,
+  email: user.email,
+  projectRole: roleReverseMap[user.projectRole] || user.projectRole,
+  appRole: user.appRole,
+  avatarUrl: user.avatarUrl,
+  status: user.status,
+  lastLoginAt:
+    user.lastLoginAt instanceof Date
+      ? user.lastLoginAt.toISOString()
+      : user.lastLoginAt,
+});
+
+const createDiff = (
+  before: Record<string, any>,
+  after: Record<string, any>,
+  fields: string[]
+) => {
+  const diff: Record<string, { from: any; to: any }> = {};
+  fields.forEach((field) => {
+    const beforeValue =
+      before[field] instanceof Date
+        ? (before[field] as Date).toISOString()
+        : before[field];
+    const afterValue =
+      after[field] instanceof Date
+        ? (after[field] as Date).toISOString()
+        : after[field];
+    if (JSON.stringify(beforeValue) !== JSON.stringify(afterValue)) {
+      diff[field] = { from: beforeValue, to: afterValue };
+    }
+  });
+  return diff;
+};
+
+const resolveActorInfo = async (req: AuthRequest) => {
+  if (!req.user?.userId) {
+    return { actorId: undefined, actorEmail: null };
+  }
+  if (req.user.email) {
+    return { actorId: req.user.userId, actorEmail: req.user.email };
+  }
+  const actor = await prisma.user.findUnique({
+    where: { id: req.user.userId },
+    select: { email: true },
+  });
+  return { actorId: req.user.userId, actorEmail: actor?.email ?? null };
+};
+
+const recordAuditEvent = async ({
+  action,
+  entityType,
+  entityId,
+  diff,
+  actorId,
+  actorEmail,
+}: {
+  action: string;
+  entityType: string;
+  entityId?: string | null;
+  diff?: Record<string, { from: any; to: any }>;
+  actorId?: string;
+  actorEmail?: string | null;
+}) => {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        action,
+        entityType,
+        entityId: entityId ?? null,
+        diff:
+          diff && Object.keys(diff).length > 0
+            ? (diff as Prisma.InputJsonValue)
+            : undefined,
+        actorId: actorId ?? null,
+        actorEmail: actorEmail ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("Error registrando auditoría:", error);
+  }
+};
+
+ensureAppSettings().catch((error) => {
+  console.error("No se pudo inicializar la configuración principal:", error);
+});
+
+const resolveProjectRole = (value?: string): UserRole | undefined => {
+  if (!value) return undefined;
+  if (roleMap[value]) {
+    return roleMap[value];
+  }
+  const normalized = value.toUpperCase();
+  if ((UserRole as any)[normalized]) {
+    return normalized as UserRole;
+  }
+  return undefined;
+};
 
 const buildAttachmentResponse = (attachment: any) => ({
   ...attachment,
@@ -238,7 +399,7 @@ const mapReportVersionSummary = (report: any) => ({
 app.use(
   cors({
     origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173"], // Permite puertos de React y Vite
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // Incluye OPTIONS para preflight
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], // Incluye OPTIONS para preflight
     allowedHeaders: ["Content-Type", "Authorization"], // Headers permitidos
     credentials: true, // Necesario para cookies/sesiones
     exposedHeaders: ["Content-Type", "Authorization"], // Headers expuestos al cliente
@@ -701,25 +862,388 @@ app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-app.get("/api/users", async (req, res) => {
+app.get("/api/public/demo-users", async (_req, res) => {
   try {
     const users = await prisma.user.findMany({
+      where: { status: "active" },
       select: {
         id: true,
         fullName: true,
         email: true,
         projectRole: true,
-        avatarUrl: true,
         appRole: true,
         status: true,
       },
+      orderBy: { fullName: "asc" },
     });
-    res.json(users);
+
+    const sanitized = users.map((user) => ({
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      projectRole: user.projectRole,
+      appRole: user.appRole,
+      status: user.status,
+    }));
+
+    res.json(sanitized);
   } catch (error) {
+    console.error("Error al obtener usuarios demo:", error);
+    res
+      .status(500)
+      .json({ error: "No se pudieron cargar los usuarios de demostración." });
+  }
+});
+
+app.get("/api/users", authMiddleware, async (_req: AuthRequest, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      orderBy: { fullName: "asc" },
+    });
+    res.json(users.map(formatAdminUser));
+  } catch (error) {
+    console.error("Error al obtener usuarios (autenticado):", error);
     res.status(500).json({ error: "Error al obtener usuarios." });
   }
 });
 
+app.get(
+  "/api/admin/users",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const users = await prisma.user.findMany({
+        orderBy: { fullName: "asc" },
+      });
+      res.json(users.map(formatAdminUser));
+    } catch (error) {
+      console.error("Error al obtener usuarios admin:", error);
+      res.status(500).json({ error: "No se pudieron cargar los usuarios." });
+    }
+  }
+);
+
+app.post(
+  "/api/admin/users/invite",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { fullName, email, appRole, projectRole } = req.body;
+
+      if (!fullName?.trim() || !email?.trim() || !appRole) {
+        return res
+          .status(400)
+          .json({ error: "Nombre completo, email y rol son obligatorios." });
+      }
+
+      const normalizedEmail = String(email).trim().toLowerCase();
+      const normalizedAppRole = Object.values(AppRole).includes(appRole)
+        ? appRole
+        : AppRole.viewer;
+      const resolvedProjectRole =
+        resolveProjectRole(projectRole) ?? UserRole.RESIDENT;
+
+      const existing = await prisma.user.findUnique({
+        where: { email: normalizedEmail },
+      });
+
+      if (existing) {
+        return res
+          .status(409)
+          .json({ error: "Ya existe un usuario con este correo." });
+      }
+
+      const tempPassword = generateTemporaryPassword();
+      const hashedPassword = await bcrypt.hash(tempPassword, 12);
+
+      const newUser = await prisma.user.create({
+        data: {
+          fullName: fullName.trim(),
+          email: normalizedEmail,
+          appRole: normalizedAppRole,
+          projectRole: resolvedProjectRole,
+          password: hashedPassword,
+          status: "inactive",
+        },
+      });
+
+      const actorInfo = await resolveActorInfo(req);
+      await recordAuditEvent({
+        action: "USER_INVITED",
+        entityType: "user",
+        entityId: newUser.id,
+        diff: {
+          appRole: { from: null, to: newUser.appRole },
+          status: { from: null, to: newUser.status },
+        },
+        ...actorInfo,
+      });
+
+      res.status(201).json({
+        user: formatAdminUser(newUser),
+        temporaryPassword: tempPassword,
+      });
+    } catch (error) {
+      console.error("Error al invitar usuario:", error);
+      res.status(500).json({ error: "No se pudo invitar al usuario." });
+    }
+  }
+);
+
+app.patch(
+  "/api/admin/users/:id",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { appRole, status, projectRole } = req.body;
+
+      const updateData: any = {};
+
+      if (appRole) {
+        if (!Object.values(AppRole).includes(appRole)) {
+          return res.status(400).json({ error: "Rol de aplicación inválido." });
+        }
+        updateData.appRole = appRole;
+      }
+
+      if (status) {
+        if (!["active", "inactive"].includes(status)) {
+          return res.status(400).json({ error: "Estado inválido." });
+        }
+        updateData.status = status;
+      }
+
+      if (projectRole) {
+        const resolved = resolveProjectRole(projectRole);
+        if (!resolved) {
+          return res
+            .status(400)
+            .json({ error: "Rol de proyecto inválido." });
+        }
+        updateData.projectRole = resolved;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        return res
+          .status(400)
+          .json({ error: "No se proporcionaron cambios para actualizar." });
+      }
+
+      const existingUser = await prisma.user.findUnique({ where: { id } });
+      if (!existingUser) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      const updatedUser = await prisma.user.update({
+        where: { id },
+        data: updateData,
+      });
+
+      const diff = createDiff(existingUser, updatedUser, [
+        "appRole",
+        "status",
+        "projectRole",
+      ]);
+
+      if (Object.keys(diff).length > 0) {
+        const actorInfo = await resolveActorInfo(req);
+        await recordAuditEvent({
+          action: "USER_UPDATED",
+          entityType: "user",
+          entityId: updatedUser.id,
+          diff,
+          ...actorInfo,
+        });
+      }
+
+      res.json(formatAdminUser(updatedUser));
+    } catch (error) {
+      console.error("Error al actualizar usuario:", error);
+      res.status(500).json({ error: "No se pudo actualizar el usuario." });
+    }
+  }
+);
+
+app.get(
+  "/api/admin/audit-logs",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const limitParam = req.query.limit;
+      const limit =
+        typeof limitParam === "string" ? Math.min(parseInt(limitParam, 10) || 100, 500) : 100;
+
+      const logs = await prisma.auditLog.findMany({
+        orderBy: { timestamp: "desc" },
+        take: limit,
+        include: {
+          actor: {
+            select: { email: true },
+          },
+        },
+      });
+
+      res.json(
+        logs.map((log) => ({
+          id: log.id,
+          timestamp:
+            log.timestamp instanceof Date
+              ? log.timestamp.toISOString()
+              : log.timestamp,
+          actorEmail: log.actorEmail || log.actor?.email || null,
+          action: log.action,
+          entityType: log.entityType,
+          entityId: log.entityId,
+          diff: log.diff ?? undefined,
+        }))
+      );
+    } catch (error) {
+      console.error("Error al obtener audit logs:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudieron cargar los registros de auditoría." });
+    }
+  }
+);
+
+app.get(
+  "/api/admin/settings",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const settings = await ensureAppSettings();
+      if (!settings) {
+        return res.status(503).json({
+          error:
+            "Configuración no inicializada. Ejecuta las migraciones del servidor para habilitar este módulo.",
+        });
+      }
+      res.json(formatAppSettings(settings));
+    } catch (error) {
+      console.error("Error al obtener configuración:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudo cargar la configuración de la aplicación." });
+    }
+  }
+);
+
+app.put(
+  "/api/admin/settings",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const current = await ensureAppSettings();
+      if (!current) {
+        return res.status(503).json({
+          error:
+            "Configuración no inicializada. Ejecuta las migraciones del servidor para habilitar este módulo.",
+        });
+      }
+
+      const payload = req.body ?? {};
+
+      const parseBoolean = (value: any) => {
+        if (typeof value === "boolean") return value;
+        if (typeof value === "string") {
+          return value === "true" || value === "1" || value.toLowerCase() === "on";
+        }
+        return undefined;
+      };
+
+      const parseNumber = (value: any) => {
+        if (value === undefined || value === null || value === "") return undefined;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      };
+
+      const updateData: any = {};
+
+      if (payload.companyName !== undefined) {
+        updateData.companyName = String(payload.companyName);
+      }
+      if (payload.timezone !== undefined) {
+        updateData.timezone = String(payload.timezone);
+      }
+      if (payload.locale !== undefined) {
+        updateData.locale = String(payload.locale);
+      }
+
+      const strongPassword = parseBoolean(payload.requireStrongPassword);
+      if (strongPassword !== undefined) {
+        updateData.requireStrongPassword = strongPassword;
+      }
+
+      const enable2FA = parseBoolean(payload.enable2FA);
+      if (enable2FA !== undefined) {
+        updateData.enable2FA = enable2FA;
+      }
+
+      const sessionTimeout = parseNumber(payload.sessionTimeoutMinutes);
+      if (sessionTimeout !== undefined) {
+        updateData.sessionTimeoutMinutes = sessionTimeout;
+      }
+
+      const photoInterval = parseNumber(payload.photoIntervalDays);
+      if (photoInterval !== undefined) {
+        updateData.photoIntervalDays = photoInterval;
+      }
+
+      if (payload.defaultProjectVisibility !== undefined) {
+        updateData.defaultProjectVisibility = String(
+          payload.defaultProjectVisibility
+        );
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        return res
+          .status(400)
+          .json({ error: "No se proporcionaron cambios para actualizar." });
+      }
+
+      const updated = await prisma.appSetting.update({
+        where: { id: current.id },
+        data: updateData,
+      });
+
+      const diff = createDiff(current, updated, [
+        "companyName",
+        "timezone",
+        "locale",
+        "requireStrongPassword",
+        "enable2FA",
+        "sessionTimeoutMinutes",
+        "photoIntervalDays",
+        "defaultProjectVisibility",
+      ]);
+
+      if (Object.keys(diff).length > 0) {
+        const actorInfo = await resolveActorInfo(req);
+        await recordAuditEvent({
+          action: "APP_SETTING_CHANGED",
+          entityType: "setting",
+          entityId: updated.id,
+          diff,
+          ...actorInfo,
+        });
+      }
+
+      res.json(formatAppSettings(updated));
+    } catch (error) {
+      console.error("Error al actualizar configuración:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudo actualizar la configuración." });
+    }
+  }
+);
 // Endpoint para obtener detalles del proyecto
 app.get("/api/project-details", authMiddleware, async (req: AuthRequest, res) => {
   try {
