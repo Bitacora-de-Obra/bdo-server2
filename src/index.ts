@@ -861,7 +861,14 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
   }
 
   try {
-    const [project, contractModifications, ultimaAnotacion] = await Promise.all([
+    const [
+      project,
+      contractModifications,
+      ultimaAnotacion,
+      contractItems,
+      workActas,
+      projectTasks,
+    ] = await Promise.all([
       prisma.project.findFirst({
         include: { keyPersonnel: true },
       }),
@@ -871,6 +878,41 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
       prisma.logEntry.findFirst({
         orderBy: { createdAt: "desc" },
         include: { author: { select: { fullName: true } } },
+      }),
+      prisma.contractItem.findMany({
+        include: {
+          workActaItems: {
+            include: {
+              workActa: {
+                select: { id: true, number: true, date: true, status: true },
+              },
+            },
+          },
+        },
+        orderBy: { itemCode: "asc" },
+      }),
+      prisma.workActa.findMany({
+        include: {
+          items: {
+            include: {
+              contractItem: {
+                select: {
+                  id: true,
+                  itemCode: true,
+                  description: true,
+                  unit: true,
+                  unitPrice: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: { date: "desc" },
+        take: 5,
+      }),
+      prisma.projectTask.findMany({
+        orderBy: { startDate: "asc" },
+        take: 10,
       }),
     ]);
 
@@ -898,6 +940,23 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         month: "long",
         day: "numeric",
       });
+    };
+
+    const formatNumber = (value?: number | null, decimals = 2) => {
+      if (value === null || value === undefined || Number.isNaN(value)) {
+        return "0";
+      }
+      return new Intl.NumberFormat("es-CO", {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      }).format(value);
+    };
+
+    const formatPercentage = (value?: number | null, decimals = 1) => {
+      if (value === null || value === undefined || Number.isNaN(value)) {
+        return "0%";
+      }
+      return `${value.toFixed(decimals)}%`;
     };
 
     const contextoSecciones: string[] = [];
@@ -1020,6 +1079,148 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
           `Modificaciones contractuales recientes (máx. 5):\n${modificationsSummary}`
         );
       }
+    }
+
+    if (contractItems.length) {
+      const itemsWithProgress = contractItems.map((item) => {
+        const executedQuantity = item.workActaItems.reduce((sum, entry) => {
+          const quantity =
+            typeof entry.quantity === "number"
+              ? entry.quantity
+              : Number(entry.quantity) || 0;
+          return sum + quantity;
+        }, 0);
+
+        const percentage =
+          item.contractQuantity > 0
+            ? (executedQuantity / item.contractQuantity) * 100
+            : 0;
+
+        const latestEntry = item.workActaItems
+          .filter((entry) => entry.workActa?.date)
+          .sort((a, b) => {
+            const dateA = a.workActa?.date
+              ? new Date(a.workActa.date as unknown as string).getTime()
+              : 0;
+            const dateB = b.workActa?.date
+              ? new Date(b.workActa.date as unknown as string).getTime()
+              : 0;
+            return dateB - dateA;
+          })[0];
+
+        let lastActaSummary = "";
+        if (latestEntry?.workActa) {
+          const acta = latestEntry.workActa;
+          const actaStatus =
+            workActaStatusReverseMap[acta.status] || acta.status;
+          lastActaSummary = ` Último reporte: acta ${acta.number} (${formatDate(
+            acta.date
+          )}) en estado ${actaStatus}.`;
+        }
+
+        return {
+          itemCode: item.itemCode,
+          description: item.description,
+          unit: item.unit,
+          contractQuantity: item.contractQuantity,
+          executedQuantity,
+          percentage,
+          lastActaSummary,
+        };
+      });
+
+      const topItems = itemsWithProgress
+        .sort(
+          (a, b) =>
+            b.percentage - a.percentage ||
+            b.executedQuantity - a.executedQuantity
+        )
+        .slice(0, 8);
+
+      if (topItems.length) {
+        const lines = topItems.map(
+          (item) =>
+            `• ${item.itemCode} - ${item.description}: Contratado ${formatNumber(
+              item.contractQuantity,
+              2
+            )} ${item.unit}, Ejecutado ${formatNumber(
+              item.executedQuantity,
+              2
+            )} ${item.unit} (avance ${formatPercentage(
+              item.percentage,
+              1
+            )}).${item.lastActaSummary}`
+        );
+        contextoSecciones.push(
+          `Avance por ítems contractuales clave:\n${lines.join("\n")}`
+        );
+      }
+    }
+
+    if (workActas.length) {
+      const workActaLines = workActas.map((acta) => {
+        const totalQuantity = acta.items.reduce((sum, item) => {
+          const quantity =
+            typeof item.quantity === "number"
+              ? item.quantity
+              : Number(item.quantity) || 0;
+          return sum + quantity;
+        }, 0);
+
+        const totalValue = acta.items.reduce((sum, item) => {
+          const quantity =
+            typeof item.quantity === "number"
+              ? item.quantity
+              : Number(item.quantity) || 0;
+          const unitPrice = item.contractItem?.unitPrice || 0;
+          return sum + quantity * unitPrice;
+        }, 0);
+
+        const principales = acta.items
+          .slice(0, 3)
+          .map((item) => {
+            const code = item.contractItem?.itemCode || "N/D";
+            const qty =
+              typeof item.quantity === "number"
+                ? item.quantity
+                : Number(item.quantity) || 0;
+            const unit = item.contractItem?.unit || "";
+            return `${code}: ${formatNumber(qty, 2)} ${unit}`;
+          })
+          .join("; ");
+
+        const status =
+          workActaStatusReverseMap[acta.status] || acta.status;
+
+        return `• ${acta.number} (${formatDate(
+          acta.date
+        )}) – Estado: ${status}. Cantidad total reportada: ${formatNumber(
+          totalQuantity,
+          2
+        )}. Valor estimado: ${formatCurrency(
+          totalValue
+        )}. Ítems destacados: ${principales || "sin ítems cargados"}.`;
+      });
+
+      contextoSecciones.push(
+        `Actas de obra más recientes (máx. 5):\n${workActaLines.join("\n")}`
+      );
+    }
+
+    if (projectTasks.length) {
+      const taskLines = projectTasks.map((task) => {
+        const label = task.isSummary ? "hito" : "tarea";
+        return `• ${task.name} (${label}): avance ${formatPercentage(
+          task.progress,
+          0
+        )}, inicio ${formatDate(task.startDate)}, fin ${formatDate(
+          task.endDate
+        )}, duración ${task.duration} días.`;
+      });
+
+      contextoSecciones.push(
+        `Tareas del cronograma consultadas (máx. 10):\n${taskLines.join("\n")}`
+      );
     }
 
     if (ultimaAnotacion) {
