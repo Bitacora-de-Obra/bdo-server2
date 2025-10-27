@@ -19,7 +19,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import "dotenv/config";
 import multer from "multer";
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID, randomBytes, createHash } from "crypto";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import cron from "node-cron";
@@ -49,6 +49,13 @@ import {
   modificationTypeMap,
   roleMap,
 } from "./utils/enum-maps";
+import { getStorage } from "./storage";
+import {
+  sendEmailVerificationEmail,
+  sendPasswordResetEmail,
+  sendCommitmentReminderEmail,
+  isEmailServiceConfigured,
+} from "./services/email";
 // El middleware de autenticación ya está importado arriba
 const app = express();
 const prisma = new PrismaClient();
@@ -158,6 +165,44 @@ const refreshRateLimiter = rateLimit({
 const generateTemporaryPassword = () => {
   const randomPart = randomBytes(4).toString("hex").toUpperCase();
   return `Temp-${randomPart}`;
+};
+
+const EMAIL_VERIFICATION_TOKEN_TTL_HOURS = Number(
+  process.env.EMAIL_VERIFICATION_TOKEN_TTL_HOURS || 48
+);
+const PASSWORD_RESET_TOKEN_TTL_MINUTES = Number(
+  process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES || 60
+);
+
+const generateTokenValue = () => randomBytes(32).toString("hex");
+const hashToken = (token: string) =>
+  createHash("sha256").update(token).digest("hex");
+
+const validatePasswordStrength = async (password: string) => {
+  const settings = await prisma.appSetting.findFirst();
+  const requireStrong =
+    settings?.requireStrongPassword ??
+    DEFAULT_APP_SETTINGS.requireStrongPassword;
+
+  const minimumLength = requireStrong ? 8 : 6;
+
+  if (!password || password.length < minimumLength) {
+    return `La contraseña debe tener al menos ${minimumLength} caracteres.`;
+  }
+
+  if (!requireStrong) {
+    return null;
+  }
+
+  const hasUppercase = /[A-ZÁÉÍÓÚÑ]/u.test(password);
+  const hasLowercase = /[a-záéíóúñ]/u.test(password);
+  const hasNumber = /[0-9]/.test(password);
+
+  if (!hasUppercase || !hasLowercase || !hasNumber) {
+    return "La contraseña debe incluir mayúsculas, minúsculas y números.";
+  }
+
+  return null;
 };
 
 const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -287,6 +332,10 @@ const recordAuditEvent = async ({
 
 const scheduleDailyCommitmentReminder = () => {
   const cronExpression = process.env.COMMITMENT_REMINDER_CRON || "0 6 * * *";
+  const timezone = process.env.REMINDER_TIMEZONE || "America/Bogota";
+  const rawDaysAhead = Number(process.env.COMMITMENT_REMINDER_DAYS_AHEAD || 2);
+  const daysAheadConfig = Number.isNaN(rawDaysAhead) ? 2 : rawDaysAhead;
+  const msPerDay = 24 * 60 * 60 * 1000;
 
   cron.schedule(
     cronExpression,
@@ -294,7 +343,7 @@ const scheduleDailyCommitmentReminder = () => {
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const target = new Date(today);
-      target.setDate(target.getDate() + (Number(process.env.COMMITMENT_REMINDER_DAYS_AHEAD || 2)));
+      target.setDate(target.getDate() + daysAheadConfig);
 
       try {
         const upcoming = await prisma.commitment.findMany({
@@ -316,6 +365,21 @@ const scheduleDailyCommitmentReminder = () => {
           return;
         }
 
+        const recipients = new Map<
+          string,
+          {
+            name?: string | null;
+            commitments: {
+              id: string;
+              description: string;
+              dueDate: Date;
+              actaNumber?: string | null;
+              actaTitle?: string | null;
+              daysUntilDue: number;
+            }[];
+          }
+        >();
+
         upcoming.forEach((commitment) => {
           logger.info("ReminderJob compromiso próximo", {
             commitmentId: commitment.id,
@@ -323,7 +387,87 @@ const scheduleDailyCommitmentReminder = () => {
             dueDate: commitment.dueDate,
             responsible: commitment.responsible?.email,
           });
+
+          const email = commitment.responsible?.email?.trim().toLowerCase();
+          if (!email) {
+            logger.warn("ReminderJob: compromiso sin correo de responsable", {
+              commitmentId: commitment.id,
+              responsibleId: commitment.responsible?.id,
+            });
+            return;
+          }
+
+          const dueDate = new Date(commitment.dueDate);
+          const dueDateNormalized = new Date(dueDate);
+          dueDateNormalized.setHours(0, 0, 0, 0);
+          const daysUntilDue = Math.round(
+            (dueDateNormalized.getTime() - today.getTime()) / msPerDay
+          );
+
+          const entry =
+            recipients.get(email) ?? {
+              name: commitment.responsible?.fullName,
+              commitments: [],
+            };
+
+          if (!entry.name && commitment.responsible?.fullName) {
+            entry.name = commitment.responsible.fullName;
+          }
+
+          entry.commitments.push({
+            id: commitment.id,
+            description: commitment.description,
+            dueDate,
+            actaNumber: commitment.acta?.number,
+            actaTitle: commitment.acta?.title,
+            daysUntilDue,
+          });
+
+          recipients.set(email, entry);
         });
+
+        if (!recipients.size) {
+          logger.warn(
+            "ReminderJob: no se enviaron correos por falta de destinatarios válidos."
+          );
+          return;
+        }
+
+        if (!isEmailServiceConfigured()) {
+          logger.warn(
+            "ReminderJob: SMTP no configurado, se omite envío de correos.",
+            {
+              recipients: Array.from(recipients.keys()),
+            }
+          );
+          return;
+        }
+
+        await Promise.all(
+          Array.from(recipients.entries()).map(async ([email, payload]) => {
+            try {
+              await sendCommitmentReminderEmail({
+                to: email,
+                recipientName: payload.name,
+                commitments: payload.commitments,
+                timezone,
+                daysAhead: daysAheadConfig,
+              });
+              logger.info("ReminderJob: correo enviado", {
+                email,
+                commitments: payload.commitments.length,
+              });
+            } catch (error) {
+              logger.error(
+                "ReminderJob: error al enviar correo de recordatorio",
+                {
+                  email,
+                  error,
+                }
+              );
+            }
+          })
+        );
       } catch (error) {
         logger.error("ReminderJob falló al consultar compromisos", { error });
       }
@@ -332,6 +476,32 @@ const scheduleDailyCommitmentReminder = () => {
       timezone: process.env.REMINDER_TIMEZONE || "America/Bogota",
     }
   );
+};
+
+const sanitizeFileName = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[^a-zA-Z0-9-_.]+/g, "_")
+    .replace(/_{2,}/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120);
+
+const createStorageKey = (folder: string, originalName: string) => {
+  const ext = path.extname(originalName);
+  const baseName = sanitizeFileName(path.basename(originalName, ext)) || "file";
+  const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+  const normalizedFolder = folder.replace(/[^a-zA-Z0-9/_-]/g, "").replace(/\/+$/, "");
+  return path.posix.join(normalizedFolder, `${uniqueSuffix}-${baseName}${ext}`);
+};
+
+const persistUploadedFile = async (file: Express.Multer.File, folder: string) => {
+  const storage = getStorage();
+  const key = createStorageKey(folder, file.originalname);
+  await storage.save({ path: key, content: file.buffer });
+  return {
+    key,
+    url: storage.getPublicUrl(key),
+  };
 };
 
 ensureAppSettings().catch((error) => {
@@ -568,7 +738,7 @@ app.get("/api/docs/json", async (_req: Request, res: Response) => {
 });
 
 // Crear directorio de uploads si no existe
-const uploadsDir = path.join(__dirname, "../uploads");
+const uploadsDir = path.resolve(process.env.UPLOADS_DIR || path.join(__dirname, "../uploads"));
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -580,14 +750,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Configuración de multer
 const multerConfig = {
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadsDir),
-    filename: (req, file, cb) => {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      const safeFilename = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
-      cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(safeFilename));
-    }
-  }),
+  storage: multer.memoryStorage(),
   fileFilter: (req: express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
     const allowedMimes = [
       'image/jpeg',
@@ -621,6 +784,11 @@ app.get("/api/attachments/:id/download", async (req, res) => {
 
     if (!attachment) {
       return res.status(404).json({ error: "Adjunto no encontrado." });
+    }
+
+    const storageDriver = (process.env.STORAGE_DRIVER || 'local');
+    if (storageDriver === 's3' && attachment.url && attachment.url.startsWith('http')) {
+      return res.redirect(attachment.url);
     }
 
     let filePath: string | null = null;
@@ -700,11 +868,17 @@ app.post("/api/upload", async (req, res) => {
       return res.status(400).json({ error: "No se subió ningún archivo." });
     }
 
+    if (!req.file.buffer) {
+      return res.status(400).json({ error: "El archivo recibido está vacío." });
+    }
+
+    const stored = await persistUploadedFile(req.file, "attachments");
+
     // Crear el registro en la base de datos
     const newAttachment = await prisma.attachment.create({
       data: {
         fileName: req.file.originalname,
-        url: `http://localhost:${port}/uploads/${req.file.filename}`,
+        url: stored.url,
         size: req.file.size,
         type: req.file.mimetype,
       },
@@ -741,9 +915,16 @@ app.post("/api/auth/register", async (req, res) => {
     return res.status(400).json({ error: "Todos los campos son requeridos." });
   }
 
+  const normalizedEmail = String(email).trim().toLowerCase();
+
   try {
+    const passwordError = await validatePasswordStrength(password);
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError });
+    }
+
     const existingUser = await prisma.user.findUnique({
-      where: { email }
+      where: { email: normalizedEmail },
     });
 
     if (existingUser) {
@@ -752,20 +933,63 @@ app.post("/api/auth/register", async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 12);
 
+    const resolvedProjectRole =
+      resolveProjectRole(projectRole) ?? UserRole.RESIDENT;
+    const normalizedAppRole =
+      typeof appRole === "string" ? appRole.toLowerCase() : "";
+    const resolvedAppRole = Object.values(AppRole).includes(
+      normalizedAppRole as AppRole
+    )
+      ? (normalizedAppRole as AppRole)
+      : AppRole.viewer;
+
     const newUser = await prisma.user.create({
       data: {
-        email,
+        email: normalizedEmail,
         password: hashedPassword,
         fullName,
-        projectRole,
-        appRole,
+        projectRole: resolvedProjectRole,
+        appRole: resolvedAppRole,
         status: "active",
-        tokenVersion: 0
-      }
+        tokenVersion: 0,
+        emailVerifiedAt: isEmailServiceConfigured() ? null : new Date(),
+      },
     });
 
+    let verificationEmailSent = false;
+
+    if (isEmailServiceConfigured()) {
+      const token = generateTokenValue();
+      const tokenHash = hashToken(token);
+      const expiresAt = new Date(
+        Date.now() + EMAIL_VERIFICATION_TOKEN_TTL_HOURS * 60 * 60 * 1000
+      );
+
+      await prisma.emailVerificationToken.create({
+        data: {
+          userId: newUser.id,
+          tokenHash,
+          expiresAt,
+        },
+      });
+
+      try {
+        await sendEmailVerificationEmail({
+          to: newUser.email,
+          token,
+          fullName: newUser.fullName,
+        });
+        verificationEmailSent = true;
+      } catch (mailError) {
+        console.error("No se pudo enviar el correo de verificación:", mailError);
+      }
+    }
+
     const { password: _, ...userWithoutPassword } = newUser;
-    res.status(201).json(userWithoutPassword);
+    res.status(201).json({
+      ...userWithoutPassword,
+      verificationEmailSent,
+    });
   } catch (error) {
     console.error("Error en registro:", error);
     res.status(500).json({ error: "Error al crear el usuario." });
@@ -883,39 +1107,272 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// Endpoint para verificar email (pendiente de implementación)
 app.post("/api/auth/verify-email/:token", async (req, res) => {
   const { token } = req.params;
-  console.log("Verificación de email solicitada con token:", token);
-  // TODO: Implementar lógica de verificación de email
-  res.status(501).json({ error: "Verificación de email aún no implementada." });
+
+  if (!token) {
+    return res.status(400).json({ error: "Token de verificación inválido." });
+  }
+
+  const tokenHash = hashToken(token);
+
+  try {
+    const verificationToken = await prisma.emailVerificationToken.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+
+    if (!verificationToken || !verificationToken.user) {
+      return res.status(400).json({ error: "Token no válido o ya utilizado." });
+    }
+
+    if (verificationToken.usedAt) {
+      return res
+        .status(400)
+        .json({ error: "Este token ya fue utilizado previamente." });
+    }
+
+    if (verificationToken.expiresAt < new Date()) {
+      return res.status(400).json({
+        error: "El token de verificación ha expirado. Solicita uno nuevo.",
+      });
+    }
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: verificationToken.userId },
+        data: {
+          emailVerifiedAt: verificationToken.user.emailVerifiedAt ?? new Date(),
+          status:
+            verificationToken.user.status === "inactive"
+              ? "active"
+              : verificationToken.user.status,
+        },
+      }),
+      prisma.emailVerificationToken.update({
+        where: { id: verificationToken.id },
+        data: { usedAt: new Date() },
+      }),
+      prisma.emailVerificationToken.deleteMany({
+        where: {
+          userId: verificationToken.userId,
+          id: { not: verificationToken.id },
+        },
+      }),
+    ]);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error al verificar el email:", error);
+    res.status(500).json({ error: "Error al verificar el email." });
+  }
 });
 
-// Endpoint para solicitar restablecimiento de contraseña (pendiente)
 app.post("/api/auth/forgot-password", async (req, res) => {
   const { email } = req.body;
-  console.log("Solicitud de restablecimiento de contraseña para:", email);
-  // TODO: Implementar lógica de envío de correo para restablecimiento
-  res.status(501).json({ error: "Restablecimiento de contraseña aún no implementado." });
+
+  if (!email) {
+    return res
+      .status(400)
+      .json({ error: "Debes proporcionar el correo electrónico." });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+
+    if (user) {
+      const token = generateTokenValue();
+      const tokenHash = hashToken(token);
+      const expiresAt = new Date(
+        Date.now() + PASSWORD_RESET_TOKEN_TTL_MINUTES * 60 * 1000
+      );
+
+      await prisma.$transaction([
+        prisma.passwordResetToken.deleteMany({
+          where: { userId: user.id },
+        }),
+        prisma.passwordResetToken.create({
+          data: {
+            userId: user.id,
+            tokenHash,
+            expiresAt,
+          },
+        }),
+      ]);
+
+      if (isEmailServiceConfigured()) {
+        try {
+          await sendPasswordResetEmail({
+            to: user.email,
+            token,
+            fullName: user.fullName,
+          });
+        } catch (mailError) {
+          console.error(
+            "No se pudo enviar el correo de restablecimiento:",
+            mailError
+          );
+        }
+      } else {
+        console.warn(
+          `Servicio de correo no configurado. Token de restablecimiento para ${user.email}: ${token}`
+        );
+      }
+    }
+
+    res.json({
+      message:
+        "Si el correo existe en nuestra base de datos, enviaremos instrucciones para restablecer la contraseña.",
+    });
+  } catch (error) {
+    console.error("Error al solicitar restablecimiento de contraseña:", error);
+    res.status(500).json({ error: "No fue posible procesar la solicitud." });
+  }
 });
 
-// Endpoint para restablecer contraseña con token (pendiente)
 app.post("/api/auth/reset-password/:token", async (req, res) => {
   const { token } = req.params;
   const { password } = req.body;
-  console.log("Restablecimiento de contraseña solicitado con token:", token);
-  // TODO: Implementar lógica para cambiar la contraseña usando el token
-  res.status(501).json({ error: "Restablecimiento de contraseña aún no implementado." });
+
+  if (!token || !password) {
+    return res
+      .status(400)
+      .json({ error: "Token y nueva contraseña son requeridos." });
+  }
+
+  try {
+    const passwordError = await validatePasswordStrength(password);
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError });
+    }
+
+    const tokenHash = hashToken(token);
+
+    const resetToken = await prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+
+    if (!resetToken || !resetToken.user) {
+      return res.status(400).json({ error: "Token inválido o no encontrado." });
+    }
+
+    if (resetToken.usedAt) {
+      return res
+        .status(400)
+        .json({ error: "Este token ya fue utilizado, solicita uno nuevo." });
+    }
+
+    if (resetToken.expiresAt < new Date()) {
+      return res.status(400).json({
+        error: "El token ha expirado. Solicita un nuevo enlace de restablecimiento.",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: resetToken.userId },
+        data: {
+          password: hashedPassword,
+          tokenVersion: resetToken.user.tokenVersion + 1,
+          emailVerifiedAt: resetToken.user.emailVerifiedAt ?? new Date(),
+        },
+      }),
+      prisma.passwordResetToken.update({
+        where: { id: resetToken.id },
+        data: { usedAt: new Date() },
+      }),
+      prisma.passwordResetToken.deleteMany({
+        where: {
+          userId: resetToken.userId,
+          id: { not: resetToken.id },
+        },
+      }),
+    ]);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error al restablecer la contraseña:", error);
+    res
+      .status(500)
+      .json({ error: "No fue posible restablecer la contraseña." });
+  }
 });
 
 // Endpoint para cambiar contraseña (usuario autenticado)
-app.post("/api/auth/change-password", authMiddleware, async (req: AuthRequest, res) => {
-  const userId = req.user?.userId;
-  const { oldPassword, newPassword } = req.body;
-  console.log("Cambio de contraseña solicitado por usuario:", userId);
-  // TODO: Implementar lógica para verificar contraseña antigua y cambiarla
-  res.status(501).json({ error: "Cambio de contraseña aún no implementado." });
-});
+app.post(
+  "/api/auth/change-password",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    const userId = req.user?.userId;
+    const { oldPassword, newPassword } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: "Usuario no autenticado." });
+    }
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({
+        error: "Debes proporcionar la contraseña actual y la nueva.",
+      });
+    }
+
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      const isOldPasswordValid = await bcrypt.compare(
+        oldPassword,
+        user.password
+      );
+
+      if (!isOldPasswordValid) {
+        return res
+          .status(400)
+          .json({ error: "La contraseña actual no es correcta." });
+      }
+
+      if (oldPassword === newPassword) {
+        return res.status(400).json({
+          error: "La nueva contraseña debe ser diferente a la anterior.",
+        });
+      }
+
+      const passwordError = await validatePasswordStrength(newPassword);
+      if (passwordError) {
+        return res.status(400).json({ error: passwordError });
+      }
+
+      const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          password: hashedPassword,
+          tokenVersion: user.tokenVersion + 1,
+        },
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error al cambiar la contraseña:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudo cambiar la contraseña en este momento." });
+    }
+  }
+);
 
 // Endpoint para actualizar perfil de usuario
 app.put("/api/auth/profile", authMiddleware, async (req: AuthRequest, res) => {
@@ -948,6 +1405,7 @@ app.put("/api/auth/profile", authMiddleware, async (req: AuthRequest, res) => {
                 appRole: true,
                 status: true,
                 lastLoginAt: true,
+                emailVerifiedAt: true,
             }
         });
         
@@ -988,6 +1446,7 @@ app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
         appRole: true,
         status: true,
         lastLoginAt: true,
+        emailVerifiedAt: true,
         // Agrega otros campos que necesites en el frontend
       },
     });
@@ -2289,15 +2748,19 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
     const attachments = [];
     for (const file of uploadedFiles) {
       try {
+        if (!file.buffer) {
+          logger.warn("Archivo sin buffer recibido", { originalName: file.originalname });
+          continue;
+        }
+        const stored = await persistUploadedFile(file, "log-entries");
         const attachment = await prisma.attachment.create({
           data: {
             fileName: file.originalname,
-            url: `http://localhost:${port}/uploads/${file.filename}`,
+            url: stored.url,
             size: file.size,
             type: file.mimetype,
-          }
+          },
         });
-        console.log('Created attachment:', attachment);
         attachments.push(attachment);
       } catch (e) {
         console.error('Error creating attachment:', e);
@@ -3856,14 +4319,54 @@ app.post(
   async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      const pdf = await generateReportPdf({ reportId: id });
+      const baseUrl =
+        process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+
+      const result = await generateReportPdf({
+        prisma,
+        reportId: id,
+        uploadsDir,
+        baseUrl,
+      });
+
+      const updatedReport = await prisma.report.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          signatures: { include: { signer: true } },
+        },
+      });
+
+      if (!updatedReport) {
+        return res
+          .status(404)
+          .json({ error: "Informe no encontrado tras generar el PDF." });
+      }
+
+      const formattedReport = formatReportRecord(updatedReport);
+      const versionHistory = await prisma.report.findMany({
+        where: { number: updatedReport.number },
+        select: {
+          id: true,
+          version: true,
+          status: true,
+          submissionDate: true,
+          createdAt: true,
+        },
+        orderBy: { version: "desc" },
+      });
+      formattedReport.versions = versionHistory.map(mapReportVersionSummary);
+
       res.json({
-        message: "Generación de PDF en desarrollo.",
-        fileName: pdf.fileName,
-        path: pdf.filePath,
+        report: formattedReport,
+        attachment: buildAttachmentResponse(result.attachment),
       });
     } catch (error) {
       console.error("Error al generar PDF del informe:", error);
+      if (error instanceof Error && error.message === "Informe no encontrado.") {
+        return res.status(404).json({ error: error.message });
+      }
       res.status(500).json({ error: "No se pudo generar el PDF." });
     }
   }
