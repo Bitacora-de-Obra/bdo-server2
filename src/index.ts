@@ -861,52 +861,217 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
   }
 
   try {
-    // --- PASO 3.1: OBTENER CONTEXTO DE LA BASE DE DATOS ---
-    // (Esta parte es idéntica a la que ya teníamos)
-    const ultimaAnotacion = await prisma.logEntry.findFirst({
-      orderBy: { createdAt: "desc" },
-      include: { author: { select: { fullName: true } } },
-    });
+    const [project, contractModifications, ultimaAnotacion] = await Promise.all([
+      prisma.project.findFirst({
+        include: { keyPersonnel: true },
+      }),
+      prisma.contractModification.findMany({
+        orderBy: { date: "desc" },
+      }),
+      prisma.logEntry.findFirst({
+        orderBy: { createdAt: "desc" },
+        include: { author: { select: { fullName: true } } },
+      }),
+    ]);
 
-    let contexto = "No hay datos adicionales en la base de datos.";
-    if (ultimaAnotacion) {
-      contexto = `
-        Aquí tienes la última anotación registrada en la bitácora:
-        - Título: ${ultimaAnotacion.title}
-        - Descripción: ${ultimaAnotacion.description}
-        - Autor: ${ultimaAnotacion.author?.fullName || 'No especificado'}
-        - Fecha: ${ultimaAnotacion.createdAt.toISOString()}
-        - Tipo: ${ultimaAnotacion.type}
-        - Estado: ${ultimaAnotacion.status}
-      `;
+    const formatCurrency = (value?: number | null) => {
+      if (value === null || value === undefined || Number.isNaN(value)) {
+        return "N/D";
+      }
+      return new Intl.NumberFormat("es-CO", {
+        style: "currency",
+        currency: "COP",
+        maximumFractionDigits: 0,
+      }).format(value);
+    };
+
+    const formatDate = (dateLike?: Date | string | null) => {
+      if (!dateLike) {
+        return "N/D";
+      }
+      const date = dateLike instanceof Date ? dateLike : new Date(dateLike);
+      if (Number.isNaN(date.getTime())) {
+        return "N/D";
+      }
+      return date.toLocaleDateString("es-CO", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+    };
+
+    const contextoSecciones: string[] = [];
+
+    if (project) {
+      const startDate = project.startDate ? new Date(project.startDate) : null;
+      const initialEndDate = project.initialEndDate
+        ? new Date(project.initialEndDate)
+        : null;
+
+      const totalAdditionsValue = contractModifications
+        .filter((mod) => mod.type === "ADDITION" && mod.value)
+        .reduce((sum, mod) => sum + (mod.value || 0), 0);
+
+      const totalExtensionsDays = contractModifications
+        .filter((mod) => mod.type === "TIME_EXTENSION" && mod.days)
+        .reduce((sum, mod) => sum + (mod.days || 0), 0);
+
+      let initialDurationDays: number | null = null;
+      if (startDate && initialEndDate) {
+        initialDurationDays = Math.ceil(
+          (initialEndDate.getTime() - startDate.getTime()) /
+            (1000 * 60 * 60 * 24)
+        );
+      }
+
+      let currentEndDate: Date | null = initialEndDate
+        ? new Date(initialEndDate)
+        : null;
+      if (currentEndDate) {
+        currentEndDate.setDate(currentEndDate.getDate() + totalExtensionsDays);
+      }
+
+      const projectSummary: string[] = [
+        `Nombre: ${project.name}`,
+        `Contrato: ${project.contractId}`,
+        `Objeto: ${project.object}`,
+        `Contratista: ${project.contractorName}`,
+        `Interventoría: ${project.supervisorName}`,
+        `Valor inicial: ${formatCurrency(project.initialValue)}`,
+        `Valor de adiciones: ${formatCurrency(totalAdditionsValue)}`,
+        `Valor total vigente: ${formatCurrency(
+          project.initialValue + totalAdditionsValue
+        )}`,
+        `Fecha de inicio: ${formatDate(startDate)}`,
+      ];
+
+      if (initialEndDate) {
+        projectSummary.push(
+          `Fecha de finalización contractual original: ${formatDate(
+            initialEndDate
+          )}`
+        );
+      }
+
+      if (currentEndDate) {
+        projectSummary.push(
+          `Fecha de finalización vigente: ${formatDate(currentEndDate)}`
+        );
+      }
+
+      if (initialDurationDays !== null) {
+        projectSummary.push(`Plazo inicial: ${initialDurationDays} días`);
+        projectSummary.push(
+          `Plazo total vigente: ${
+            initialDurationDays + totalExtensionsDays
+          } días`
+        );
+      }
+
+      if (totalExtensionsDays) {
+        projectSummary.push(
+          `Días adicionales por prórrogas: ${totalExtensionsDays}`
+        );
+      }
+
+      if (project.keyPersonnel?.length) {
+        const highlightedPersonnel = project.keyPersonnel
+          .slice(0, 5)
+          .map(
+            (person) =>
+              `${person.role} (${person.company}): ${person.name} | Correo: ${
+                person.email
+              } | Teléfono: ${person.phone || "N/D"}`
+          )
+          .join("\n- ");
+        projectSummary.push(
+          `Personal clave relevante:\n- ${highlightedPersonnel}${
+            project.keyPersonnel.length > 5
+              ? "\n- ... (ver más en la plataforma)"
+              : ""
+          }`
+        );
+      }
+
+      contextoSecciones.push(
+        `Resumen del proyecto:\n${projectSummary.join("\n")}`
+      );
+
+      if (contractModifications.length) {
+        const modificationsSummary = contractModifications
+          .slice(0, 5)
+          .map((mod) => {
+            const partes: string[] = [
+              `${mod.number} - ${
+                modificationTypeReverseMap[mod.type] || mod.type
+              }`,
+            ];
+            partes.push(`Fecha: ${formatDate(mod.date)}`);
+            if (mod.value !== null && mod.value !== undefined) {
+              partes.push(`Valor: ${formatCurrency(mod.value)}`);
+            }
+            if (mod.days !== null && mod.days !== undefined) {
+              partes.push(`Días: ${mod.days}`);
+            }
+            return `• ${partes.join(" | ")}`;
+          })
+          .join("\n");
+        contextoSecciones.push(
+          `Modificaciones contractuales recientes (máx. 5):\n${modificationsSummary}`
+        );
+      }
     }
 
-    // --- PASO 3.2: LLAMAR A LA API DE OPENAI ---
-const completion = await openai.chat.completions.create({
+    if (ultimaAnotacion) {
+      const ultimaAnotacionResumen = [
+        `Título: ${ultimaAnotacion.title}`,
+        `Descripción: ${ultimaAnotacion.description}`,
+        `Autor: ${ultimaAnotacion.author?.fullName || "No especificado"}`,
+        `Fecha: ${formatDate(ultimaAnotacion.createdAt)}`,
+        `Tipo: ${
+          entryTypeReverseMap[ultimaAnotacion.type] || ultimaAnotacion.type
+        }`,
+        `Estado: ${
+          entryStatusReverseMap[ultimaAnotacion.status] || ultimaAnotacion.status
+        }`,
+      ].join("\n");
+
+      contextoSecciones.push(
+        `Última anotación registrada en la bitácora:\n${ultimaAnotacionResumen}`
+      );
+    }
+
+    const contexto =
+      contextoSecciones.join("\n\n") ||
+      "No se encontró información contextual relevante en la base de datos.";
+
+    const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
+      temperature: 0.2,
       messages: [
         {
           role: "system",
-          content: `Eres un asistente de ayuda de Bitácora de Obra. Responde la pregunta del usuario basándote en el contexto que te proporciono. Sé breve y amigable.`
+          content:
+            "Eres el asistente virtual de la Bitácora de Obra. Usa únicamente la información del contexto proporcionado. Si los datos no están en el contexto, indica con claridad que no cuentas con esa información. Responde siempre en español y en un máximo de 4 frases.",
         },
         {
           role: "user",
-          content: `
-            Contexto de la base de datos:
-            ${contexto}
+          content: `Contexto disponible:
+${contexto}
 
-            ---
+---
 
-            Mi pregunta es:
-            ${query}
-          `
-        }
-      ]
-    })
+Pregunta del usuario:
+${query}`,
+        },
+      ],
+    });
 
-    const botResponse = completion.choices[0].message.content;
+    const botResponse =
+      completion.choices?.[0]?.message?.content?.trim() ||
+      "No pude generar una respuesta.";
 
-    res.json({ response: botResponse || "No pude generar una respuesta." });
+    res.json({ response: botResponse });
 
   } catch (error: any) {
     console.error("Error al contactar la API de OpenAI:", error);
