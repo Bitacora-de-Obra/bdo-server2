@@ -1,5 +1,6 @@
 import express, { CookieOptions, NextFunction, Request, Response } from "express";
 import cors from "cors";
+import OpenAI from 'openai';
 import cookieParser from "cookie-parser";
 import fs from "fs";
 import {
@@ -61,6 +62,12 @@ const app = express();
 const prisma = new PrismaClient();
 const port = 4001;
 const isProduction = process.env.NODE_ENV === "production";
+
+// --- INICIO: Configuración de IA (Chatbot) ---
+// --- INICIO: Configuración de IA (OpenAI) ---
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 if (process.env.TRUST_PROXY === "true" || isProduction) {
   app.set("trust proxy", 1);
@@ -839,6 +846,86 @@ app.get("/api/ping", (req, res) => {
   console.log("!!! PING RECIBIDO !!!");
   res.json({ message: "pong" });
 });
+
+// --- INICIO: Endpoint del Chatbot ---
+// --- INICIO: Endpoint del Chatbot (Versión OpenAI) ---
+app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => {
+  const { query } = req.body;
+  const userId = req.user?.userId;
+
+  if (!query) {
+    return res.status(400).json({ error: "No se proporcionó una consulta (query)." });
+  }
+  if (!userId) {
+    return res.status(401).json({ error: "Usuario no autenticado." });
+  }
+
+  try {
+    // --- PASO 3.1: OBTENER CONTEXTO DE LA BASE DE DATOS ---
+    // (Esta parte es idéntica a la que ya teníamos)
+    const ultimaAnotacion = await prisma.logEntry.findFirst({
+      orderBy: { createdAt: "desc" },
+      include: { author: { select: { fullName: true } } },
+    });
+
+    let contexto = "No hay datos adicionales en la base de datos.";
+    if (ultimaAnotacion) {
+      contexto = `
+        Aquí tienes la última anotación registrada en la bitácora:
+        - Título: ${ultimaAnotacion.title}
+        - Descripción: ${ultimaAnotacion.description}
+        - Autor: ${ultimaAnotacion.author?.fullName || 'No especificado'}
+        - Fecha: ${ultimaAnotacion.createdAt.toISOString()}
+        - Tipo: ${ultimaAnotacion.type}
+        - Estado: ${ultimaAnotacion.status}
+      `;
+    }
+
+    // --- PASO 3.2: LLAMAR A LA API DE OPENAI ---
+const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "system",
+          content: `Eres un asistente de ayuda de Bitácora de Obra. Responde la pregunta del usuario basándote en el contexto que te proporciono. Sé breve y amigable.`
+        },
+        {
+          role: "user",
+          content: `
+            Contexto de la base de datos:
+            ${contexto}
+
+            ---
+
+            Mi pregunta es:
+            ${query}
+          `
+        }
+      ]
+    })
+
+    const botResponse = completion.choices[0].message.content;
+
+    res.json({ response: botResponse || "No pude generar una respuesta." });
+
+  } catch (error: any) {
+    console.error("Error al contactar la API de OpenAI:", error);
+    // Errores comunes de OpenAI
+    if (error.response) {
+      console.error("Detalle del error:", error.response.data);
+      if (error.response.status === 401) {
+        return res.status(500).json({ error: "La clave de API de OpenAI no es válida. Revisa tu .env." });
+      }
+      if (error.response.status === 429) {
+        return res.status(500).json({ error: "Límite de cuota de OpenAI excedido. Revisa tu facturación." });
+      }
+    }
+    res.status(500).json({ error: "Error al procesar la respuesta del chatbot." });
+  }
+});
+// --- FIN: Endpoint del Chatbot ---
+// --- FIN: Endpoint del Chatbot ---
+
 
 // --- Endpoint para subir un único archivo ---
 app.post("/api/upload", async (req, res) => {
