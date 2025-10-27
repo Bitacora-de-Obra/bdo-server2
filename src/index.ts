@@ -868,12 +868,21 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
       contractItems,
       workActas,
       projectTasks,
+      communications,
+      actas,
+      costActas,
+      reports,
+      drawings,
+      controlPoints,
+      pendingCommitments,
+      recentLogEntries,
     ] = await Promise.all([
       prisma.project.findFirst({
         include: { keyPersonnel: true },
       }),
       prisma.contractModification.findMany({
         orderBy: { date: "desc" },
+        take: 10,
       }),
       prisma.logEntry.findFirst({
         orderBy: { createdAt: "desc" },
@@ -908,11 +917,83 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
           },
         },
         orderBy: { date: "desc" },
-        take: 5,
+        take: 10,
       }),
       prisma.projectTask.findMany({
         orderBy: { startDate: "asc" },
+        take: 20,
+      }),
+      prisma.communication.findMany({
+        orderBy: { sentDate: "desc" },
         take: 10,
+      }),
+      prisma.acta.findMany({
+        orderBy: { date: "desc" },
+        take: 10,
+        include: {
+          commitments: {
+            include: {
+              responsible: {
+                select: { fullName: true, projectRole: true },
+              },
+            },
+          },
+        },
+      }),
+      prisma.costActa.findMany({
+        orderBy: { submissionDate: "desc" },
+        take: 10,
+      }),
+      prisma.report.findMany({
+        orderBy: { submissionDate: "desc" },
+        take: 10,
+        include: {
+          author: {
+            select: { fullName: true, projectRole: true },
+          },
+        },
+      }),
+      prisma.drawing.findMany({
+        orderBy: { code: "asc" },
+        take: 20,
+        include: {
+          versions: {
+            orderBy: { versionNumber: "desc" },
+            take: 1,
+          },
+        },
+      }),
+      prisma.controlPoint.findMany({
+        include: {
+          photos: {
+            orderBy: { date: "desc" },
+            take: 3,
+          },
+        },
+        take: 10,
+      }),
+      prisma.commitment.findMany({
+        where: {
+          status: "PENDING",
+          dueDate: {
+            gte: new Date(),
+          },
+        },
+        include: {
+          responsible: {
+            select: { fullName: true, projectRole: true },
+          },
+        },
+        orderBy: { dueDate: "asc" },
+        take: 10,
+      }),
+      prisma.logEntry.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: {
+          author: { select: { fullName: true, projectRole: true } },
+          assignees: { select: { fullName: true, projectRole: true } },
+        },
       }),
     ]);
 
@@ -1242,6 +1323,113 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
       );
     }
 
+    // Add communications context
+    if (communications.length) {
+      const communicationsSummary = communications.map(comm => {
+        const sender = comm.senderEntity || "No especificado";
+        const recipient = comm.recipientEntity || "No especificado";
+        const status = communicationStatusReverseMap[comm.status] || comm.status;
+        return `• Radicado ${comm.radicado}: "${comm.subject}" - De: ${sender} - Para: ${recipient} - Estado: ${status} - Fecha: ${formatDate(comm.sentDate)}`;
+      }).join("\n");
+      
+      contextoSecciones.push(
+        `Comunicaciones oficiales recientes:\n${communicationsSummary}`
+      );
+    }
+
+    // Add actas context
+    if (actas.length) {
+      const actasSummary = actas.map(acta => {
+        const area = actaAreaReverseMap[acta.area] || acta.area;
+        const status = actaStatusReverseMap[acta.status] || acta.status;
+        const commitmentsCount = acta.commitments?.length || 0;
+        return `• ${acta.number}: "${acta.title}" - Área: ${area} - Estado: ${status} - Compromisos: ${commitmentsCount} - Fecha: ${formatDate(acta.date)}`;
+      }).join("\n");
+      
+      contextoSecciones.push(
+        `Actas de comité recientes:\n${actasSummary}`
+      );
+    }
+
+    // Add cost actas context
+    if (costActas.length) {
+      const costActasSummary = costActas.map(acta => {
+        const status = costActaStatusReverseMap[acta.status] || acta.status;
+        return `• ${acta.number}: Período ${acta.period} - Valor: ${formatCurrency(acta.billedAmount)} - Estado: ${status} - Fecha: ${formatDate(acta.submissionDate)}`;
+      }).join("\n");
+      
+      contextoSecciones.push(
+        `Actas de costo recientes:\n${costActasSummary}`
+      );
+    }
+
+    // Add reports context
+    if (reports.length) {
+      const reportsSummary = reports.map(report => {
+        const scope = reportScopeReverseMap[report.reportScope] || report.reportScope;
+        const status = reportStatusReverseMap[report.status] || report.status;
+        return `• ${report.type} ${report.number}: ${scope} - Estado: ${status} - Autor: ${report.author?.fullName} - Fecha: ${formatDate(report.submissionDate)}`;
+      }).join("\n");
+      
+      contextoSecciones.push(
+        `Informes recientes:\n${reportsSummary}`
+      );
+    }
+
+    // Add drawings context
+    if (drawings.length) {
+      const drawingsSummary = drawings.map(drawing => {
+        const discipline = drawingDisciplineMap[drawing.discipline] || drawing.discipline;
+        const status = drawing.status === "VIGENTE" ? "Vigente" : "Obsoleto";
+        const versionsCount = drawing.versions?.length || 0;
+        return `• ${drawing.code}: "${drawing.title}" - Disciplina: ${discipline} - Estado: ${status} - Versiones: ${versionsCount}`;
+      }).join("\n");
+      
+      contextoSecciones.push(
+        `Planos del proyecto:\n${drawingsSummary}`
+      );
+    }
+
+    // Add control points context
+    if (controlPoints.length) {
+      const controlPointsSummary = controlPoints.map(point => {
+        const photosCount = point.photos?.length || 0;
+        return `• ${point.name}: ${point.description} - Ubicación: ${point.location} - Fotos: ${photosCount}`;
+      }).join("\n");
+      
+      contextoSecciones.push(
+        `Puntos de control fotográfico:\n${controlPointsSummary}`
+      );
+    }
+
+    // Add pending commitments context
+    if (pendingCommitments.length) {
+      const commitmentsSummary = pendingCommitments.map(commitment => {
+        const responsible = commitment.responsible?.fullName || "No asignado";
+        const role = commitment.responsible?.projectRole || "";
+        return `• ${commitment.description} - Responsable: ${responsible} (${role}) - Vence: ${formatDate(commitment.dueDate)}`;
+      }).join("\n");
+      
+      contextoSecciones.push(
+        `Compromisos pendientes:\n${commitmentsSummary}`
+      );
+    }
+
+    // Add recent log entries context
+    if (recentLogEntries.length) {
+      const logEntriesSummary = recentLogEntries.map(entry => {
+        const author = entry.author?.fullName || "No especificado";
+        const type = entryTypeReverseMap[entry.type] || entry.type;
+        const status = entryStatusReverseMap[entry.status] || entry.status;
+        const assignees = entry.assignees?.map(a => a.fullName).join(", ") || "Sin asignados";
+        return `• "${entry.title}" - Autor: ${author} - Tipo: ${type} - Estado: ${status} - Asignados: ${assignees} - Fecha: ${formatDate(entry.createdAt)}`;
+      }).join("\n");
+      
+      contextoSecciones.push(
+        `Anotaciones recientes en bitácora:\n${logEntriesSummary}`
+      );
+    }
+
     const contexto =
       contextoSecciones.join("\n\n") ||
       "No se encontró información contextual relevante en la base de datos.";
@@ -1253,7 +1441,22 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         {
           role: "system",
           content:
-            "Eres el asistente virtual de la Bitácora de Obra. Usa únicamente la información del contexto proporcionado. Si los datos no están en el contexto, indica con claridad que no cuentas con esa información. Responde siempre en español y en un máximo de 4 frases.",
+            "Eres un asistente virtual especializado en gestión de proyectos de construcción y bitácoras de obra. Tu conocimiento incluye:\n\n" +
+            "1. GESTIÓN DE PROYECTOS: Cronogramas, avances, modificaciones contractuales, actas de obra, control de costos\n" +
+            "2. COMUNICACIONES: Correspondencia oficial, radicados, seguimiento de comunicaciones\n" +
+            "3. DOCUMENTACIÓN: Planos, informes, actas de comité, reportes semanales y mensuales\n" +
+            "4. CONTROL DE CALIDAD: Puntos de control, registro fotográfico, anotaciones de bitácora\n" +
+            "5. COMPROMISOS: Seguimiento de compromisos, responsables, fechas de vencimiento\n" +
+            "6. PERSONAL: Roles del proyecto, contactos, responsabilidades\n\n" +
+            "INSTRUCCIONES:\n" +
+            "- Usa ÚNICAMENTE la información del contexto proporcionado\n" +
+            "- Si no tienes la información específica, indica claramente que no está disponible en el contexto\n" +
+            "- Proporciona respuestas precisas y útiles basadas en los datos reales del proyecto\n" +
+            "- Responde en español colombiano, usando terminología técnica apropiada\n" +
+            "- Mantén las respuestas concisas pero informativas (máximo 5 frases)\n" +
+            "- Si se pregunta sobre procedimientos o procesos, explica basándote en la información disponible\n" +
+            "- Para cálculos o análisis, usa los datos numéricos del contexto\n" +
+            "- Si hay múltiples elementos similares, menciona los más relevantes o recientes",
         },
         {
           role: "user",
