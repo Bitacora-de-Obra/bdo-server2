@@ -6,6 +6,8 @@
   "scripts": {
     "test": "jest",
     "dev": "ts-node-dev src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
     "seed": "ts-node prisma/seed.ts"
   },
   "keywords": [],

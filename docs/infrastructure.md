@@ -17,16 +17,18 @@
 ## Storage de adjuntos
 
 - Abstracción en `src/storage/index.ts` permite elegir entre almacenamiento local (`UPLOADS_DIR`) y S3.
-- Para usar S3 configurer variables `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`.
-- Cuando la dependencia `@aws-sdk/client-s3` esté disponible, `s3StorageProvider` se encargará de subir/borrar archivos.
+- Para usar S3 configura **todas** las variables (`S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`). Si falta `S3_BUCKET`, el servicio vuelve automáticamente al driver local.
+- Define `STORAGE_PUBLIC_URL`/`SERVER_PUBLIC_URL` con el dominio público que servirá los adjuntos (CDN, bucket web, etc.) y aplica las políticas CORS/Headers necesarias en ese frontal (por ejemplo, limitar `Access-Control-Allow-Origin` a tus dominios).
+- Cuando la dependencia `@aws-sdk/client-s3` esté disponible, `s3StorageProvider` se encargará de subir/borrar archivos garantizando claves saneadas.
 
 ## Despliegue (scripts sugeridos)
 
 - Añadir scripts en package.json:
   - `"start": "node dist/index.js"` tras compilar con `tsc`.
   - `"build": "tsc"`.
-- Preparar Dockerfile (pendiente) con multi-stage build: compilar TypeScript y copiar artefactos a imagen Node.js runtime.
-- CI (GitHub Actions) ya ejecuta lint/build/tests; añadir job de deployment cuando haya infra.
+- Dockerfile multi-stage disponible en `bdo-server/Dockerfile` (compila TypeScript y conserva artefactos mínimos).
+- Entrypoint `scripts/entrypoint.sh` ejecuta `prisma migrate deploy` y opcionalmente `prisma db seed` (`PRISMA_RUN_SEED=true`) antes de arrancar el proceso.
+- CI/CD: usa `.github/workflows/deploy.yml` como base. La pipeline construye el frontend (`npm run build` en `bdo-appd`), compila backend (`npm run build` tras `npm ci` y `prisma generate`), construye/push de imagen Docker (configurable con `REGISTRY`, `IMAGE_NAME`), ejecuta `prisma migrate deploy` / `prisma db seed` y permite un paso final (`DEPLOY_COMMAND`) para orquestar el despliegue.
 
 ## Backups de Base de Datos
 

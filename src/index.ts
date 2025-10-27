@@ -1049,8 +1049,11 @@ app.post("/api/auth/logout", (req, res) => {
 
 app.post("/api/auth/login", async (req, res) => {
   try {
-    console.log('Login request received:', req.body);
     const { email, password } = req.body;
+    console.log('Login request received:', {
+      email,
+      hasPassword: Boolean(password),
+    });
 
     if (!email || !password) {
       return res.status(400).json({ error: "Email y contraseña son requeridos." });

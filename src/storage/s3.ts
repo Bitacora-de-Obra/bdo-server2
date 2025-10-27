@@ -1,7 +1,18 @@
+import path from 'path';
+import type { StorageProvider } from './index';
+
 const bucket = process.env.S3_BUCKET || '';
 const region = process.env.S3_REGION || 'us-east-1';
 const endpoint = process.env.S3_ENDPOINT;
 const customPublicUrl = process.env.STORAGE_PUBLIC_URL;
+
+const normalizeKey = (value: string) => {
+  const key = path.posix.normalize(value).replace(/^\/+/g, '');
+  if (!key || key.startsWith('..')) {
+    throw new Error('Clave inválida para almacenamiento S3.');
+  }
+  return key;
+};
 
 const getClient = () => {
   if (!bucket) {
@@ -33,27 +44,25 @@ const getClient = () => {
   return { client, PutObjectCommand, DeleteObjectCommand };
 };
 
-export const s3StorageProvider = {
+export const s3StorageProvider: StorageProvider = {
   async save({ content, path: filePath }: { content: Buffer; path: string }) {
+    const key = normalizeKey(filePath);
     const { client, PutObjectCommand } = getClient();
 
     await client.send(
       new PutObjectCommand({
         Bucket: bucket,
-        Key: filePath,
+        Key: key,
         Body: content,
       })
     );
 
-    return filePath;
+    return key;
   },
 
   async remove(filePath: string) {
+    const key = normalizeKey(filePath);
     const { client, DeleteObjectCommand } = getClient();
-
-    const key = filePath.startsWith(`${bucket}/`)
-      ? filePath.slice(bucket.length + 1)
-      : filePath;
 
     await client.send(
       new DeleteObjectCommand({
@@ -63,9 +72,7 @@ export const s3StorageProvider = {
     );
   },
   getPublicUrl(filePath: string) {
-    const key = filePath.startsWith(`${bucket}/`)
-      ? filePath.slice(bucket.length + 1)
-      : filePath;
+    const key = normalizeKey(filePath);
 
     if (customPublicUrl) {
       return `${customPublicUrl.replace(/\/$/, '')}/${key}`;
