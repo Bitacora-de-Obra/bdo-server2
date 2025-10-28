@@ -44,6 +44,11 @@ export const localStorageProvider: StorageProvider = {
     await fs.writeFile(absolutePath, content);
     return key;
   },
+  async read(filePath: string) {
+    const key = normalizeKey(filePath);
+    const absolutePath = toAbsolutePath(key);
+    return fs.readFile(absolutePath);
+  },
   async remove(filePath: string) {
     const key = normalizeKey(filePath);
     const absolutePath = toAbsolutePath(key);

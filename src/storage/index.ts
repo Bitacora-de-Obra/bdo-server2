@@ -6,6 +6,7 @@ type StorageDriver = 'local' | 's3';
 
 export interface StorageProvider {
   save: (options: { path: string; content: Buffer }) => Promise<string>; // returns storage key
+  read: (path: string) => Promise<Buffer>;
   remove: (path: string) => Promise<void>;
   getPublicUrl: (path: string) => string;
 }

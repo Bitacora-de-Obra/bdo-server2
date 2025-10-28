@@ -32,6 +32,7 @@
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.13",
     "openai": "^6.7.0",
+    "pdf-lib": "^1.17.1",
     "pdfkit": "^0.15.0",
     "swagger-ui-express": "^5.0.0",
     "winston": "^3.13.0",

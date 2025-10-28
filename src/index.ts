@@ -30,9 +30,11 @@ import { authMiddleware, refreshAuthMiddleware, createAccessToken, createRefresh
 import { generateWeeklyReportExcel } from "./services/reports/weeklyExcelGenerator";
 import { generateReportPdf } from "./services/reports/pdfExport";
 import { generateLogEntryPdf } from "./services/logEntries/pdfExport";
+import { applySignatureToPdf } from "./services/documents/pdfSigner";
 import { validateCronogramaXml, CronogramaValidationError } from "./utils/xmlValidator";
 import { logger } from "./logger";
 import fsPromises from "fs/promises";
+import { sha256 } from "./utils/hash";
 
 // Importamos los mapas desde el nuevo archivo de utilidades
 import {
@@ -538,6 +540,44 @@ const buildAttachmentResponse = (attachment: any) => ({
   downloadUrl: `http://localhost:${port}/api/attachments/${attachment.id}/download`,
 });
 
+const resolveStorageKeyFromUrl = (fileUrl?: string | null): string | null => {
+  if (!fileUrl) return null;
+  try {
+    const parsed = new URL(fileUrl);
+    const pathname = parsed.pathname.replace(/^\/+/, "");
+    if (pathname.startsWith("uploads/")) {
+      return pathname.replace(/^uploads\//, "");
+    }
+  } catch (error) {
+    // Not a valid absolute URL, fall back to relative handling
+    const sanitized = fileUrl.replace(/^\/+/, "");
+    if (sanitized.startsWith("uploads/")) {
+      return sanitized.replace(/^uploads\//, "");
+    }
+  }
+  if (fileUrl.startsWith("uploads/")) {
+    return fileUrl.replace(/^uploads\//, "");
+  }
+  if (fileUrl.startsWith("/uploads/")) {
+    return fileUrl.replace(/^\/uploads\//, "");
+  }
+  return null;
+};
+
+const loadAttachmentBuffer = async (attachment: any): Promise<Buffer> => {
+  const storage = getStorage();
+  const storagePath = attachment.storagePath || resolveStorageKeyFromUrl(attachment.url);
+  if (!storagePath) {
+    throw new Error("No se pudo determinar la ubicación del archivo adjunto.");
+  }
+  return storage.read(storagePath);
+};
+
+const loadUserSignatureBuffer = async (userSignature: any): Promise<Buffer> => {
+  const storage = getStorage();
+  return storage.read(userSignature.storagePath);
+};
+
 const mapUserBasic = (user: any) => {
   if (!user) {
     return null;
@@ -552,17 +592,75 @@ const mapUserBasic = (user: any) => {
   };
 };
 
-const formatLogEntry = (entry: any) => {
-  const requiredSignersRaw =
-    Array.isArray(entry.requiredSignatories) && entry.requiredSignatories.length
-      ? entry.requiredSignatories
-      : entry.author
-      ? [entry.author]
-      : [];
+const extractUserIds = (input: unknown): string[] => {
+  if (!input) return [];
+  let rawValue = input;
 
-  const requiredSigners = requiredSignersRaw
-    .map(mapUserBasic)
-    .filter(Boolean);
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    if (!trimmed) return [];
+    try {
+      rawValue = JSON.parse(trimmed);
+    } catch (error) {
+      return [trimmed];
+    }
+  }
+
+  const items = Array.isArray(rawValue) ? rawValue : [rawValue];
+  const ids = new Set<string>();
+
+  items.forEach((item) => {
+    if (!item) return;
+    if (typeof item === "string") {
+      ids.add(item);
+      return;
+    }
+    if (typeof item === "object" && "id" in item && (item as any).id) {
+      ids.add((item as any).id);
+    }
+  });
+
+  return Array.from(ids);
+};
+
+const formatLogEntry = (entry: any) => {
+  const signatureTasksRaw: any[] = entry.signatureTasks || [];
+  const formattedSignatureTasks: Array<{
+    id: string;
+    status: string;
+    assignedAt: string | null;
+    signedAt?: string | null;
+    signer: ReturnType<typeof mapUserBasic> | null;
+  }> = signatureTasksRaw.map((task: any) => ({
+    id: task.id,
+    status: task.status,
+    assignedAt:
+      task.assignedAt instanceof Date
+        ? task.assignedAt.toISOString()
+        : task.assignedAt,
+    signedAt:
+      task.signedAt instanceof Date
+        ? task.signedAt.toISOString()
+        : task.signedAt,
+    signer: mapUserBasic(task.signer),
+  }));
+
+  const totalSignatureTasks = formattedSignatureTasks.length;
+  const signedSignatureTasks = formattedSignatureTasks.filter(
+    (task) => task.status === "SIGNED"
+  );
+  const pendingSignatureTasks = formattedSignatureTasks.filter(
+    (task) => task.status !== "SIGNED"
+  );
+
+  const requiredSigners =
+    formattedSignatureTasks.length > 0
+      ? formattedSignatureTasks
+          .map((task) => task.signer)
+          .filter((signer): signer is ReturnType<typeof mapUserBasic> => Boolean(signer))
+      : entry.author
+      ? [mapUserBasic(entry.author)].filter(Boolean)
+      : [];
 
   return {
     ...entry,
@@ -594,6 +692,19 @@ const formatLogEntry = (entry: any) => {
     })),
     assignees: (entry.assignees || []).map(mapUserBasic).filter(Boolean),
     requiredSignatories: requiredSigners,
+    signatureTasks: formattedSignatureTasks,
+    signatureSummary: {
+      total: totalSignatureTasks,
+      signed: signedSignatureTasks.length,
+      pending: pendingSignatureTasks.length,
+      completed:
+        totalSignatureTasks > 0 && pendingSignatureTasks.length === 0,
+    },
+    pendingSignatureSignatories: pendingSignatureTasks
+      .map((task) => task.signer)
+      .filter((signer): signer is ReturnType<typeof mapUserBasic> =>
+        Boolean(signer)
+      ),
     history: (entry.history || []).map((change: any) => ({
       id: change.id,
       fieldName: change.fieldName,
@@ -843,6 +954,25 @@ const multerConfig = {
 };
 
 const upload = multer(multerConfig);
+const signatureUpload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (_req: express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    const allowedMimes = ["image/png", "image/jpeg", "image/jpg", "application/pdf"];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(
+        new Error(
+          "Tipo de archivo no permitido. Solo se permiten firmas en PNG, JPG o PDF."
+        )
+      );
+    }
+  },
+  limits: {
+    fileSize: 2 * 1024 * 1024,
+    files: 1,
+  },
+});
 
 // Servir archivos estáticos
 app.use("/uploads", express.static(uploadsDir));
@@ -900,6 +1030,232 @@ app.get("/api/attachments/:id/download", async (req, res) => {
   } catch (error) {
     console.error('Error al descargar adjunto:', error);
     res.status(500).json({ error: 'No se pudo descargar el adjunto.' });
+  }
+});
+
+app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Usuario no autenticado." });
+    }
+    const consentRaw = req.body?.consent;
+    const consent =
+      consentRaw === true ||
+      consentRaw === "true" ||
+      consentRaw === 1 ||
+      consentRaw === "1";
+    if (!consent) {
+      return res.status(400).json({ error: "Debes aceptar el consentimiento para firmar el documento." });
+    }
+
+    const consentStatementRaw =
+      typeof req.body?.consentStatement === "string"
+        ? req.body.consentStatement.trim()
+        : "";
+    const consentStatement =
+      consentStatementRaw.length > 0
+        ? consentStatementRaw
+        : "El usuario consiente el uso de su firma manuscrita digital para este documento.";
+
+    const page = req.body?.page !== undefined ? Number(req.body.page) : undefined;
+    const x = req.body?.x !== undefined ? Number(req.body.x) : undefined;
+    const y = req.body?.y !== undefined ? Number(req.body.y) : undefined;
+    const width = req.body?.width !== undefined ? Number(req.body.width) : undefined;
+    const height = req.body?.height !== undefined ? Number(req.body.height) : undefined;
+    const baselineRaw = req.body?.baseline;
+    const baseline =
+      baselineRaw === true ||
+      baselineRaw === "true" ||
+      baselineRaw === 1 ||
+      baselineRaw === "1";
+    const baselineRatio =
+      req.body?.baselineRatio !== undefined && req.body?.baselineRatio !== null
+        ? Number(req.body.baselineRatio)
+        : undefined;
+
+    if (
+      (page !== undefined && Number.isNaN(page)) ||
+      (x !== undefined && Number.isNaN(x)) ||
+      (y !== undefined && Number.isNaN(y)) ||
+      (width !== undefined && Number.isNaN(width)) ||
+      (height !== undefined && Number.isNaN(height)) ||
+      (baselineRatio !== undefined && Number.isNaN(baselineRatio))
+    ) {
+      return res.status(400).json({ error: "Las coordenadas de firma no son válidas." });
+    }
+
+    const signature = await prisma.userSignature.findUnique({
+      where: { userId },
+    });
+
+    if (!signature) {
+      return res.status(400).json({
+        error: "Debes registrar tu firma manuscrita antes de firmar documentos.",
+      });
+    }
+
+    const attachment = await prisma.attachment.findUnique({ where: { id } });
+    if (!attachment) {
+      return res.status(404).json({ error: "Adjunto no encontrado." });
+    }
+    if (attachment.type !== "application/pdf") {
+      return res.status(400).json({ error: "Solo se pueden firmar archivos PDF." });
+    }
+
+    const [originalBuffer, signatureBuffer] = await Promise.all([
+      loadAttachmentBuffer(attachment),
+      loadUserSignatureBuffer(signature),
+    ]);
+
+    const normalizedBaselineRatio =
+      baselineRatio !== undefined
+        ? Math.min(Math.max(baselineRatio, 0), 1)
+        : undefined;
+
+    const signedBuffer = await applySignatureToPdf({
+      originalPdf: originalBuffer,
+      signature: {
+        buffer: signatureBuffer,
+        mimeType: signature.mimeType,
+      },
+      position: {
+        page,
+        x,
+        y,
+        width,
+        height,
+        baseline,
+        baselineRatio: normalizedBaselineRatio,
+      },
+    });
+
+    const storage = getStorage();
+    const parsedFileName = path.parse(attachment.fileName || "documento.pdf");
+    const signedFileName = `${parsedFileName.name}-firmado-${Date.now()}.pdf`;
+    const signedKey = createStorageKey(
+      `signed-documents/${userId}`,
+      signedFileName
+    );
+    await storage.save({ path: signedKey, content: signedBuffer });
+    const signedUrl = storage.getPublicUrl(signedKey);
+
+    const signedAttachment = await prisma.attachment.create({
+      data: {
+        fileName: signedFileName,
+        url: signedUrl,
+        storagePath: signedKey,
+        size: signedBuffer.length,
+        type: "application/pdf",
+        logEntryId: attachment.logEntryId ?? undefined,
+        communicationId: attachment.communicationId ?? undefined,
+        actaId: attachment.actaId ?? undefined,
+        costActaId: attachment.costActaId ?? undefined,
+        reportId: attachment.reportId ?? undefined,
+        workActaId: attachment.workActaId ?? undefined,
+        weeklyReportId: attachment.weeklyReportId ?? undefined,
+        commentId: attachment.commentId ?? undefined,
+      },
+    });
+
+    let documentType = "attachment";
+    let documentId: string = attachment.id;
+    if (attachment.logEntryId) {
+      documentType = "logEntry";
+      documentId = attachment.logEntryId;
+    } else if (attachment.reportId) {
+      documentType = "report";
+      documentId = attachment.reportId;
+    } else if (attachment.actaId) {
+      documentType = "acta";
+      documentId = attachment.actaId;
+    } else if (attachment.communicationId) {
+      documentType = "communication";
+      documentId = attachment.communicationId;
+    } else if (attachment.workActaId) {
+      documentType = "workActa";
+      documentId = attachment.workActaId;
+    } else if (attachment.weeklyReportId) {
+      documentType = "weeklyReport";
+      documentId = attachment.weeklyReportId;
+    } else if (attachment.costActaId) {
+      documentType = "costActa";
+      documentId = attachment.costActaId;
+    }
+
+    const signatureLog = await prisma.documentSignatureLog.create({
+      data: {
+        signerId: userId,
+        documentType,
+        documentId,
+        originalAttachmentId: attachment.id,
+        signedAttachmentId: signedAttachment.id,
+        originalHash: sha256(originalBuffer),
+        signedHash: sha256(signedBuffer),
+        ipAddress: req.ip,
+        consentStatement,
+      },
+    });
+
+    const responsePayload: any = {
+      originalAttachmentId: attachment.id,
+      signedAttachment: buildAttachmentResponse(signedAttachment),
+      auditLogId: signatureLog.id,
+    };
+
+    if (attachment.logEntryId) {
+      await prisma.logEntrySignatureTask.updateMany({
+        where: {
+          logEntryId: attachment.logEntryId,
+          signerId: userId,
+        },
+        data: {
+          status: 'SIGNED',
+          signedAt: new Date(),
+        },
+      });
+
+      const updatedTasks = await prisma.logEntrySignatureTask.findMany({
+        where: { logEntryId: attachment.logEntryId },
+        select: { status: true },
+      });
+
+      if (
+        updatedTasks.length > 0 &&
+        updatedTasks.every((task) => task.status === 'SIGNED')
+      ) {
+        await prisma.logEntry.update({
+          where: { id: attachment.logEntryId },
+          data: { status: 'SIGNED' },
+        });
+      }
+
+      const refreshedEntry = await prisma.logEntry.findUnique({
+        where: { id: attachment.logEntryId },
+        include: {
+          author: true,
+          attachments: true,
+          comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
+          signatures: { include: { signer: true } },
+          assignees: true,
+          signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
+          history: { include: { user: true }, orderBy: { timestamp: "desc" } },
+        },
+      });
+      if (refreshedEntry) {
+        responsePayload.entry = formatLogEntry(refreshedEntry);
+      }
+    }
+
+    res.status(201).json(responsePayload);
+  } catch (error) {
+    console.error("Error al firmar el documento PDF:", error);
+    if (error instanceof Error) {
+      res.status(400).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: "No se pudo firmar el documento solicitado." });
+    }
   }
 });
 
@@ -1598,6 +1954,7 @@ app.post("/api/upload", async (req, res) => {
       data: {
         fileName: req.file.originalname,
         url: stored.url,
+        storagePath: stored.key,
         size: req.file.size,
         type: req.file.mimetype,
       },
@@ -2232,6 +2589,141 @@ app.get("/api/users", authMiddleware, async (_req: AuthRequest, res) => {
   } catch (error) {
     console.error("Error al obtener usuarios (autenticado):", error);
     res.status(500).json({ error: "Error al obtener usuarios." });
+  }
+});
+
+app.get("/api/users/me/signature", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Usuario no autenticado." });
+    }
+
+    const signature = await prisma.userSignature.findUnique({
+      where: { userId },
+    });
+    if (!signature) {
+      return res.json({ signature: null });
+    }
+    res.json({
+      signature: {
+        id: signature.id,
+        fileName: signature.fileName,
+        mimeType: signature.mimeType,
+        size: signature.size,
+        url: signature.url,
+        hash: signature.hash,
+        createdAt: signature.createdAt,
+        updatedAt: signature.updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error("Error al obtener la firma del usuario:", error);
+    res.status(500).json({ error: "No se pudo obtener la firma guardada." });
+  }
+});
+
+app.post(
+  "/api/users/me/signature",
+  authMiddleware,
+  signatureUpload.single("signature"),
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const file = req.file;
+      if (!file || !file.buffer) {
+        return res.status(400).json({ error: "No se recibió ningún archivo válido." });
+      }
+
+      const existing = await prisma.userSignature.findUnique({
+        where: { userId },
+      });
+
+      const storage = getStorage();
+      const key = createStorageKey(`user-signatures/${userId}`, file.originalname);
+      await storage.save({ path: key, content: file.buffer });
+      const url = storage.getPublicUrl(key);
+      const hash = sha256(file.buffer);
+
+      let newSignature: any = null;
+      await prisma.$transaction(async (tx) => {
+        if (existing) {
+          await tx.userSignature.delete({ where: { id: existing.id } });
+        }
+        newSignature = await tx.userSignature.create({
+          data: {
+            userId,
+            fileName: file.originalname,
+            mimeType: file.mimetype,
+            size: file.size,
+            storagePath: key,
+            url,
+            hash,
+          },
+        });
+      });
+
+      if (!newSignature) {
+        throw new Error("No se pudo registrar la nueva firma.");
+      }
+
+      if (existing?.storagePath && existing.storagePath !== key) {
+        await storage.remove(existing.storagePath).catch((error) => {
+          console.warn("No se pudo eliminar la firma anterior del almacenamiento.", {
+            error,
+          });
+        });
+      }
+
+      res.status(201).json({
+        signature: {
+          id: newSignature.id,
+          fileName: newSignature.fileName,
+          mimeType: newSignature.mimeType,
+          size: newSignature.size,
+          url: newSignature.url,
+          hash: newSignature.hash,
+          createdAt: newSignature.createdAt,
+          updatedAt: newSignature.updatedAt,
+        },
+      });
+    } catch (error) {
+      console.error("Error al guardar la firma del usuario:", error);
+      res.status(500).json({ error: "No se pudo guardar la firma." });
+    }
+  }
+);
+
+app.delete("/api/users/me/signature", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Usuario no autenticado." });
+    }
+
+    const existing = await prisma.userSignature.findUnique({
+      where: { userId },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "No hay firma registrada para el usuario." });
+    }
+
+    const storage = getStorage();
+    await prisma.userSignature.delete({ where: { id: existing.id } });
+    await storage.remove(existing.storagePath).catch((error) => {
+      console.warn("No se pudo eliminar el archivo de firma del almacenamiento.", {
+        error,
+      });
+    });
+
+    res.status(204).send();
+  } catch (error) {
+    console.error("Error al eliminar la firma del usuario:", error);
+    res.status(500).json({ error: "No se pudo eliminar la firma." });
   }
 });
 
@@ -3445,6 +3937,7 @@ app.get("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
         comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
         signatures: { include: { signer: true } },
         assignees: true,
+        signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
         history: { include: { user: true }, orderBy: { timestamp: "desc" } },
       },
     });
@@ -3474,21 +3967,12 @@ app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
         comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
         signatures: { include: { signer: true } },
         assignees: true,
+        signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
         history: { include: { user: true }, orderBy: { timestamp: "desc" } },
       },
     });
     // Formatear enums antes de enviar
-    const formattedEntries = entries.map((entry) => ({
-      ...entry,
-      type:
-        Object.keys(entryTypeMap).find(
-          (key) => entryTypeMap[key] === entry.type
-        ) || entry.type,
-      status:
-        Object.keys(entryStatusMap).find(
-          (key) => entryStatusMap[key] === entry.status
-        ) || entry.status,
-    }));
+    const formattedEntries = entries.map(formatLogEntry);
     res.json(formattedEntries);
   } catch (error) {
     console.error("Error al obtener las anotaciones:", error);
@@ -3574,26 +4058,8 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
       return res.status(400).json({ error: "El proyecto es obligatorio." });
     }
 
-    // Procesar assignees
-    let assignees = [];
-    if (formData.assignees) {
-      // Si es un string, intentar parsearlo
-      if (typeof formData.assignees === 'string' && formData.assignees.startsWith('[')) {
-        try {
-          assignees = JSON.parse(formData.assignees);
-        } catch (e) {
-          console.warn('Error parsing assignees array:', e);
-          assignees = [];
-        }
-      } 
-      // Si es un objeto o array
-      else if (typeof formData.assignees === 'object') {
-        assignees = Array.isArray(formData.assignees) ? formData.assignees : [formData.assignees];
-      }
-    }
-
-    // Extraer IDs de assignees
-    const assigneeIds = assignees.map((a: { id: string } | string) => typeof a === 'object' ? a.id : a);
+    const assigneeIds = extractUserIds(formData.assignees);
+    const requiredSignerIds = extractUserIds((formData as any).requiredSignatories);
 
     // Procesar archivos subidos
     const uploadedFiles = (req.files || []) as Express.Multer.File[];
@@ -3611,6 +4077,7 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
           data: {
             fileName: file.originalname,
             url: stored.url,
+            storagePath: stored.key,
             size: file.size,
             type: file.mimetype,
           },
@@ -3641,11 +4108,6 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
     const workforce = (formData as any).workforce ?? "";
     const weatherConditions = (formData as any).weatherConditions ?? "";
     const additionalObservations = (formData as any).additionalObservations ?? "";
-
-    // Validar assignees
-    if (!Array.isArray(assignees)) {
-      return res.status(400).json({ error: "El formato de los asignados no es válido." });
-    }
 
     // Validar attachments
     if (!Array.isArray(attachments)) {
@@ -3692,6 +4154,41 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
         history: { include: { user: true }, orderBy: { timestamp: "desc" } },
       },
     });
+
+    const uniqueSignerIds = Array.from(
+      new Set([
+        ...requiredSignerIds,
+        ...(formData.authorId ? [formData.authorId] : []),
+      ])
+    );
+
+    if (uniqueSignerIds.length) {
+      for (const signerId of uniqueSignerIds) {
+        await prisma.logEntrySignatureTask.create({
+          data: {
+            logEntryId: newEntry.id,
+            signerId,
+            status: signerId === formData.authorId ? "SIGNED" : "PENDING",
+            signedAt: signerId === formData.authorId ? new Date() : undefined,
+          },
+        });
+      }
+
+      const pendingCount = await prisma.logEntrySignatureTask.count({
+        where: {
+          logEntryId: newEntry.id,
+          status: { not: 'SIGNED' },
+        },
+      });
+
+      if (pendingCount === 0 && newEntry.status !== 'SIGNED') {
+        await prisma.logEntry.update({
+          where: { id: newEntry.id },
+          data: { status: 'SIGNED' },
+        });
+        newEntry.status = 'SIGNED';
+      }
+    }
 
     if (formData.authorId) {
       try {
@@ -3740,6 +4237,18 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
       });
     }
 
+    if (uniqueSignerIds.length) {
+      const signerUsers = await prisma.user.findMany({
+        where: { id: { in: uniqueSignerIds } },
+      });
+      signerUsers.forEach((signer) => {
+        creationChanges.push({
+          fieldName: 'Firmante Añadido',
+          newValue: signer.fullName,
+        });
+      });
+    }
+
     await recordLogEntryChanges(newEntry.id, req.user?.userId || formData.authorId, creationChanges);
 
     const entryWithHistory = await prisma.logEntry.findUnique({
@@ -3750,6 +4259,7 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
         comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
         signatures: { include: { signer: true } },
         assignees: true,
+        signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
         history: { include: { user: true }, orderBy: { timestamp: "desc" } },
       },
     });
@@ -3816,6 +4326,7 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
       include: {
         attachments: true,
         assignees: true,
+        signatureTasks: true,
       },
     });
 
@@ -3841,6 +4352,7 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
       status,
       assignees = [],
       attachments = [],
+      requiredSignatories: requiredSignatoriesPayload,
     } = req.body;
 
     const prismaType = entryTypeMap[type] || existingEntry.type;
@@ -3858,6 +4370,67 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
           }
         : undefined,
     };
+
+    const signerAddedIds: string[] = [];
+    const signerRemovedIds: string[] = [];
+    let updatedSignatureTasks = existingEntry.signatureTasks || [];
+
+    if (requiredSignatoriesPayload !== undefined) {
+      const newSignerIds = extractUserIds(requiredSignatoriesPayload);
+      const existingSignerIds = updatedSignatureTasks.map((task: any) => task.signerId);
+
+      const toAdd = newSignerIds.filter((id: string) => !existingSignerIds.includes(id));
+      const toRemove = existingSignerIds.filter((id: string) => !newSignerIds.includes(id));
+
+      if (toRemove.length) {
+        await prisma.logEntrySignatureTask.deleteMany({
+          where: {
+            logEntryId: id,
+            signerId: { in: toRemove },
+          },
+        });
+        signerRemovedIds.push(...toRemove);
+      }
+
+      for (const signerId of toAdd) {
+        await prisma.logEntrySignatureTask.create({
+          data: {
+            logEntryId: id,
+            signerId,
+            status: signerId === existingEntry.authorId ? 'SIGNED' : 'PENDING',
+            signedAt: signerId === existingEntry.authorId ? new Date() : undefined,
+          },
+        });
+        signerAddedIds.push(signerId);
+      }
+
+      updatedSignatureTasks = await prisma.logEntrySignatureTask.findMany({
+        where: { logEntryId: id },
+        include: { signer: true },
+        orderBy: { assignedAt: 'asc' },
+      });
+
+      const pendingCount = updatedSignatureTasks.filter((task: any) => task.status !== 'SIGNED').length;
+
+      if (pendingCount === 0 && updatedSignatureTasks.length > 0) {
+        if (dataToUpdate.status === undefined) {
+          dataToUpdate.status = 'SIGNED';
+        }
+      } else if (
+        pendingCount > 0 &&
+        updatedSignatureTasks.length > 0 &&
+        existingEntry.status === 'SIGNED' &&
+        dataToUpdate.status === undefined
+      ) {
+        dataToUpdate.status = 'SUBMITTED';
+      }
+    } else {
+      updatedSignatureTasks = await prisma.logEntrySignatureTask.findMany({
+        where: { logEntryId: id },
+        include: { signer: true },
+        orderBy: { assignedAt: 'asc' },
+      });
+    }
 
     if (title !== undefined) dataToUpdate.title = title?.trim();
     if (description !== undefined) dataToUpdate.description = description?.trim() || "";
@@ -3897,6 +4470,7 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
         comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
         signatures: { include: { signer: true } },
         assignees: true,
+        signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
         history: { include: { user: true }, orderBy: { timestamp: "desc" } },
       },
     });
@@ -3988,6 +4562,30 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
       });
     }
 
+    if (signerAddedIds.length) {
+      const addedUsers = await prisma.user.findMany({
+        where: { id: { in: signerAddedIds } },
+      });
+      addedUsers.forEach((user) => {
+        changes.push({
+          fieldName: 'Firmante Añadido',
+          newValue: user.fullName,
+        });
+      });
+    }
+
+    if (signerRemovedIds.length) {
+      const removedUsers = await prisma.user.findMany({
+        where: { id: { in: signerRemovedIds } },
+      });
+      removedUsers.forEach((user) => {
+        changes.push({
+          fieldName: 'Firmante Eliminado',
+          oldValue: user.fullName,
+        });
+      });
+    }
+
     const previousAttachmentIds = new Map((existingEntry.attachments || []).map((att) => [att.id, att]));
     const newAttachmentIds = new Map((updatedEntry.attachments || []).map((att) => [att.id, att]));
 
@@ -4026,6 +4624,7 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
         comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
         signatures: { include: { signer: true } },
         assignees: true,
+        signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
         history: { include: { user: true }, orderBy: { timestamp: "desc" } },
       },
     });
@@ -4158,7 +4757,7 @@ app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequ
 
     const passwordMatches = await bcrypt.compare(password, signer.password);
     if (!passwordMatches) {
-      return res.status(401).json({ error: "Contraseña incorrecta." });
+      return res.status(401).json({ error: "Contraseña incorrecta.", code: "INVALID_SIGNATURE_PASSWORD" });
     }
 
     const entryExists = await prisma.logEntry.findUnique({ where: { id } });
@@ -4184,6 +4783,29 @@ app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequ
       });
     }
 
+    await prisma.logEntrySignatureTask.updateMany({
+      where: {
+        logEntryId: id,
+        signerId,
+      },
+      data: {
+        status: 'SIGNED',
+        signedAt: new Date(),
+      },
+    });
+
+    const updatedTasks = await prisma.logEntrySignatureTask.findMany({
+      where: { logEntryId: id },
+      select: { status: true },
+    });
+
+    if (updatedTasks.length > 0 && updatedTasks.every((task) => task.status === 'SIGNED')) {
+      await prisma.logEntry.update({
+        where: { id },
+        data: { status: 'SIGNED' },
+      });
+    }
+
     const updatedEntry = await prisma.logEntry.findUnique({
       where: { id },
       include: {
@@ -4192,6 +4814,7 @@ app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequ
         comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
         signatures: { include: { signer: true } },
         assignees: true,
+        signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
       },
     });
 
@@ -4199,13 +4822,7 @@ app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequ
       return res.status(404).json({ error: "Anotación no encontrada tras firmar." });
     }
 
-    const formattedEntry = {
-      ...updatedEntry,
-      type: entryTypeReverseMap[updatedEntry.type] || updatedEntry.type,
-      status: entryStatusReverseMap[updatedEntry.status] || updatedEntry.status,
-    };
-
-    res.json(formattedEntry);
+    res.json(formatLogEntry(updatedEntry));
   } catch (error) {
     console.error("Error al firmar anotación:", error);
     res.status(500).json({ error: "No se pudo firmar la anotación." });

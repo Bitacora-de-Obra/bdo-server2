@@ -52,6 +52,8 @@ export const entryStatusMap: { [key: string]: EntryStatus } = {
     'Radicado': 'SUBMITTED',
     'Rechazado': 'REJECTED',
     'Borrador': 'DRAFT',
+    'Firmado': 'SIGNED',
+    'SIGNED': 'SIGNED',
     'NEEDS_REVIEW': 'NEEDS_REVIEW', // Añadido para manejar el estado en inglés
 };
 

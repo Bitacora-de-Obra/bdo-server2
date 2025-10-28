@@ -22,6 +22,27 @@ const entryTypeLabels: Record<string, string> = {
   TECHNICAL: "Técnico",
 };
 
+const projectRoleLabels: Record<string, string> = {
+  RESIDENT: "Residente de Obra",
+  SUPERVISOR: "Supervisor",
+  CONTRACTOR_REP: "Representante Contratista",
+  ADMIN: "Administrador IDU",
+};
+
+const signatureTaskStatusLabels: Record<string, string> = {
+  PENDING: "Pendiente de firma",
+  SIGNED: "Firmado",
+  DECLINED: "Rechazado",
+  CANCELLED: "Cancelado",
+};
+
+const signatureTaskStatusColors: Record<string, string> = {
+  PENDING: "#92400E",
+  SIGNED: "#15803D",
+  DECLINED: "#B91C1C",
+  CANCELLED: "#4B5563",
+};
+
 interface LogEntryPdfOptions {
   prisma: PrismaClient;
   logEntryId: string;
@@ -67,6 +88,10 @@ export const generateLogEntryPdf = async ({
       comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
       signatures: { include: { signer: true } },
       assignees: true,
+      signatureTasks: {
+        include: { signer: true },
+        orderBy: { assignedAt: "asc" },
+      },
     },
   });
 
@@ -100,6 +125,7 @@ export const generateLogEntryPdf = async ({
   await new Promise<void>((resolve, reject) => {
     const doc = new PDFDocument({ size: "LETTER", margin: 48 });
     const writeStream = fsSync.createWriteStream(filePath);
+    const pageWidth = doc.page.width;
 
     doc.on("error", reject);
     writeStream.on("error", reject);
@@ -263,14 +289,189 @@ export const generateLogEntryPdf = async ({
       });
     }
 
+    doc.moveDown();
+    doc.font("Helvetica-Bold").fontSize(13).text("Firmas requeridas");
+    doc.moveDown(0.35);
+
+    const signatureParticipants: Array<{
+      id: string;
+      fullName: string;
+      projectRole?: string | null;
+      status: string;
+      signedAt?: Date;
+    }> = [];
+    const participantsById = new Map<string, typeof signatureParticipants[number]>();
+
+    const registerParticipant = (participant: {
+      id: string;
+      fullName: string;
+      projectRole?: string | null;
+      status: string;
+      signedAt?: Date;
+    }) => {
+      if (!participant.id) {
+        return;
+      }
+      const existing = participantsById.get(participant.id);
+      if (existing) {
+        if (
+          participant.status === "SIGNED" &&
+          existing.status !== "SIGNED"
+        ) {
+          existing.status = "SIGNED";
+          existing.signedAt = participant.signedAt;
+        } else if (existing.status !== "SIGNED") {
+          existing.status = participant.status;
+          existing.signedAt = participant.signedAt;
+        }
+        return;
+      }
+      const stored = { ...participant };
+      signatureParticipants.push(stored);
+      participantsById.set(participant.id, stored);
+    };
+
+    (entry.signatureTasks || []).forEach((task: any) => {
+      if (!task?.signer) {
+        return;
+      }
+      registerParticipant({
+        id: task.signer.id,
+        fullName: task.signer.fullName,
+        projectRole: task.signer.projectRole,
+        status: task.status,
+        signedAt: task.signedAt ? new Date(task.signedAt) : undefined,
+      });
+    });
+
+    (entry.signatures || []).forEach((signature: any) => {
+      const signerId = signature.signerId || signature.signer?.id;
+      if (!signerId) {
+        return;
+      }
+      registerParticipant({
+        id: signerId,
+        fullName: signature.signer?.fullName || "Firmante",
+        projectRole: signature.signer?.projectRole,
+        status: "SIGNED",
+        signedAt: signature.signedAt ? new Date(signature.signedAt) : undefined,
+      });
+    });
+
+    if (!signatureParticipants.length && entry.author) {
+      const authorSignature = (entry.signatures || []).find(
+        (signature: any) =>
+          (signature.signerId || signature.signer?.id) === entry.author?.id
+      );
+      registerParticipant({
+        id: entry.author.id,
+        fullName: entry.author.fullName,
+        projectRole: entry.author.projectRole,
+        status: authorSignature ? "SIGNED" : "PENDING",
+        signedAt: authorSignature?.signedAt
+          ? new Date(authorSignature.signedAt)
+          : undefined,
+      });
+    }
+
+    if (!signatureParticipants.length && entry.assignees?.length) {
+      entry.assignees.forEach((assignee: any) => {
+        registerParticipant({
+          id: assignee.id,
+          fullName: assignee.fullName,
+          projectRole: assignee.projectRole,
+          status: "PENDING",
+        });
+      });
+    }
+
+    const signatureBoxHeight = 110;
+    const signatureBoxWidth =
+      pageWidth - doc.page.margins.left - doc.page.margins.right;
+
+    signatureParticipants.forEach((participant, index) => {
+      if (
+        doc.y + signatureBoxHeight >
+        doc.page.height - doc.page.margins.bottom
+      ) {
+        doc.addPage();
+      }
+
+      const currentY = doc.y;
+      doc
+        .rect(
+          doc.page.margins.left,
+          currentY,
+          signatureBoxWidth,
+          signatureBoxHeight
+        )
+        .stroke();
+
+      const nameLabel = participant.fullName || "Firmante";
+      const roleLabel = projectRoleLabels[participant.projectRole || ""] ||
+        participant.projectRole ||
+        "Cargo / Rol";
+
+      const statusLabelBase =
+        signatureTaskStatusLabels[participant.status] || participant.status;
+      const statusDetail =
+        participant.status === "SIGNED" && participant.signedAt
+          ? `${statusLabelBase} · ${formatDateTime(participant.signedAt)}`
+          : statusLabelBase;
+      const statusColor =
+        signatureTaskStatusColors[participant.status] || "#1F2937";
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(11)
+        .text(nameLabel, doc.page.margins.left + 16, currentY + 12, {
+          width: signatureBoxWidth - 32,
+        });
+
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .fillColor("#4B5563")
+        .text(roleLabel, doc.page.margins.left + 16, currentY + 30, {
+          width: signatureBoxWidth - 32,
+        })
+        .fillColor("#000000");
+
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .fillColor(statusColor)
+        .text(statusDetail, doc.page.margins.left + 16, currentY + 46, {
+          width: signatureBoxWidth - 32,
+        })
+        .fillColor("#000000");
+
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .text("Firma:", doc.page.margins.left + 16, currentY + 58);
+
+      doc
+        .moveTo(doc.page.margins.left + 70, currentY + 72)
+        .lineTo(doc.page.margins.left + signatureBoxWidth - 16, currentY + 72)
+        .stroke();
+
+      doc.y = currentY + signatureBoxHeight + 16;
+      if (index === signatureParticipants.length - 1) {
+        doc.moveDown();
+      }
+    });
+
     doc.end();
   });
 
   const stats = await fs.stat(filePath);
+  const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
   const attachment = await prisma.attachment.create({
     data: {
       fileName,
       url: `${baseUrl}/uploads/${GENERATED_SUBDIR}/${fileName}`,
+      storagePath,
       size: stats.size,
       type: "application/pdf",
     },

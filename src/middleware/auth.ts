@@ -4,6 +4,14 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+const respondUnauthorized = (res: Response, error: string, code: string) => {
+  return res.status(401).json({ error, code });
+};
+
+const respondForbidden = (res: Response, error: string, code: string) => {
+  return res.status(403).json({ error, code });
+};
+
 export interface AuthRequest extends Request {
   user?: {
     userId: string;
@@ -33,12 +41,12 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
-      return res.status(401).json({ error: 'No token provided' });
+      return respondUnauthorized(res, 'No token provided', 'NO_ACCESS_TOKEN');
     }
 
     const token = authHeader.split(' ')[1];
     if (!token) {
-      return res.status(401).json({ error: 'Invalid token format' });
+      return respondUnauthorized(res, 'Invalid token format', 'INVALID_AUTH_HEADER');
     }
 
     try {
@@ -50,15 +58,15 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
       });
 
       if (!user) {
-        return res.status(401).json({ error: 'User not found' });
+        return respondUnauthorized(res, 'User not found', 'USER_NOT_FOUND');
       }
 
       if (user.status !== 'active') {
-        return res.status(403).json({ error: 'User account is inactive' });
+        return respondForbidden(res, 'User account is inactive', 'USER_INACTIVE');
       }
 
       if (user.tokenVersion !== payload.tokenVersion) {
-        return res.status(401).json({ error: 'Token version is invalid' });
+        return respondUnauthorized(res, 'Token version is invalid', 'TOKEN_VERSION_INVALID');
       }
 
       req.user = {
@@ -80,7 +88,7 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
     }
   } catch (error) {
     console.error('Auth middleware error:', error);
-    res.status(401).json({ error: 'Invalid token' });
+    res.status(401).json({ error: 'Invalid token', code: 'INVALID_ACCESS_TOKEN' });
   }
 };
 
@@ -88,26 +96,34 @@ export const refreshAuthMiddleware = async (req: AuthRequest, res: Response, nex
   try {
     const refreshToken = req.cookies.jid;
     if (!refreshToken) {
-      return res.status(401).json({ error: 'No refresh token' });
+      return respondUnauthorized(res, 'No refresh token', 'NO_REFRESH_TOKEN');
     }
 
-    const payload = jwt.verify(refreshToken, process.env.JWT_SECRET!) as any;
-    
+    let payload: any;
+    try {
+      payload = jwt.verify(refreshToken, process.env.JWT_SECRET!);
+    } catch (err) {
+      if (err instanceof jwt.TokenExpiredError) {
+        return respondUnauthorized(res, 'Refresh token expired', 'REFRESH_TOKEN_EXPIRED');
+      }
+      return respondUnauthorized(res, 'Invalid refresh token', 'INVALID_REFRESH_TOKEN');
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
       select: { id: true, status: true, tokenVersion: true, appRole: true, email: true }
     });
 
     if (!user) {
-      return res.status(401).json({ error: 'User not found' });
+      return respondUnauthorized(res, 'User not found', 'USER_NOT_FOUND');
     }
 
     if (user.status !== 'active') {
-      return res.status(403).json({ error: 'User account is inactive' });
+      return respondForbidden(res, 'User account is inactive', 'USER_INACTIVE');
     }
 
     if (user.tokenVersion !== payload.tokenVersion) {
-      return res.status(401).json({ error: 'Token version is invalid' });
+      return respondUnauthorized(res, 'Token version is invalid', 'TOKEN_VERSION_INVALID');
     }
 
     req.user = {
@@ -120,6 +136,6 @@ export const refreshAuthMiddleware = async (req: AuthRequest, res: Response, nex
     next();
   } catch (error) {
     console.error('Refresh middleware error:', error);
-    res.status(401).json({ error: 'Invalid refresh token' });
+    res.status(401).json({ error: 'Invalid refresh token', code: 'INVALID_REFRESH_TOKEN' });
   }
 };
