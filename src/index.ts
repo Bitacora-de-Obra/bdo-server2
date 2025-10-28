@@ -29,6 +29,7 @@ import path from "path";
 import { authMiddleware, refreshAuthMiddleware, createAccessToken, createRefreshToken, AuthRequest } from "./middleware/auth";
 import { generateWeeklyReportExcel } from "./services/reports/weeklyExcelGenerator";
 import { generateReportPdf } from "./services/reports/pdfExport";
+import { generateLogEntryPdf } from "./services/logEntries/pdfExport";
 import { validateCronogramaXml, CronogramaValidationError } from "./utils/xmlValidator";
 import { logger } from "./logger";
 import fsPromises from "fs/promises";
@@ -47,6 +48,7 @@ import {
   reportStatusMap,
   commitmentStatusMap,
   communicationStatusMap,
+  communicationDirectionMap,
   modificationTypeMap,
   roleMap,
 } from "./utils/enum-maps";
@@ -56,6 +58,7 @@ import {
   sendPasswordResetEmail,
   sendCommitmentReminderEmail,
   isEmailServiceConfigured,
+  sendCommunicationAssignmentEmail,
 } from "./services/email";
 // El middleware de autenticación ya está importado arriba
 const app = express();
@@ -92,6 +95,7 @@ const reportStatusReverseMap = reverseMap(reportStatusMap);
 const reportScopeReverseMap = reverseMap(reportScopeMap);
 const deliveryMethodReverseMap = reverseMap(deliveryMethodMap);
 const communicationStatusReverseMap = reverseMap(communicationStatusMap);
+const communicationDirectionReverseMap = reverseMap(communicationDirectionMap);
 const modificationTypeReverseMap = reverseMap(modificationTypeMap);
 const roleReverseMap = reverseMap(roleMap);
 
@@ -534,45 +538,83 @@ const buildAttachmentResponse = (attachment: any) => ({
   downloadUrl: `http://localhost:${port}/api/attachments/${attachment.id}/download`,
 });
 
-const formatLogEntry = (entry: any) => ({
-  ...entry,
-  type: entryTypeReverseMap[entry.type] || entry.type,
-  status: entryStatusReverseMap[entry.status] || entry.status,
-  comments: (entry.comments || []).map((comment: any) => ({
-    ...comment,
-    timestamp: comment.timestamp instanceof Date ? comment.timestamp.toISOString() : comment.timestamp,
-  })),
-  attachments: (entry.attachments || []).map(buildAttachmentResponse),
-  signatures: (entry.signatures || []).map((signature: any) => ({
-    ...signature,
-    signedAt: signature.signedAt instanceof Date ? signature.signedAt.toISOString() : signature.signedAt,
-  })),
-  assignees: entry.assignees || [],
-  history: (entry.history || []).map((change: any) => ({
-    id: change.id,
-    fieldName: change.fieldName,
-    oldValue: change.oldValue,
-    newValue: change.newValue,
-    timestamp: change.timestamp instanceof Date ? change.timestamp.toISOString() : change.timestamp,
-    user: change.user
-      ? {
-          id: change.user.id,
-          fullName: change.user.fullName,
-          avatarUrl: change.user.avatarUrl,
-          email: change.user.email,
-          appRole: change.user.appRole,
-          projectRole: change.user.projectRole,
-        }
-      : {
-          id: 'system',
-          fullName: 'Sistema',
-          avatarUrl: '',
-          email: '',
-          appRole: 'viewer',
-          projectRole: 'ADMIN',
+const mapUserBasic = (user: any) => {
+  if (!user) {
+    return null;
+  }
+  return {
+    id: user.id,
+    fullName: user.fullName,
+    email: user.email,
+    avatarUrl: user.avatarUrl,
+    appRole: user.appRole,
+    projectRole: user.projectRole,
+  };
+};
+
+const formatLogEntry = (entry: any) => {
+  const requiredSignersRaw =
+    Array.isArray(entry.requiredSignatories) && entry.requiredSignatories.length
+      ? entry.requiredSignatories
+      : entry.author
+      ? [entry.author]
+      : [];
+
+  const requiredSigners = requiredSignersRaw
+    .map(mapUserBasic)
+    .filter(Boolean);
+
+  return {
+    ...entry,
+    type: entryTypeReverseMap[entry.type] || entry.type,
+    status: entryStatusReverseMap[entry.status] || entry.status,
+    entryDate:
+      entry.entryDate instanceof Date
+        ? entry.entryDate.toISOString()
+        : entry.entryDate,
+    activitiesPerformed: entry.activitiesPerformed || "",
+    materialsUsed: entry.materialsUsed || "",
+    workforce: entry.workforce || "",
+    weatherConditions: entry.weatherConditions || "",
+    additionalObservations: entry.additionalObservations || "",
+    comments: (entry.comments || []).map((comment: any) => ({
+      ...comment,
+      timestamp:
+        comment.timestamp instanceof Date
+          ? comment.timestamp.toISOString()
+          : comment.timestamp,
+    })),
+    attachments: (entry.attachments || []).map(buildAttachmentResponse),
+    signatures: (entry.signatures || []).map((signature: any) => ({
+      ...signature,
+      signedAt:
+        signature.signedAt instanceof Date
+          ? signature.signedAt.toISOString()
+          : signature.signedAt,
+    })),
+    assignees: (entry.assignees || []).map(mapUserBasic).filter(Boolean),
+    requiredSignatories: requiredSigners,
+    history: (entry.history || []).map((change: any) => ({
+      id: change.id,
+      fieldName: change.fieldName,
+      oldValue: change.oldValue,
+      newValue: change.newValue,
+      timestamp:
+        change.timestamp instanceof Date
+          ? change.timestamp.toISOString()
+          : change.timestamp,
+      user:
+        mapUserBasic(change.user) || {
+          id: "system",
+          fullName: "Sistema",
+          avatarUrl: "",
+          email: "",
+          appRole: "viewer",
+          projectRole: "ADMIN",
         },
-  })),
-});
+    })),
+  };
+};
 
 const formatActa = (acta: any) => ({
   ...acta,
@@ -639,15 +681,36 @@ const formatCommunication = (communication: any) => {
     sentDate: communication.sentDate instanceof Date ? communication.sentDate.toISOString() : communication.sentDate,
     dueDate: communication.dueDate instanceof Date && !isNaN(communication.dueDate.getTime()) ? communication.dueDate.toISOString() : communication.dueDate,
     deliveryMethod: deliveryMethodReverseMap[communication.deliveryMethod] || communication.deliveryMethod,
+    direction: communicationDirectionReverseMap[communication.direction] || communication.direction,
+    requiresResponse: Boolean(communication.requiresResponse),
+    responseDueDate:
+      communication.responseDueDate instanceof Date && !isNaN(communication.responseDueDate.getTime())
+        ? communication.responseDueDate.toISOString()
+        : communication.responseDueDate,
     notes: communication.notes,
     status: communicationStatusReverseMap[communication.status] || communication.status,
-    uploader: communication.uploader || null,
+    uploader: mapUserBasic(communication.uploader),
+    assignee: mapUserBasic(communication.assignee),
+    assignedAt:
+      communication.assignedAt instanceof Date
+        ? communication.assignedAt.toISOString()
+        : communication.assignedAt,
     parentId: communication.parentId || null,
     attachments: (communication.attachments || []).map(buildAttachmentResponse),
     statusHistory: (communication.statusHistory || []).map((history: any) => ({
       ...history,
       status: communicationStatusReverseMap[history.status] || history.status,
       timestamp: history.timestamp instanceof Date ? history.timestamp.toISOString() : history.timestamp,
+      user:
+        mapUserBasic(history.user) ||
+        {
+          id: 'system',
+          fullName: 'Sistema',
+          email: '',
+          avatarUrl: '',
+          appRole: 'viewer',
+          projectRole: 'ADMIN',
+        },
     })),
     createdAt: communication.createdAt instanceof Date ? communication.createdAt.toISOString() : communication.createdAt,
     updatedAt: communication.updatedAt instanceof Date ? communication.updatedAt.toISOString() : communication.updatedAt,
@@ -2641,6 +2704,7 @@ app.get("/api/communications", async (req, res) => {
       orderBy: { sentDate: "desc" },
       include: {
         uploader: true,
+        assignee: true,
         attachments: true,
         statusHistory: { include: { user: true }, orderBy: { timestamp: "asc" } },
       },
@@ -2663,6 +2727,7 @@ app.get("/api/communications/:id", async (req, res) => {
       where: { id },
       include: {
         uploader: true,
+        assignee: true,
         attachments: true,
         statusHistory: { include: { user: true }, orderBy: { timestamp: "asc" } },
       },
@@ -2695,10 +2760,19 @@ app.post("/api/communications", async (req, res) => {
       deliveryMethod,
       notes,
       parentId,
+      direction,
+      requiresResponse,
+      responseDueDate,
+      assigneeId,
       uploaderId,
       attachments = [],
     } = req.body;
     const prismaDeliveryMethod = deliveryMethodMap[deliveryMethod] || "SYSTEM";
+    const prismaDirection =
+      communicationDirectionMap[direction] ||
+      communicationDirectionMap[communicationDirectionReverseMap[direction] || "Recibida"] ||
+      "RECEIVED";
+    const normalizedRequiresResponse = Boolean(requiresResponse);
     const newComm = await prisma.communication.create({
       data: {
         radicado,
@@ -2716,7 +2790,15 @@ app.post("/api/communications", async (req, res) => {
         deliveryMethod: prismaDeliveryMethod,
         notes,
         status: 'PENDIENTE', // Estado inicial para comunicaciones
+        direction: prismaDirection,
+        requiresResponse: normalizedRequiresResponse,
+        responseDueDate:
+          normalizedRequiresResponse && responseDueDate
+            ? new Date(responseDueDate)
+            : null,
         uploader: { connect: { id: uploaderId } },
+        assignee: assigneeId ? { connect: { id: assigneeId } } : undefined,
+        assignedAt: assigneeId ? new Date() : null,
         parent: parentId ? { connect: { id: parentId } } : undefined,
         attachments: Array.isArray(attachments)
           ? {
@@ -2734,10 +2816,31 @@ app.post("/api/communications", async (req, res) => {
       },
       include: {
         uploader: true,
+        assignee: true,
         attachments: true,
         statusHistory: { include: { user: true }, orderBy: { timestamp: "asc" } },
       },
     });
+    if (newComm.assignee && newComm.assignee.email) {
+      try {
+        await sendCommunicationAssignmentEmail({
+          to: newComm.assignee.email,
+          recipientName: newComm.assignee.fullName,
+          assignerName: newComm.uploader?.fullName,
+          communication: {
+            radicado: newComm.radicado,
+            subject: newComm.subject,
+            sentDate: newComm.sentDate,
+            responseDueDate: newComm.responseDueDate,
+          },
+        });
+      } catch (emailError) {
+        logger.warn("No se pudo enviar el correo de asignación de comunicación.", {
+          error: emailError,
+          communicationId: newComm.id,
+        });
+      }
+    }
     const formattedComm = formatCommunication(newComm);
     formattedComm.attachments = (newComm.attachments || []).map(buildAttachmentResponse);
     res.status(201).json(formattedComm);
@@ -2776,6 +2879,7 @@ app.put("/api/communications/:id/status", authMiddleware, async (req: AuthReques
       },
       include: {
         uploader: true,
+        assignee: true,
         attachments: true,
         statusHistory: { include: { user: true }, orderBy: { timestamp: "asc" } },
       },
@@ -2789,6 +2893,97 @@ app.put("/api/communications/:id/status", authMiddleware, async (req: AuthReques
       return res.status(404).json({ error: "Comunicación no encontrada." });
     }
     res.status(500).json({ error: "No se pudo actualizar el estado." });
+  }
+});
+
+app.put("/api/communications/:id/assignment", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const { assigneeId } = req.body as { assigneeId?: string | null };
+
+    const current = await prisma.communication.findUnique({
+      where: { id },
+      select: { assigneeId: true },
+    });
+
+    if (!current) {
+      return res.status(404).json({ error: "Comunicación no encontrada." });
+    }
+
+    const normalizedAssigneeId =
+      assigneeId && typeof assigneeId === "string" && assigneeId.trim().length > 0
+        ? assigneeId.trim()
+        : null;
+
+    if (current.assigneeId === normalizedAssigneeId) {
+      const communication = await prisma.communication.findUnique({
+        where: { id },
+        include: {
+          uploader: true,
+          assignee: true,
+          attachments: true,
+          statusHistory: { include: { user: true }, orderBy: { timestamp: "asc" } },
+        },
+      });
+      if (!communication) {
+        return res.status(404).json({ error: "Comunicación no encontrada." });
+      }
+      return res.json(formatCommunication(communication));
+    }
+
+    const updatedCommunication = await prisma.communication.update({
+      where: { id },
+      data: {
+        assignee: normalizedAssigneeId
+          ? { connect: { id: normalizedAssigneeId } }
+          : { disconnect: true },
+        assignedAt: normalizedAssigneeId ? new Date() : null,
+      },
+      include: {
+        uploader: true,
+        assignee: true,
+        attachments: true,
+        statusHistory: { include: { user: true }, orderBy: { timestamp: "asc" } },
+      },
+    });
+
+    if (normalizedAssigneeId && updatedCommunication.assignee?.email) {
+      try {
+        let assignerName: string | undefined;
+        if (req.user?.userId) {
+          const assigner = await prisma.user.findUnique({
+            where: { id: req.user.userId },
+            select: { fullName: true },
+          });
+          assignerName = assigner?.fullName || undefined;
+        }
+
+        await sendCommunicationAssignmentEmail({
+          to: updatedCommunication.assignee.email,
+          recipientName: updatedCommunication.assignee.fullName,
+          assignerName,
+          communication: {
+            radicado: updatedCommunication.radicado,
+            subject: updatedCommunication.subject,
+            sentDate: updatedCommunication.sentDate,
+            responseDueDate: updatedCommunication.responseDueDate,
+          },
+        });
+      } catch (emailError) {
+        logger.warn("No se pudo enviar el correo de asignación de comunicación.", {
+          error: emailError,
+          communicationId: updatedCommunication.id,
+        });
+      }
+    }
+
+    res.json(formatCommunication(updatedCommunication));
+  } catch (error) {
+    console.error("Error al asignar la comunicación:", error);
+    if ((error as any)?.code === "P2025") {
+      return res.status(404).json({ error: "Comunicación no encontrada." });
+    }
+    res.status(500).json({ error: "No se pudo actualizar la asignación." });
   }
 });
 
@@ -3426,19 +3621,26 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
       }
     }
 
-    // Validar fechas
-    const startDate = new Date(formData.activityStartDate);
-    const endDate = new Date(formData.activityEndDate);
-    
-    if (isNaN(startDate.getTime())) {
-      return res.status(400).json({ error: "La fecha de inicio no es válida." });
+    // Preparar fecha de la entrada diaria
+    const rawEntryDate = (formData as any).entryDate || formData.activityStartDate;
+    const parsedEntryDate = new Date(rawEntryDate);
+
+    if (isNaN(parsedEntryDate.getTime())) {
+      return res.status(400).json({ error: "La fecha de la entrada de bitácora no es válida." });
     }
-    if (isNaN(endDate.getTime())) {
-      return res.status(400).json({ error: "La fecha de fin no es válida." });
-    }
-    if (endDate < startDate) {
-      return res.status(400).json({ error: "La fecha de fin debe ser posterior a la fecha de inicio." });
-    }
+
+    const entryDate = new Date(parsedEntryDate);
+    entryDate.setHours(0, 0, 0, 0);
+
+    const startDate = new Date(entryDate);
+    const endDate = new Date(entryDate);
+    endDate.setHours(23, 59, 59, 999);
+
+    const activitiesPerformed = (formData as any).activitiesPerformed ?? "";
+    const materialsUsed = (formData as any).materialsUsed ?? "";
+    const workforce = (formData as any).workforce ?? "";
+    const weatherConditions = (formData as any).weatherConditions ?? "";
+    const additionalObservations = (formData as any).additionalObservations ?? "";
 
     // Validar assignees
     if (!Array.isArray(assignees)) {
@@ -3454,27 +3656,33 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
     const prismaType = entryTypeMap[formData.type] || "GENERAL";
     const prismaStatus = entryStatusMap[formData.status] || "DRAFT";
 
-      // Crear la entrada
+    // Crear la entrada
     const newEntry = await prisma.logEntry.create({
-        data: {
-          title: formData.title.trim(),
-          description: formData.description?.trim() || "",
-          type: prismaType,
-          subject: formData.subject?.trim() || "",
-          location: formData.location?.trim() || "",
-          activityStartDate: new Date(formData.activityStartDate),
-          activityEndDate: new Date(formData.activityEndDate),
-          isConfidential: isConfidentialValue,
-          status: prismaStatus,
-          author: { connect: { id: formData.authorId } },
-          project: { connect: { id: formData.projectId } },
-          assignees: {
-            connect: assigneeIds.map((id: string) => ({ id })),
-          },
-          attachments: {
-            connect: attachments.map(att => ({ id: att.id })),
-          },
+      data: {
+        title: formData.title.trim(),
+        description: formData.description?.trim() || "",
+        type: prismaType,
+        subject: formData.subject?.trim() || "",
+        location: formData.location?.trim() || "",
+        activityStartDate: startDate,
+        activityEndDate: endDate,
+        entryDate,
+        activitiesPerformed: String(activitiesPerformed),
+        materialsUsed: String(materialsUsed),
+        workforce: String(workforce),
+        weatherConditions: String(weatherConditions),
+        additionalObservations: String(additionalObservations),
+        isConfidential: isConfidentialValue,
+        status: prismaStatus,
+        author: { connect: { id: formData.authorId } },
+        project: { connect: { id: formData.projectId } },
+        assignees: {
+          connect: assigneeIds.map((id: string) => ({ id })),
         },
+        attachments: {
+          connect: attachments.map((att) => ({ id: att.id })),
+        },
+      },
       include: {
         author: true,
         attachments: true,
@@ -3484,6 +3692,32 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
         history: { include: { user: true }, orderBy: { timestamp: "desc" } },
       },
     });
+
+    if (formData.authorId) {
+      try {
+        const existingAuthorSignature = await prisma.signature.findFirst({
+          where: {
+            logEntryId: newEntry.id,
+            signerId: formData.authorId,
+          },
+        });
+        if (!existingAuthorSignature) {
+          await prisma.signature.create({
+            data: {
+              signer: { connect: { id: formData.authorId } },
+              logEntry: { connect: { id: newEntry.id } },
+              signedAt: new Date(),
+            },
+          });
+        }
+      } catch (signatureError) {
+        console.warn("No se pudo registrar la firma automática del autor.", {
+          error: signatureError,
+          logEntryId: newEntry.id,
+          authorId: formData.authorId,
+        });
+      }
+    }
 
     const creationChanges: { fieldName: string; oldValue?: string | null; newValue?: string | null }[] = [];
 
@@ -3526,8 +3760,17 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
 
     // Manejar errores específicos
     if (error.code === 'P2002') {
-      return res.status(409).json({ 
-        error: "Ya existe una anotación con este identificador." 
+      const target = (error.meta as any)?.target;
+      if (
+        (Array.isArray(target) && target.includes('LogEntry_projectId_entryDate_key')) ||
+        target === 'LogEntry_projectId_entryDate_key'
+      ) {
+        return res.status(409).json({
+          error: "Ya existe una entrada de bitácora registrada para este día en el proyecto."
+        });
+      }
+      return res.status(409).json({
+        error: "Ya existe una anotación con este identificador."
       });
     }
     if (error.code === 'P2025') {
@@ -3588,36 +3831,66 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
       location,
       activityStartDate,
       activityEndDate,
+      entryDate,
+      activitiesPerformed,
+      materialsUsed,
+      workforce,
+      weatherConditions,
+      additionalObservations,
       isConfidential,
       status,
       assignees = [],
       attachments = [],
     } = req.body;
-    const prismaType = entryTypeMap[type] || "GENERAL";
-    const prismaStatus = entryStatusMap[status] || "DRAFT";
-    const updatedEntry = await prisma.logEntry.update({
-      where: { id: id },
-      data: {
-        title,
-        description,
-        type: prismaType,
-        subject,
-        location,
-        activityStartDate: new Date(activityStartDate),
-        activityEndDate: new Date(activityEndDate),
-        isConfidential,
-        status: prismaStatus,
-        assignees: {
-          set: assignees.map((user: { id: string }) => ({ id: user.id })),
-        },
-        attachments: Array.isArray(attachments)
-          ? {
-              set: attachments
-                .filter((att: any) => att?.id)
-                .map((att: any) => ({ id: att.id })),
-            }
-          : undefined,
+
+    const prismaType = entryTypeMap[type] || existingEntry.type;
+    const prismaStatus = entryStatusMap[status] || existingEntry.status;
+
+    const dataToUpdate: any = {
+      assignees: {
+        set: assignees.map((user: { id: string }) => ({ id: user.id })),
       },
+      attachments: Array.isArray(attachments)
+        ? {
+            set: attachments
+              .filter((att: any) => att?.id)
+              .map((att: any) => ({ id: att.id })),
+          }
+        : undefined,
+    };
+
+    if (title !== undefined) dataToUpdate.title = title?.trim();
+    if (description !== undefined) dataToUpdate.description = description?.trim() || "";
+    if (type !== undefined) dataToUpdate.type = prismaType;
+    if (subject !== undefined) dataToUpdate.subject = subject?.trim() || "";
+    if (location !== undefined) dataToUpdate.location = location?.trim() || "";
+    if (isConfidential !== undefined) dataToUpdate.isConfidential = isConfidential;
+    if (status !== undefined) dataToUpdate.status = prismaStatus;
+    if (activitiesPerformed !== undefined) dataToUpdate.activitiesPerformed = String(activitiesPerformed ?? "");
+    if (materialsUsed !== undefined) dataToUpdate.materialsUsed = String(materialsUsed ?? "");
+    if (workforce !== undefined) dataToUpdate.workforce = String(workforce ?? "");
+    if (weatherConditions !== undefined) dataToUpdate.weatherConditions = String(weatherConditions ?? "");
+    if (additionalObservations !== undefined) dataToUpdate.additionalObservations = String(additionalObservations ?? "");
+
+    if (entryDate !== undefined || activityStartDate !== undefined || activityEndDate !== undefined) {
+      const baseDate = entryDate || activityStartDate || existingEntry.entryDate;
+      const parsed = new Date(baseDate);
+      if (isNaN(parsed.getTime())) {
+        return res.status(400).json({ error: "La fecha de la entrada no es válida." });
+      }
+      const normalized = new Date(parsed);
+      normalized.setHours(0, 0, 0, 0);
+      const end = new Date(normalized);
+      end.setHours(23, 59, 59, 999);
+
+      dataToUpdate.entryDate = normalized;
+      dataToUpdate.activityStartDate = normalized;
+      dataToUpdate.activityEndDate = end;
+    }
+
+    const updatedEntry = await prisma.logEntry.update({
+      where: { id },
+      data: dataToUpdate,
       include: {
         author: true,
         attachments: true,
@@ -3647,18 +3920,21 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
     if (location !== undefined && location !== existingEntry.location) {
       changes.push({ fieldName: 'Ubicación', oldValue: existingEntry.location, newValue: updatedEntry.location });
     }
-    if (activityStartDate !== undefined) {
-      const oldValue = formatDate(existingEntry.activityStartDate);
-      const newValue = formatDate(updatedEntry.activityStartDate);
+    if (dataToUpdate.entryDate) {
+      const oldValue = formatDate(existingEntry.entryDate);
+      const newValue = formatDate(updatedEntry.entryDate);
       if (oldValue !== newValue) {
-        changes.push({ fieldName: 'Fecha Inicio Actividad', oldValue, newValue });
+        changes.push({ fieldName: 'Fecha de Bitácora', oldValue, newValue });
       }
-    }
-    if (activityEndDate !== undefined) {
-      const oldValue = formatDate(existingEntry.activityEndDate);
-      const newValue = formatDate(updatedEntry.activityEndDate);
-      if (oldValue !== newValue) {
-        changes.push({ fieldName: 'Fecha Fin Actividad', oldValue, newValue });
+      const oldStart = formatDate(existingEntry.activityStartDate);
+      const newStart = formatDate(updatedEntry.activityStartDate);
+      if (oldStart !== newStart) {
+        changes.push({ fieldName: 'Fecha Inicio Actividad', oldValue: oldStart, newValue: newStart });
+      }
+      const oldEnd = formatDate(existingEntry.activityEndDate);
+      const newEnd = formatDate(updatedEntry.activityEndDate);
+      if (oldEnd !== newEnd) {
+        changes.push({ fieldName: 'Fecha Fin Actividad', oldValue: oldEnd, newValue: newEnd });
       }
     }
     if (isConfidential !== undefined && isConfidential !== existingEntry.isConfidential) {
@@ -3673,6 +3949,42 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
         fieldName: 'Estado',
         oldValue: entryStatusReverseMap[existingEntry.status],
         newValue: entryStatusReverseMap[updatedEntry.status],
+      });
+    }
+
+    if (activitiesPerformed !== undefined && activitiesPerformed !== existingEntry.activitiesPerformed) {
+      changes.push({
+        fieldName: 'Actividades realizadas',
+        oldValue: existingEntry.activitiesPerformed,
+        newValue: updatedEntry.activitiesPerformed,
+      });
+    }
+    if (materialsUsed !== undefined && materialsUsed !== existingEntry.materialsUsed) {
+      changes.push({
+        fieldName: 'Materiales utilizados',
+        oldValue: existingEntry.materialsUsed,
+        newValue: updatedEntry.materialsUsed,
+      });
+    }
+    if (workforce !== undefined && workforce !== existingEntry.workforce) {
+      changes.push({
+        fieldName: 'Personal en obra',
+        oldValue: existingEntry.workforce,
+        newValue: updatedEntry.workforce,
+      });
+    }
+    if (weatherConditions !== undefined && weatherConditions !== existingEntry.weatherConditions) {
+      changes.push({
+        fieldName: 'Condiciones climáticas',
+        oldValue: existingEntry.weatherConditions,
+        newValue: updatedEntry.weatherConditions,
+      });
+    }
+    if (additionalObservations !== undefined && additionalObservations !== existingEntry.additionalObservations) {
+      changes.push({
+        fieldName: 'Observaciones adicionales',
+        oldValue: existingEntry.additionalObservations,
+        newValue: updatedEntry.additionalObservations,
       });
     }
 
@@ -3719,8 +4031,19 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
     });
 
     res.json(formatLogEntry(refreshedEntry));
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error al actualizar la anotación:", error);
+    if (error.code === 'P2002') {
+      const target = (error.meta as any)?.target;
+      if (
+        (Array.isArray(target) && target.includes('LogEntry_projectId_entryDate_key')) ||
+        target === 'LogEntry_projectId_entryDate_key'
+      ) {
+        return res.status(409).json({
+          error: "Ya existe una entrada de bitácora registrada para este día en el proyecto.",
+        });
+      }
+    }
     res.status(500).json({ error: "No se pudo actualizar la anotación." });
   }
 });
@@ -3888,6 +4211,54 @@ app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequ
     res.status(500).json({ error: "No se pudo firmar la anotación." });
   }
 });
+
+app.post(
+  "/api/log-entries/:id/export-pdf",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const baseUrl =
+        process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+
+      const result = await generateLogEntryPdf({
+        prisma,
+        logEntryId: id,
+        uploadsDir,
+        baseUrl,
+      });
+
+      const refreshedEntry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
+          signatures: { include: { signer: true } },
+          assignees: true,
+          history: { include: { user: true }, orderBy: { timestamp: "desc" } },
+        },
+      });
+
+      if (!refreshedEntry) {
+        return res
+          .status(404)
+          .json({ error: "Anotación no encontrada tras generar el PDF." });
+      }
+
+      res.json({
+        entry: formatLogEntry(refreshedEntry),
+        attachment: buildAttachmentResponse(result.attachment),
+      });
+    } catch (error) {
+      console.error("Error al generar PDF de la anotación:", error);
+      if (error instanceof Error && error.message === "Anotación no encontrada.") {
+        return res.status(404).json({ error: error.message });
+      }
+      res.status(500).json({ error: "No se pudo generar el PDF de la anotación." });
+    }
+  }
+);
 
 // --- RUTAS PARA AVANCE DE OBRA ---
 app.get("/api/contract-items", async (req, res) => {

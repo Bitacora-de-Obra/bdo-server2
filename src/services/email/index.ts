@@ -37,6 +37,19 @@ interface SendCommitmentReminderParams {
   bcc?: string[];
 }
 
+interface SendCommunicationAssignmentParams {
+  to: string;
+  recipientName?: string | null;
+  assignerName?: string | null;
+  communication: {
+    radicado: string;
+    subject: string;
+    sentDate?: Date | string | null;
+    dueDate?: Date | string | null;
+    responseDueDate?: Date | string | null;
+  };
+}
+
 const smtpHost = process.env.SMTP_HOST;
 const smtpPort = Number(process.env.SMTP_PORT || 587);
 const smtpSecure = process.env.SMTP_SECURE === "true";
@@ -205,6 +218,21 @@ export const sendPasswordResetEmail = async ({
   await sendEmail({ to, subject, html, text });
 };
 
+const formatDateLabel = (value?: Date | string | null) => {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toLocaleDateString("es-CO", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+};
+
 const parseAddressList = (value?: string | null) =>
   value
     ?.split(",")
@@ -325,5 +353,76 @@ export const sendCommitmentReminderEmail = async ({
     text: textLines.join("\n"),
     cc: ccList.length ? ccList : undefined,
     bcc: bccList.length ? bccList : undefined,
+  });
+};
+
+export const sendCommunicationAssignmentEmail = async ({
+  to,
+  recipientName,
+  assignerName,
+  communication,
+}: SendCommunicationAssignmentParams) => {
+  const displayRecipient = recipientName || "equipo";
+  const assignerDisplay = assignerName || "un miembro del equipo";
+  const dueDateLabel = formatDateLabel(communication.responseDueDate ?? communication.dueDate);
+  const sentDateLabel = formatDateLabel(communication.sentDate);
+  const baseUrl = getAppBaseUrl();
+  const communicationsLink = `${baseUrl}#/pending_tasks`;
+
+  const subject = `Nueva comunicación asignada · Radicado ${communication.radicado}`;
+
+  const textLines = [
+    `Hola ${displayRecipient},`,
+    "",
+    `${assignerDisplay} te asignó el seguimiento de la comunicación con radicado ${communication.radicado}.`,
+    `Asunto: ${communication.subject}`,
+  ];
+
+  if (sentDateLabel) {
+    textLines.push(`Fecha de envío: ${sentDateLabel}`);
+  }
+
+  if (dueDateLabel) {
+    textLines.push(`Fecha límite para respuesta: ${dueDateLabel}`);
+  } else {
+    textLines.push(
+      "Esta comunicación no tiene una fecha límite registrada. Revisa los detalles para acordar plazos."
+    );
+  }
+
+  textLines.push(
+    "",
+    `Ingresa a la Bitácora Digital y consulta la sección "Mis Pendientes" o "Comunicaciones Oficiales" para registrar el avance:`,
+    communicationsLink,
+    "",
+    "Gracias."
+  );
+
+  const html = `
+    <p>Hola ${displayRecipient},</p>
+    <p>${assignerDisplay} te asignó el seguimiento de la comunicación con radicado <strong>${communication.radicado}</strong>.</p>
+    <ul>
+      <li><strong>Asunto:</strong> ${communication.subject}</li>
+      ${
+        sentDateLabel
+          ? `<li><strong>Fecha de envío:</strong> ${sentDateLabel}</li>`
+          : ""
+      }
+      ${
+        dueDateLabel
+          ? `<li><strong>Fecha límite para respuesta:</strong> ${dueDateLabel}</li>`
+          : "<li><strong>Fecha límite:</strong> No registrada</li>"
+      }
+    </ul>
+    <p>Ingresa a la Bitácora Digital para gestionar la comunicación:</p>
+    <p><a href="${communicationsLink}" target="_blank" rel="noopener noreferrer">${communicationsLink}</a></p>
+    <p>Gracias.</p>
+  `;
+
+  await sendEmail({
+    to,
+    subject,
+    html,
+    text: textLines.join("\n"),
   });
 };

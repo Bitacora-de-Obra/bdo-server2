@@ -1,4 +1,4 @@
-import { UserRole, ActaArea, ActaStatus, EntryType, EntryStatus, DeliveryMethod, DrawingDiscipline, WorkActaStatus, CostActaStatus, ReportScope , ReportStatus, CommitmentStatus, CommunicationStatus, ModificationType } from '@prisma/client';
+import { UserRole, ActaArea, ActaStatus, EntryType, EntryStatus, DeliveryMethod, DrawingDiscipline, WorkActaStatus, CostActaStatus, ReportScope , ReportStatus, CommitmentStatus, CommunicationStatus, ModificationType, CommunicationDirection } from '@prisma/client';
 /**
  * Mapea los valores de rol del frontend (en español) a los valores del enum de Prisma.
  * Este es el "traductor" entre el cliente y la base de datos.
@@ -122,6 +122,13 @@ export const communicationStatusMap: { [key: string]: CommunicationStatus } = {
     'EN_TRÁMITE': 'EN_TRAMITE',
     'EN_TRAMITE': 'EN_TRAMITE',
     'RESUELTO': 'RESUELTO',
+};
+
+export const communicationDirectionMap: { [key: string]: CommunicationDirection } = {
+    'Enviada': 'SENT',
+    'Recibida': 'RECEIVED',
+    'SENT': 'SENT',
+    'RECEIVED': 'RECEIVED',
 };
 
 export const modificationTypeMap: { [key: string]: ModificationType } = {
