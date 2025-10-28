@@ -35,6 +35,9 @@ import { validateCronogramaXml, CronogramaValidationError } from "./utils/xmlVal
 import { logger } from "./logger";
 import fsPromises from "fs/promises";
 import { sha256 } from "./utils/hash";
+import { JsonValue } from './types/json';
+
+type JsonObject = { [Key in string]: JsonValue };
 
 // Importamos los mapas desde el nuevo archivo de utilidades
 import {
@@ -54,6 +57,12 @@ import {
   modificationTypeMap,
   roleMap,
 } from "./utils/enum-maps";
+import {
+  normalizeListItems,
+  normalizePersonnelEntries,
+  normalizeEquipmentEntries,
+  normalizeWeatherReport,
+} from "./utils/logEntryNormalization";
 import { getStorage } from "./storage";
 import {
   sendEmailVerificationEmail,
@@ -68,8 +77,6 @@ const prisma = new PrismaClient();
 const port = 4001;
 const isProduction = process.env.NODE_ENV === "production";
 
-// --- INICIO: Configuración de IA (Chatbot) ---
-// --- INICIO: Configuración de IA (OpenAI) ---
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -764,18 +771,18 @@ const formatLogEntry = (entry: any) => {
     assignees: (entry.assignees || []).map(mapUserBasic).filter(Boolean),
     scheduleDay: entry.scheduleDay || "",
     locationDetails: entry.locationDetails || "",
-    weatherReport: entry.weatherReport || null,
-    contractorPersonnel: entry.contractorPersonnel || [],
-    interventoriaPersonnel: entry.interventoriaPersonnel || [],
-    equipmentResources: entry.equipmentResources || [],
-    executedActivities: entry.executedActivities || [],
-    executedQuantities: entry.executedQuantities || [],
-    scheduledActivities: entry.scheduledActivities || [],
-    qualityControls: entry.qualityControls || [],
-    materialsReceived: entry.materialsReceived || [],
-    safetyNotes: entry.safetyNotes || [],
-    projectIssues: entry.projectIssues || [],
-    siteVisits: entry.siteVisits || [],
+    weatherReport: normalizeWeatherReport(entry.weatherReport),
+    contractorPersonnel: normalizePersonnelEntries(entry.contractorPersonnel),
+    interventoriaPersonnel: normalizePersonnelEntries(entry.interventoriaPersonnel),
+    equipmentResources: normalizeEquipmentEntries(entry.equipmentResources),
+    executedActivities: normalizeListItems(entry.executedActivities),
+    executedQuantities: normalizeListItems(entry.executedQuantities),
+    scheduledActivities: normalizeListItems(entry.scheduledActivities),
+    qualityControls: normalizeListItems(entry.qualityControls),
+    materialsReceived: normalizeListItems(entry.materialsReceived),
+    safetyNotes: normalizeListItems(entry.safetyNotes),
+    projectIssues: normalizeListItems(entry.projectIssues),
+    siteVisits: normalizeListItems(entry.siteVisits),
     contractorObservations: entry.contractorObservations || "",
     interventoriaObservations: entry.interventoriaObservations || "",
     requiredSignatories: requiredSigners,
@@ -4234,6 +4241,43 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
     const prismaType = entryTypeMap[formData.type] || "GENERAL";
     const prismaStatus = entryStatusMap[formData.status] || "DRAFT";
 
+    const normalizedWeatherReport = normalizeWeatherReport(
+      (formData as any).weatherReport
+    );
+    const normalizedContractorPersonnel = normalizePersonnelEntries(
+      (formData as any).contractorPersonnel
+    );
+    const normalizedInterventoriaPersonnel = normalizePersonnelEntries(
+      (formData as any).interventoriaPersonnel
+    );
+    const normalizedEquipmentResources = normalizeEquipmentEntries(
+      (formData as any).equipmentResources
+    );
+    const normalizedExecutedActivities = normalizeListItems(
+      (formData as any).executedActivities
+    );
+    const normalizedExecutedQuantities = normalizeListItems(
+      (formData as any).executedQuantities
+    );
+    const normalizedScheduledActivities = normalizeListItems(
+      (formData as any).scheduledActivities
+    );
+    const normalizedQualityControls = normalizeListItems(
+      (formData as any).qualityControls
+    );
+    const normalizedMaterialsReceived = normalizeListItems(
+      (formData as any).materialsReceived
+    );
+    const normalizedSafetyNotes = normalizeListItems(
+      (formData as any).safetyNotes
+    );
+    const normalizedProjectIssues = normalizeListItems(
+      (formData as any).projectIssues
+    );
+    const normalizedSiteVisits = normalizeListItems(
+      (formData as any).siteVisits
+    );
+
     // Crear la entrada
     const newEntry = await prisma.logEntry.create({
       data: {
@@ -4260,43 +4304,18 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
           typeof (formData as any).locationDetails === "string"
             ? (formData as any).locationDetails.trim()
             : "",
-        weatherReport:
-          (formData as any).weatherReport !== null
-            ? (formData as any).weatherReport
-            : undefined,
-        contractorPersonnel: Array.isArray((formData as any).contractorPersonnel)
-          ? (formData as any).contractorPersonnel
-          : [],
-        interventoriaPersonnel: Array.isArray((formData as any).interventoriaPersonnel)
-          ? (formData as any).interventoriaPersonnel
-          : [],
-        equipmentResources: Array.isArray((formData as any).equipmentResources)
-          ? (formData as any).equipmentResources
-          : [],
-        executedActivities: Array.isArray((formData as any).executedActivities)
-          ? (formData as any).executedActivities
-          : [],
-        executedQuantities: Array.isArray((formData as any).executedQuantities)
-          ? (formData as any).executedQuantities
-          : [],
-        scheduledActivities: Array.isArray((formData as any).scheduledActivities)
-          ? (formData as any).scheduledActivities
-          : [],
-        qualityControls: Array.isArray((formData as any).qualityControls)
-          ? (formData as any).qualityControls
-          : [],
-        materialsReceived: Array.isArray((formData as any).materialsReceived)
-          ? (formData as any).materialsReceived
-          : [],
-        safetyNotes: Array.isArray((formData as any).safetyNotes)
-          ? (formData as any).safetyNotes
-          : [],
-        projectIssues: Array.isArray((formData as any).projectIssues)
-          ? (formData as any).projectIssues
-          : [],
-        siteVisits: Array.isArray((formData as any).siteVisits)
-          ? (formData as any).siteVisits
-          : [],
+        weatherReport: normalizedWeatherReport as unknown as Prisma.InputJsonValue,
+        contractorPersonnel: normalizedContractorPersonnel as unknown as Prisma.InputJsonValue,
+        interventoriaPersonnel: normalizedInterventoriaPersonnel as unknown as Prisma.InputJsonValue,
+        equipmentResources: normalizedEquipmentResources as unknown as Prisma.InputJsonValue,
+        executedActivities: normalizedExecutedActivities as unknown as Prisma.InputJsonValue,
+        executedQuantities: normalizedExecutedQuantities as unknown as Prisma.InputJsonValue,
+        scheduledActivities: normalizedScheduledActivities as unknown as Prisma.InputJsonValue,
+        qualityControls: normalizedQualityControls as unknown as Prisma.InputJsonValue,
+        materialsReceived: normalizedMaterialsReceived as unknown as Prisma.InputJsonValue,
+        safetyNotes: normalizedSafetyNotes as unknown as Prisma.InputJsonValue,
+        projectIssues: normalizedProjectIssues as unknown as Prisma.InputJsonValue,
+        siteVisits: normalizedSiteVisits as unknown as Prisma.InputJsonValue,
         contractorObservations:
           typeof (formData as any).contractorObservations === "string"
             ? (formData as any).contractorObservations.trim()
@@ -4636,40 +4655,41 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
       dataToUpdate.locationDetails = typeof locationDetails === "string" ? locationDetails.trim() : "";
     }
     if (weatherReport !== undefined) {
-      dataToUpdate.weatherReport = weatherReport === null ? Prisma.DbNull : weatherReport;
+      const normalized = normalizeWeatherReport(weatherReport);
+      dataToUpdate.weatherReport = normalized ?? Prisma.DbNull;
     }
     if (contractorPersonnel !== undefined) {
-      dataToUpdate.contractorPersonnel = Array.isArray(contractorPersonnel) ? contractorPersonnel : [];
+      dataToUpdate.contractorPersonnel = normalizePersonnelEntries(contractorPersonnel);
     }
     if (interventoriaPersonnel !== undefined) {
-      dataToUpdate.interventoriaPersonnel = Array.isArray(interventoriaPersonnel) ? interventoriaPersonnel : [];
+      dataToUpdate.interventoriaPersonnel = normalizePersonnelEntries(interventoriaPersonnel);
     }
     if (equipmentResources !== undefined) {
-      dataToUpdate.equipmentResources = Array.isArray(equipmentResources) ? equipmentResources : [];
+      dataToUpdate.equipmentResources = normalizeEquipmentEntries(equipmentResources);
     }
     if (executedActivities !== undefined) {
-      dataToUpdate.executedActivities = Array.isArray(executedActivities) ? executedActivities : [];
+      dataToUpdate.executedActivities = normalizeListItems(executedActivities);
     }
     if (executedQuantities !== undefined) {
-      dataToUpdate.executedQuantities = Array.isArray(executedQuantities) ? executedQuantities : [];
+      dataToUpdate.executedQuantities = normalizeListItems(executedQuantities);
     }
     if (scheduledActivities !== undefined) {
-      dataToUpdate.scheduledActivities = Array.isArray(scheduledActivities) ? scheduledActivities : [];
+      dataToUpdate.scheduledActivities = normalizeListItems(scheduledActivities);
     }
     if (qualityControls !== undefined) {
-      dataToUpdate.qualityControls = Array.isArray(qualityControls) ? qualityControls : [];
+      dataToUpdate.qualityControls = normalizeListItems(qualityControls);
     }
     if (materialsReceived !== undefined) {
-      dataToUpdate.materialsReceived = Array.isArray(materialsReceived) ? materialsReceived : [];
+      dataToUpdate.materialsReceived = normalizeListItems(materialsReceived);
     }
     if (safetyNotes !== undefined) {
-      dataToUpdate.safetyNotes = Array.isArray(safetyNotes) ? safetyNotes : [];
+      dataToUpdate.safetyNotes = normalizeListItems(safetyNotes);
     }
     if (projectIssues !== undefined) {
-      dataToUpdate.projectIssues = Array.isArray(projectIssues) ? projectIssues : [];
+      dataToUpdate.projectIssues = normalizeListItems(projectIssues);
     }
     if (siteVisits !== undefined) {
-      dataToUpdate.siteVisits = Array.isArray(siteVisits) ? siteVisits : [];
+      dataToUpdate.siteVisits = normalizeListItems(siteVisits);
     }
     if (contractorObservations !== undefined) {
       dataToUpdate.contractorObservations = typeof contractorObservations === "string" ? contractorObservations.trim() : "";

@@ -3,6 +3,12 @@ import fs from "fs/promises";
 import fsSync from "fs";
 import PDFDocument from "pdfkit";
 import { PrismaClient } from "@prisma/client";
+import {
+  normalizeEquipmentEntries,
+  normalizeListItems,
+  normalizePersonnelEntries,
+  normalizeWeatherReport,
+} from "../../utils/logEntryNormalization";
 
 const GENERATED_SUBDIR = "generated";
 
@@ -103,6 +109,79 @@ export const generateLogEntryPdf = async ({
     where: { id: entry.projectId },
   });
 
+  const contractorPersonnel = normalizePersonnelEntries(entry.contractorPersonnel);
+  const interventoriaPersonnel = normalizePersonnelEntries(
+    entry.interventoriaPersonnel
+  );
+  const equipmentResources = normalizeEquipmentEntries(entry.equipmentResources);
+  const executedActivities = normalizeListItems(entry.executedActivities);
+  const executedQuantities = normalizeListItems(entry.executedQuantities);
+  const scheduledActivities = normalizeListItems(entry.scheduledActivities);
+  const qualityControls = normalizeListItems(entry.qualityControls);
+  const materialsReceived = normalizeListItems(entry.materialsReceived);
+  const safetyNotes = normalizeListItems(entry.safetyNotes);
+  const projectIssues = normalizeListItems(entry.projectIssues);
+  const siteVisits = normalizeListItems(entry.siteVisits);
+  const weatherReportNormalized = normalizeWeatherReport(entry.weatherReport);
+
+  const formatPersonnelEntry = (person: ReturnType<
+    typeof normalizePersonnelEntries
+  >[number]) => {
+    const quantity =
+      typeof person.quantity === "number" && !Number.isNaN(person.quantity)
+        ? `${person.quantity}`
+        : null;
+    const base = quantity ? `${quantity} · ${person.role}` : person.role;
+    return person.notes ? `${base} — ${person.notes}` : base;
+  };
+
+  const formatEquipmentEntry = (
+    item: ReturnType<typeof normalizeEquipmentEntries>[number]
+  ) => {
+    let label = item.name;
+    if (item.status) {
+      label += ` — ${item.status}`;
+    }
+    if (item.notes) {
+      label += item.status ? ` (${item.notes})` : ` — ${item.notes}`;
+    }
+    return label;
+  };
+
+  const contractorPersonnelLines = contractorPersonnel
+    .map(formatPersonnelEntry)
+    .filter((value): value is string => Boolean(value));
+  const interventoriaPersonnelLines = interventoriaPersonnel
+    .map(formatPersonnelEntry)
+    .filter((value): value is string => Boolean(value));
+  const equipmentResourceLines = equipmentResources
+    .map(formatEquipmentEntry)
+    .filter((value): value is string => Boolean(value));
+  const executedActivitiesLines = executedActivities
+    .map((item) => item.text)
+    .filter((text) => Boolean(text && text.trim()));
+  const executedQuantitiesLines = executedQuantities
+    .map((item) => item.text)
+    .filter((text) => Boolean(text && text.trim()));
+  const scheduledActivitiesLines = scheduledActivities
+    .map((item) => item.text)
+    .filter((text) => Boolean(text && text.trim()));
+  const qualityControlsLines = qualityControls
+    .map((item) => item.text)
+    .filter((text) => Boolean(text && text.trim()));
+  const materialsReceivedLines = materialsReceived
+    .map((item) => item.text)
+    .filter((text) => Boolean(text && text.trim()));
+  const safetyNotesLines = safetyNotes
+    .map((item) => item.text)
+    .filter((text) => Boolean(text && text.trim()));
+  const projectIssuesLines = projectIssues
+    .map((item) => item.text)
+    .filter((text) => Boolean(text && text.trim()));
+  const siteVisitsLines = siteVisits
+    .map((item) => item.text)
+    .filter((text) => Boolean(text && text.trim()));
+
   const generatedDir = path.join(uploadsDir, GENERATED_SUBDIR);
   await fs.mkdir(generatedDir, { recursive: true });
 
@@ -165,6 +244,18 @@ export const generateLogEntryPdf = async ({
       ["Tipo", entryTypeLabels[entry.type] || entry.type],
       ["Confidencial", entry.isConfidential ? "Sí" : "No"],
       [
+        "Día del plazo",
+        entry.scheduleDay && entry.scheduleDay.trim()
+          ? entry.scheduleDay.trim()
+          : "—",
+      ],
+      [
+        "Localización / Tramo",
+        entry.locationDetails && entry.locationDetails.trim()
+          ? entry.locationDetails.trim()
+          : entry.location || "—",
+      ],
+      [
         "Asignados",
         entry.assignees.length
           ? entry.assignees.map((user) => user.fullName).join(", ")
@@ -193,32 +284,159 @@ export const generateLogEntryPdf = async ({
         .text(value || "—");
     });
 
-    const sections: Array<[string, string]> = [
-      ["Resumen general del día", entry.description || "Sin resumen."],
-      ["Actividades realizadas", entry.activitiesPerformed || "Sin registro."],
-      ["Materiales utilizados", entry.materialsUsed || "Sin registro."],
-      ["Personal en obra", entry.workforce || "Sin registro."],
-      [
-        "Condiciones climáticas",
-        entry.weatherConditions || "Sin registro.",
-      ],
-      [
-        "Observaciones adicionales",
-        entry.additionalObservations || "Sin observaciones.",
-      ],
-    ];
-
-    sections.forEach(([title, value]) => {
+    const drawSectionTitle = (title: string) => {
       doc.moveDown();
       doc.font("Helvetica-Bold").fontSize(13).text(title);
-      doc.moveDown(0.25);
-      doc
-        .font("Helvetica")
-        .fontSize(11)
-        .text(value, {
-          align: "justify",
+      doc.moveDown(0.3);
+    };
+
+    const drawSubheading = (title: string) => {
+      doc.font("Helvetica-Bold").fontSize(11).text(title);
+      doc.moveDown(0.15);
+    };
+
+    const drawParagraph = (text: string) => {
+      doc.font("Helvetica").fontSize(11).text(text, {
+        align: "justify",
+      });
+      doc.moveDown(0.2);
+    };
+
+    const drawParagraphOrPlaceholder = (text?: string | null) => {
+      const normalized =
+        typeof text === "string" ? text.trim() : "";
+      drawParagraph(normalized || "Sin registro.");
+    };
+
+    const drawList = (items: string[]) => {
+      if (!items.length) {
+        drawParagraph("Sin registro.");
+      } else {
+        doc.font("Helvetica").fontSize(11).list(items, {
+          bulletRadius: 2,
         });
-    });
+        doc.moveDown(0.2);
+      }
+    };
+
+    const generalInfoItems = [
+      project ? `Identificación del proyecto: ${project.name}` : null,
+      project?.contractId
+        ? `Contrato: ${project.contractId}`
+        : null,
+      entry.scheduleDay && entry.scheduleDay.trim()
+        ? `Día del plazo: ${entry.scheduleDay.trim()}`
+        : null,
+      entry.locationDetails && entry.locationDetails.trim()
+        ? `Localización / Tramo: ${entry.locationDetails.trim()}`
+        : entry.location
+        ? `Localización / Tramo: ${entry.location}`
+        : null,
+    ].filter((value): value is string => Boolean(value));
+
+    const rainIntervalLines = (weatherReportNormalized?.rainEvents || [])
+      .map((event) => {
+        const start =
+          event.start && event.start.trim().length
+            ? event.start.trim()
+            : "—";
+        const end =
+          event.end && event.end.trim().length
+            ? event.end.trim()
+            : "—";
+        return `${start} a ${end}`;
+      })
+      .filter((value) => Boolean(value));
+
+    const normalizedWeatherNotes =
+      weatherReportNormalized?.notes?.trim?.() || "";
+
+    const weatherConditionsText =
+      entry.weatherConditions && entry.weatherConditions.trim()
+        ? entry.weatherConditions.trim()
+        : "";
+
+    drawSectionTitle("Resumen general del día");
+    drawParagraphOrPlaceholder(entry.description);
+
+    drawSectionTitle("Información general y contexto");
+    if (generalInfoItems.length) {
+      drawList(generalInfoItems);
+    } else {
+      drawParagraph("Sin datos adicionales.");
+    }
+
+    drawSectionTitle("Condiciones climáticas");
+    if (
+      !weatherReportNormalized &&
+      !weatherConditionsText
+    ) {
+      drawParagraph("Sin registro.");
+    } else {
+      if (weatherReportNormalized?.summary) {
+        drawParagraph(`Resumen: ${weatherReportNormalized.summary}`);
+      }
+      if (weatherReportNormalized?.temperature) {
+        drawParagraph(
+          `Temperatura: ${weatherReportNormalized.temperature}`
+        );
+      }
+      if (normalizedWeatherNotes) {
+        drawParagraph(`Notas: ${normalizedWeatherNotes}`);
+      }
+      if (rainIntervalLines.length) {
+        drawSubheading("Lluvias registradas");
+        drawList(rainIntervalLines);
+      }
+      if (
+        weatherConditionsText &&
+        weatherConditionsText !== normalizedWeatherNotes
+      ) {
+        drawParagraph(weatherConditionsText);
+      }
+    }
+
+    drawSectionTitle("Recursos utilizados (Personal y Equipos)");
+    drawSubheading("Personal en obra (resumen)");
+    drawParagraphOrPlaceholder(entry.workforce);
+    drawSubheading("Personal del contratista");
+    drawList(contractorPersonnelLines);
+    drawSubheading("Personal de la interventoría");
+    drawList(interventoriaPersonnelLines);
+    drawSubheading("Maquinaria y equipo");
+    drawList(equipmentResourceLines);
+    drawSubheading("Materiales utilizados");
+    drawParagraphOrPlaceholder(entry.materialsUsed);
+
+    drawSectionTitle("Ejecución de actividades y avance");
+    drawSubheading("Descripción de actividades ejecutadas");
+    drawParagraphOrPlaceholder(entry.activitiesPerformed);
+    drawSubheading("Cantidades de obra ejecutadas");
+    drawList(executedQuantitiesLines);
+    drawSubheading("Detalle de actividades por frente");
+    drawList(executedActivitiesLines);
+    drawSubheading("Actividades programadas y no ejecutadas");
+    drawList(scheduledActivitiesLines);
+
+    drawSectionTitle("Control, novedades e incidencias");
+    drawSubheading("Control de calidad");
+    drawList(qualityControlsLines);
+    drawSubheading("Materiales recibidos");
+    drawList(materialsReceivedLines);
+    drawSubheading("Gestión HSEQ / SST");
+    drawList(safetyNotesLines);
+    drawSubheading("Novedades y contratiempos");
+    drawList(projectIssuesLines);
+    drawSubheading("Visitas");
+    drawList(siteVisitsLines);
+
+    drawSectionTitle("Cierre y firmas");
+    drawSubheading("Observaciones del contratista");
+    drawParagraphOrPlaceholder(entry.contractorObservations);
+    drawSubheading("Observaciones de la interventoría");
+    drawParagraphOrPlaceholder(entry.interventoriaObservations);
+    drawSubheading("Observaciones adicionales");
+    drawParagraphOrPlaceholder(entry.additionalObservations);
 
     doc.moveDown();
     doc.font("Helvetica-Bold").fontSize(13).text("Firmas registradas");
