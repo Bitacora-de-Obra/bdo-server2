@@ -662,6 +662,83 @@ const formatLogEntry = (entry: any) => {
       ? [mapUserBasic(entry.author)].filter(Boolean)
       : [];
 
+  const normalizeSignedAt = (value: any) => {
+    if (!value) {
+      return null;
+    }
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+    if (typeof value === "string") {
+      return value;
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  };
+
+  const signaturesBySignerId = new Map<string, any>();
+
+  (entry.signatures || []).forEach((signature: any) => {
+    const signerId = signature.signerId || signature.signer?.id;
+    if (!signerId) return;
+
+    signaturesBySignerId.set(signerId, {
+      ...signature,
+      signerId,
+      signer: mapUserBasic(signature.signer),
+      signedAt: normalizeSignedAt(signature.signedAt),
+    });
+  });
+
+  const normalizedSignatures: Array<{
+    id: string;
+    logEntryId: string;
+    signerId: string | undefined;
+    signer: ReturnType<typeof mapUserBasic> | null;
+    signedAt: string | null;
+    signatureTaskId: string | null;
+    signatureTaskStatus: string | null;
+  }> = [];
+
+  formattedSignatureTasks.forEach((task) => {
+    const signer = task.signer;
+    if (!signer) return;
+
+    const signerId = signer.id;
+    const existing = signaturesBySignerId.get(signerId);
+    const taskSignedAt = normalizeSignedAt(task.signedAt);
+
+    normalizedSignatures.push({
+      id: existing?.id || `task-${task.id}`,
+      logEntryId: entry.id,
+      signerId,
+      signer: signer || mapUserBasic(existing?.signer),
+      signedAt: existing?.signedAt || taskSignedAt,
+      signatureTaskId: task.id,
+      signatureTaskStatus: task.status,
+    });
+
+    if (existing && signerId) {
+      signaturesBySignerId.delete(signerId);
+    }
+  });
+
+  signaturesBySignerId.forEach((signature) => {
+    const fallbackSignedAt = normalizeSignedAt(signature.signedAt);
+    const signer = mapUserBasic(signature.signer);
+    const signerId = signature.signerId || signer?.id;
+
+    normalizedSignatures.push({
+      id: signature.id,
+      logEntryId: entry.id,
+      signerId,
+      signer,
+      signedAt: fallbackSignedAt,
+      signatureTaskId: null,
+      signatureTaskStatus: fallbackSignedAt ? "SIGNED" : null,
+    });
+  });
+
   return {
     ...entry,
     type: entryTypeReverseMap[entry.type] || entry.type,
@@ -683,14 +760,24 @@ const formatLogEntry = (entry: any) => {
           : comment.timestamp,
     })),
     attachments: (entry.attachments || []).map(buildAttachmentResponse),
-    signatures: (entry.signatures || []).map((signature: any) => ({
-      ...signature,
-      signedAt:
-        signature.signedAt instanceof Date
-          ? signature.signedAt.toISOString()
-          : signature.signedAt,
-    })),
+    signatures: normalizedSignatures,
     assignees: (entry.assignees || []).map(mapUserBasic).filter(Boolean),
+    scheduleDay: entry.scheduleDay || "",
+    locationDetails: entry.locationDetails || "",
+    weatherReport: entry.weatherReport || null,
+    contractorPersonnel: entry.contractorPersonnel || [],
+    interventoriaPersonnel: entry.interventoriaPersonnel || [],
+    equipmentResources: entry.equipmentResources || [],
+    executedActivities: entry.executedActivities || [],
+    executedQuantities: entry.executedQuantities || [],
+    scheduledActivities: entry.scheduledActivities || [],
+    qualityControls: entry.qualityControls || [],
+    materialsReceived: entry.materialsReceived || [],
+    safetyNotes: entry.safetyNotes || [],
+    projectIssues: entry.projectIssues || [],
+    siteVisits: entry.siteVisits || [],
+    contractorObservations: entry.contractorObservations || "",
+    interventoriaObservations: entry.interventoriaObservations || "",
     requiredSignatories: requiredSigners,
     signatureTasks: formattedSignatureTasks,
     signatureSummary: {
@@ -4032,6 +4119,35 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
         }
       }
 
+      const parseJsonField = (fieldName: string, fallback: any) => {
+        const value = (req.body as any)[fieldName];
+        if (value === undefined || value === null || value === "") {
+          return fallback;
+        }
+        if (typeof value === "string") {
+          try {
+            return JSON.parse(value);
+          } catch (e) {
+            console.warn(`Error parsing ${fieldName}:`, e);
+            return fallback;
+          }
+        }
+        return value;
+      };
+
+      formData.weatherReport = parseJsonField("weatherReport", null);
+      formData.contractorPersonnel = parseJsonField("contractorPersonnel", []);
+      formData.interventoriaPersonnel = parseJsonField("interventoriaPersonnel", []);
+      formData.equipmentResources = parseJsonField("equipmentResources", []);
+      formData.executedActivities = parseJsonField("executedActivities", []);
+      formData.executedQuantities = parseJsonField("executedQuantities", []);
+      formData.scheduledActivities = parseJsonField("scheduledActivities", []);
+      formData.qualityControls = parseJsonField("qualityControls", []);
+      formData.materialsReceived = parseJsonField("materialsReceived", []);
+      formData.safetyNotes = parseJsonField("safetyNotes", []);
+      formData.projectIssues = parseJsonField("projectIssues", []);
+      formData.siteVisits = parseJsonField("siteVisits", []);
+
       const parseBoolean = (value: unknown): boolean => {
         if (typeof value === "boolean") return value;
         if (typeof value === "string") {
@@ -4136,6 +4252,59 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
         additionalObservations: String(additionalObservations),
         isConfidential: isConfidentialValue,
         status: prismaStatus,
+        scheduleDay:
+          typeof (formData as any).scheduleDay === "string"
+            ? (formData as any).scheduleDay.trim()
+            : "",
+        locationDetails:
+          typeof (formData as any).locationDetails === "string"
+            ? (formData as any).locationDetails.trim()
+            : "",
+        weatherReport:
+          (formData as any).weatherReport !== null
+            ? (formData as any).weatherReport
+            : undefined,
+        contractorPersonnel: Array.isArray((formData as any).contractorPersonnel)
+          ? (formData as any).contractorPersonnel
+          : [],
+        interventoriaPersonnel: Array.isArray((formData as any).interventoriaPersonnel)
+          ? (formData as any).interventoriaPersonnel
+          : [],
+        equipmentResources: Array.isArray((formData as any).equipmentResources)
+          ? (formData as any).equipmentResources
+          : [],
+        executedActivities: Array.isArray((formData as any).executedActivities)
+          ? (formData as any).executedActivities
+          : [],
+        executedQuantities: Array.isArray((formData as any).executedQuantities)
+          ? (formData as any).executedQuantities
+          : [],
+        scheduledActivities: Array.isArray((formData as any).scheduledActivities)
+          ? (formData as any).scheduledActivities
+          : [],
+        qualityControls: Array.isArray((formData as any).qualityControls)
+          ? (formData as any).qualityControls
+          : [],
+        materialsReceived: Array.isArray((formData as any).materialsReceived)
+          ? (formData as any).materialsReceived
+          : [],
+        safetyNotes: Array.isArray((formData as any).safetyNotes)
+          ? (formData as any).safetyNotes
+          : [],
+        projectIssues: Array.isArray((formData as any).projectIssues)
+          ? (formData as any).projectIssues
+          : [],
+        siteVisits: Array.isArray((formData as any).siteVisits)
+          ? (formData as any).siteVisits
+          : [],
+        contractorObservations:
+          typeof (formData as any).contractorObservations === "string"
+            ? (formData as any).contractorObservations.trim()
+            : "",
+        interventoriaObservations:
+          typeof (formData as any).interventoriaObservations === "string"
+            ? (formData as any).interventoriaObservations.trim()
+            : "",
         author: { connect: { id: formData.authorId } },
         project: { connect: { id: formData.projectId } },
         assignees: {
@@ -4353,6 +4522,22 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
       assignees = [],
       attachments = [],
       requiredSignatories: requiredSignatoriesPayload,
+      scheduleDay,
+      locationDetails,
+      weatherReport,
+      contractorPersonnel,
+      interventoriaPersonnel,
+      equipmentResources,
+      executedActivities,
+      executedQuantities,
+      scheduledActivities,
+      qualityControls,
+      materialsReceived,
+      safetyNotes,
+      projectIssues,
+      siteVisits,
+      contractorObservations,
+      interventoriaObservations,
     } = req.body;
 
     const prismaType = entryTypeMap[type] || existingEntry.type;
@@ -4444,6 +4629,54 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
     if (workforce !== undefined) dataToUpdate.workforce = String(workforce ?? "");
     if (weatherConditions !== undefined) dataToUpdate.weatherConditions = String(weatherConditions ?? "");
     if (additionalObservations !== undefined) dataToUpdate.additionalObservations = String(additionalObservations ?? "");
+    if (scheduleDay !== undefined) {
+      dataToUpdate.scheduleDay = typeof scheduleDay === "string" ? scheduleDay.trim() : "";
+    }
+    if (locationDetails !== undefined) {
+      dataToUpdate.locationDetails = typeof locationDetails === "string" ? locationDetails.trim() : "";
+    }
+    if (weatherReport !== undefined) {
+      dataToUpdate.weatherReport = weatherReport === null ? Prisma.DbNull : weatherReport;
+    }
+    if (contractorPersonnel !== undefined) {
+      dataToUpdate.contractorPersonnel = Array.isArray(contractorPersonnel) ? contractorPersonnel : [];
+    }
+    if (interventoriaPersonnel !== undefined) {
+      dataToUpdate.interventoriaPersonnel = Array.isArray(interventoriaPersonnel) ? interventoriaPersonnel : [];
+    }
+    if (equipmentResources !== undefined) {
+      dataToUpdate.equipmentResources = Array.isArray(equipmentResources) ? equipmentResources : [];
+    }
+    if (executedActivities !== undefined) {
+      dataToUpdate.executedActivities = Array.isArray(executedActivities) ? executedActivities : [];
+    }
+    if (executedQuantities !== undefined) {
+      dataToUpdate.executedQuantities = Array.isArray(executedQuantities) ? executedQuantities : [];
+    }
+    if (scheduledActivities !== undefined) {
+      dataToUpdate.scheduledActivities = Array.isArray(scheduledActivities) ? scheduledActivities : [];
+    }
+    if (qualityControls !== undefined) {
+      dataToUpdate.qualityControls = Array.isArray(qualityControls) ? qualityControls : [];
+    }
+    if (materialsReceived !== undefined) {
+      dataToUpdate.materialsReceived = Array.isArray(materialsReceived) ? materialsReceived : [];
+    }
+    if (safetyNotes !== undefined) {
+      dataToUpdate.safetyNotes = Array.isArray(safetyNotes) ? safetyNotes : [];
+    }
+    if (projectIssues !== undefined) {
+      dataToUpdate.projectIssues = Array.isArray(projectIssues) ? projectIssues : [];
+    }
+    if (siteVisits !== undefined) {
+      dataToUpdate.siteVisits = Array.isArray(siteVisits) ? siteVisits : [];
+    }
+    if (contractorObservations !== undefined) {
+      dataToUpdate.contractorObservations = typeof contractorObservations === "string" ? contractorObservations.trim() : "";
+    }
+    if (interventoriaObservations !== undefined) {
+      dataToUpdate.interventoriaObservations = typeof interventoriaObservations === "string" ? interventoriaObservations.trim() : "";
+    }
 
     if (entryDate !== undefined || activityStartDate !== undefined || activityEndDate !== undefined) {
       const baseDate = entryDate || activityStartDate || existingEntry.entryDate;
