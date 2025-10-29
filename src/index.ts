@@ -778,6 +778,26 @@ const formatLogEntry = (entry: any) => {
     }
   });
 
+  // Asegurar que las firmas existentes se muestren correctamente
+  // Si hay una firma en la tabla Signature pero no en normalizedSignatures, agregarla
+  (entry.signatures || []).forEach((signature: any) => {
+    const signerId = signature.signerId || signature.signer?.id;
+    if (!signerId) return;
+    
+    const alreadyIncluded = normalizedSignatures.some(sig => sig.signerId === signerId);
+    if (!alreadyIncluded) {
+      normalizedSignatures.push({
+        id: signature.id,
+        logEntryId: entry.id,
+        signerId,
+        signer: mapUserBasic(signature.signer),
+        signedAt: normalizeSignedAt(signature.signedAt),
+        signatureTaskId: null,
+        signatureTaskStatus: signature.signedAt ? "SIGNED" : "PENDING",
+      });
+    }
+  });
+
   return {
     ...entry,
     type: entryTypeReverseMap[entry.type] || entry.type,
@@ -1192,8 +1212,8 @@ app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, r
         : "El usuario consiente el uso de su firma manuscrita digital para este documento.";
 
     const page = req.body?.page !== undefined ? Number(req.body.page) : undefined;
-    const x = req.body?.x !== undefined ? Number(req.body.x) : undefined;
-    const y = req.body?.y !== undefined ? Number(req.body.y) : undefined;
+    let x = req.body?.x !== undefined ? Number(req.body.x) : undefined;
+    let y = req.body?.y !== undefined ? Number(req.body.y) : undefined;
     const width = req.body?.width !== undefined ? Number(req.body.width) : undefined;
     const height = req.body?.height !== undefined ? Number(req.body.height) : undefined;
     const baselineRaw = req.body?.baseline;
@@ -1205,6 +1225,11 @@ app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, r
     const baselineRatio =
       req.body?.baselineRatio !== undefined && req.body?.baselineRatio !== null
         ? Number(req.body.baselineRatio)
+        : undefined;
+    let baselineEffective = baseline;
+    let normalizedBaselineRatio =
+      baselineRatio !== undefined
+        ? Math.min(Math.max(baselineRatio, 0), 1)
         : undefined;
 
     if (
@@ -1272,6 +1297,27 @@ app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, r
       if (latestSignature?.signedAttachment?.id) {
         baseAttachment = latestSignature.signedAttachment as any;
       }
+
+      // Reglas anti-duplicado para firmas manuscritas en anotaciones
+      if (documentType === "logEntry") {
+        const logEntry = await prisma.logEntry.findUnique({
+          where: { id: documentId },
+          include: { signatureTasks: true },
+        });
+        if (!logEntry) {
+          return res.status(404).json({ error: "Anotación no encontrada." });
+        }
+        if (logEntry.status === 'SIGNED') {
+          return res.status(409).json({ error: "El documento ya fue completamente firmado.", code: "DOCUMENT_LOCKED" });
+        }
+        const task = logEntry.signatureTasks.find((t: any) => t.signerId === userId);
+        if (!task) {
+          return res.status(403).json({ error: "No tienes tarea de firma asignada en esta anotación." });
+        }
+        if (task.status === 'SIGNED') {
+          return res.status(409).json({ error: "Ya has firmado esta anotación.", code: "ALREADY_SIGNED" });
+        }
+      }
     }
 
     const [originalBuffer, signatureBuffer] = await Promise.all([
@@ -1279,10 +1325,47 @@ app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, r
       loadUserSignatureBuffer(signature),
     ]);
 
-    const normalizedBaselineRatio =
-      baselineRatio !== undefined
-        ? Math.min(Math.max(baselineRatio, 0), 1)
-        : undefined;
+    // Si no recibimos coordenadas, calcularlas automáticamente para alinear con el cuadro del firmante
+    if ((x === undefined || y === undefined) && baseAttachment.logEntryId) {
+      const logEntry = await prisma.logEntry.findUnique({
+        where: { id: baseAttachment.logEntryId },
+        include: {
+          author: true,
+          assignees: true,
+          signatures: { include: { signer: true } },
+          signatureTasks: { include: { signer: true }, orderBy: { assignedAt: 'asc' } },
+        },
+      });
+      if (logEntry) {
+        // Priorizar el índice tal como aparece en signatureTasks (que define el orden en PDF)
+        const orderedTasks = (logEntry.signatureTasks || [])
+          .filter((t: any) => t?.signer?.id)
+          .sort((a: any, b: any) => new Date(a.assignedAt || 0).getTime() - new Date(b.assignedAt || 0).getTime());
+        let signerIndex = orderedTasks.findIndex((t: any) => t.signer?.id === userId);
+        if (signerIndex < 0) {
+          // Si el firmante no está en tareas, ubicar en el primer recuadro pendiente
+          signerIndex = orderedTasks.findIndex((t: any) => t.status !== 'SIGNED');
+        }
+        if (signerIndex < 0) signerIndex = 0; // último recurso
+        const MARGIN = 48; // Debe coincidir con pdfExport
+        const BOX_H = 110;
+        const GAP = 16;
+        const LINE_Y = 72; // línea de firma relativa al inicio del box
+        const LINE_X = 70; // desplazamiento respecto al margen izquierdo
+        y = y === undefined ? MARGIN + signerIndex * (BOX_H + GAP) + LINE_Y : y;
+        x = x === undefined ? MARGIN + LINE_X : x;
+        if (width === undefined) {
+          // ancho moderado para no invadir otros recuadros
+          (width as any) = 220;
+        }
+        if (height === undefined) {
+          // alto pequeño para caber entre la línea y el borde inferior
+          (height as any) = 28;
+        }
+        baselineEffective = true;
+        if (normalizedBaselineRatio === undefined) normalizedBaselineRatio = 0.25;
+      }
+    }
 
     const signedBuffer = await applySignatureToPdf({
       originalPdf: originalBuffer,
@@ -1296,8 +1379,9 @@ app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, r
         y,
         width,
         height,
-        baseline,
+        baseline: baselineEffective,
         baselineRatio: normalizedBaselineRatio,
+        fromTop: true,
       },
     });
 
@@ -4432,8 +4516,9 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
           data: {
             logEntryId: newEntry.id,
             signerId,
-            status: signerId === formData.authorId ? "SIGNED" : "PENDING",
-            signedAt: signerId === formData.authorId ? new Date() : undefined,
+            // No auto-firmar al autor: todos inician en PENDING
+            status: 'PENDING',
+            signedAt: undefined,
           },
         });
       }
@@ -4454,31 +4539,7 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
       }
     }
 
-    if (formData.authorId) {
-      try {
-        const existingAuthorSignature = await prisma.signature.findFirst({
-          where: {
-            logEntryId: newEntry.id,
-            signerId: formData.authorId,
-          },
-        });
-        if (!existingAuthorSignature) {
-          await prisma.signature.create({
-            data: {
-              signer: { connect: { id: formData.authorId } },
-              logEntry: { connect: { id: newEntry.id } },
-              signedAt: new Date(),
-            },
-          });
-        }
-      } catch (signatureError) {
-        console.warn("No se pudo registrar la firma automática del autor.", {
-          error: signatureError,
-          logEntryId: newEntry.id,
-          authorId: formData.authorId,
-        });
-      }
-    }
+    // Eliminado: no se registra firma automática del autor al crear
 
     const creationChanges: { fieldName: string; oldValue?: string | null; newValue?: string | null }[] = [];
 
@@ -5095,22 +5156,199 @@ app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequ
       return res.status(404).json({ error: "Anotación no encontrada." });
     }
 
+    const entryWithTasks = await prisma.logEntry.findUnique({
+      where: { id },
+      include: { signatureTasks: true },
+    });
+    if (!entryWithTasks) {
+      return res.status(404).json({ error: "Anotación no encontrada." });
+    }
+    const myTask = entryWithTasks.signatureTasks.find((t) => t.signerId === signerId);
+    if (!myTask) {
+      return res.status(403).json({ error: "No tienes tarea de firma asignada en esta anotación." });
+    }
+    if (myTask.status === 'SIGNED') {
+      return res.status(409).json({ error: "Ya has firmado esta anotación.", code: "ALREADY_SIGNED" });
+    }
+
     const existingSignature = await prisma.signature.findFirst({
       where: { logEntryId: id, signerId },
     });
 
     if (existingSignature) {
-      await prisma.signature.update({
-        where: { id: existingSignature.id },
-        data: { signedAt: new Date() },
-      });
-    } else {
-      await prisma.signature.create({
-        data: {
-          signer: { connect: { id: signerId } },
-          logEntry: { connect: { id } },
-        },
-      });
+      // Idempotente: no crear/actualizar otra firma ni repetir
+      return res.status(409).json({ error: "Ya has firmado esta anotación.", code: "ALREADY_SIGNED" });
+    }
+
+    // Crear la firma en la base de datos
+    await prisma.signature.create({
+      data: {
+        signer: { connect: { id: signerId } },
+        logEntry: { connect: { id } },
+        signedAt: new Date(),
+      },
+    });
+
+    // Si el usuario tiene firma manuscrita registrada, aplicarla al PDF base
+    const userSignature = await prisma.userSignature.findUnique({
+      where: { userId: signerId },
+    });
+
+    if (userSignature) {
+      try {
+        // Buscar el PDF más reciente firmado para acumular firmas
+        // Primero buscar PDFs firmados (que contengan "firmado" en el nombre)
+        let basePdf = await prisma.attachment.findFirst({
+          where: { 
+            logEntryId: id,
+            type: "application/pdf",
+            fileName: { contains: "firmado" }
+          },
+          orderBy: { createdAt: "desc" },
+        });
+
+        // Si no hay PDFs firmados, buscar el original
+        if (!basePdf) {
+          basePdf = await prisma.attachment.findFirst({
+            where: { 
+              logEntryId: id,
+              type: "application/pdf",
+              fileName: { not: { contains: "firmado" } }
+            },
+            orderBy: { createdAt: "asc" },
+          });
+        }
+
+        // Si aún no hay PDF, buscar cualquier PDF
+        if (!basePdf) {
+          basePdf = await prisma.attachment.findFirst({
+            where: { 
+              logEntryId: id,
+              type: "application/pdf"
+            },
+            orderBy: { createdAt: "desc" },
+          });
+        }
+
+        // Si no hay PDF, generar uno automáticamente antes de firmar
+        if (!basePdf) {
+          console.log("No hay PDF existente, generando uno automáticamente...");
+          try {
+            const baseUrl = process.env.SERVER_PUBLIC_URL || `http://localhost:4001`;
+            const result = await generateLogEntryPdf({
+              prisma,
+              logEntryId: id,
+              uploadsDir: process.env.UPLOADS_DIR || "./uploads",
+              baseUrl,
+            });
+            
+            // Buscar el PDF recién generado
+            basePdf = await prisma.attachment.findFirst({
+              where: { 
+                logEntryId: id,
+                type: "application/pdf"
+              },
+              orderBy: { createdAt: "desc" },
+            });
+            
+            if (basePdf) {
+              console.log(`PDF generado automáticamente: ${basePdf.fileName}`);
+            }
+          } catch (pdfError) {
+            console.warn("No se pudo generar PDF automáticamente:", pdfError);
+          }
+        }
+
+        if (basePdf) {
+          console.log(`Aplicando firma manuscrita al PDF: ${basePdf.fileName} (ID: ${basePdf.id})`);
+          // Aplicar firma manuscrita al PDF base
+          const [originalBuffer, signatureBuffer] = await Promise.all([
+            loadAttachmentBuffer(basePdf),
+            loadUserSignatureBuffer(userSignature),
+          ]);
+
+          // Calcular posición automática
+          const logEntry = await prisma.logEntry.findUnique({
+            where: { id },
+            include: { signatureTasks: { include: { signer: true }, orderBy: { assignedAt: 'asc' } } },
+          });
+
+          if (logEntry) {
+            const orderedTasks = (logEntry.signatureTasks || [])
+              .filter((t: any) => t?.signer?.id)
+              .sort((a: any, b: any) => new Date(a.assignedAt || 0).getTime() - new Date(b.assignedAt || 0).getTime());
+            let signerIndex = orderedTasks.findIndex((t: any) => t.signer?.id === signerId);
+            if (signerIndex < 0) signerIndex = 0;
+
+            const MARGIN = 48;
+            const BOX_H = 110;
+            const GAP = 16;
+            const LINE_Y = 72;
+            const LINE_X = 70;
+            const yPos = MARGIN + signerIndex * (BOX_H + GAP) + LINE_Y;
+            const xPos = MARGIN + LINE_X;
+
+            const signedBuffer = await applySignatureToPdf({
+              originalPdf: originalBuffer,
+              signature: {
+                buffer: signatureBuffer,
+                mimeType: userSignature.mimeType,
+              },
+              position: {
+                x: xPos,
+                y: yPos,
+                width: 220,
+                height: 28,
+                baseline: true,
+                baselineRatio: 0.25,
+                fromTop: true,
+              },
+            });
+
+            // Crear nuevo PDF firmado para acumular firmas
+            const storage = getStorage();
+            const parsedFileName = path.parse(basePdf.fileName || "documento.pdf");
+            const signedFileName = `${parsedFileName.name}-firmado-${Date.now()}.pdf`;
+            const signedKey = createStorageKey(
+              `signed-documents/${signerId}`,
+              signedFileName
+            );
+            await storage.save({ path: signedKey, content: signedBuffer });
+            const signedUrl = storage.getPublicUrl(signedKey);
+
+            // Crear nuevo adjunto firmado
+            const signedAttachment = await prisma.attachment.create({
+              data: {
+                fileName: signedFileName,
+                url: signedUrl,
+                storagePath: signedKey,
+                size: signedBuffer.length,
+                type: "application/pdf",
+                logEntryId: id,
+              },
+            });
+
+            // Registrar el log de firma
+            await prisma.documentSignatureLog.create({
+              data: {
+                signerId: signerId,
+                documentType: "logEntry",
+                documentId: id,
+                originalAttachmentId: basePdf.id,
+                signedAttachmentId: signedAttachment.id,
+                originalHash: sha256(originalBuffer),
+                signedHash: sha256(signedBuffer),
+                ipAddress: req.ip,
+                consentStatement: "Firma aplicada mediante contraseña",
+              },
+            });
+          }
+        } else {
+          console.log("No se encontró PDF para aplicar firma manuscrita");
+        }
+      } catch (signatureError) {
+        console.warn("No se pudo aplicar la firma manuscrita automáticamente:", signatureError);
+      }
     }
 
     await prisma.logEntrySignatureTask.updateMany({

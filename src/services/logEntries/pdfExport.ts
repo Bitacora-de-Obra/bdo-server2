@@ -507,7 +507,8 @@ export const generateLogEntryPdf = async ({
       });
     }
 
-    doc.moveDown();
+    // Forzar que la sección de firmas inicie en una nueva página con layout predecible
+    doc.addPage();
     doc.font("Helvetica-Bold").fontSize(13).text("Firmas requeridas");
     doc.moveDown(0.35);
 

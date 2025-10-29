@@ -8,6 +8,8 @@ interface SignaturePosition {
   height?: number;
   baseline?: boolean;
   baselineRatio?: number;
+  // If true, interpret y as distance from TOP of the page instead of bottom
+  fromTop?: boolean;
 }
 
 interface ApplySignatureInput {
@@ -64,9 +66,16 @@ export const applySignatureToPdf = async ({
 
     const finalHeight = height ?? scaledHeight;
     const baselineRatio = position?.baselineRatio ?? 0.65;
-    let y = position?.baseline
-      ? rawY - finalHeight * baselineRatio
-      : rawY;
+    let y = rawY;
+    if (position?.fromTop) {
+      // Convert top-origin baseline coordinate to pdf-lib bottom-origin
+      const baselineYFromTop = rawY;
+      y = position?.baseline
+        ? (pageHeight - baselineYFromTop) - finalHeight * baselineRatio
+        : (pageHeight - baselineYFromTop) - finalHeight;
+    } else {
+      y = position?.baseline ? rawY - finalHeight * baselineRatio : rawY;
+    }
     y = Math.max(
       DEFAULT_MARGIN,
       Math.min(y, pageHeight - finalHeight - DEFAULT_MARGIN)
@@ -85,9 +94,15 @@ export const applySignatureToPdf = async ({
     const scaledHeight = embedHeight * scale;
     const finalHeight = height ?? scaledHeight;
     const baselineRatio = position?.baselineRatio ?? 0.65;
-    let y = position?.baseline
-      ? rawY - finalHeight * baselineRatio
-      : rawY;
+    let y = rawY;
+    if (position?.fromTop) {
+      const baselineYFromTop = rawY;
+      y = position?.baseline
+        ? (pageHeight - baselineYFromTop) - finalHeight * baselineRatio
+        : (pageHeight - baselineYFromTop) - finalHeight;
+    } else {
+      y = position?.baseline ? rawY - finalHeight * baselineRatio : rawY;
+    }
     y = Math.max(
       DEFAULT_MARGIN,
       Math.min(y, pageHeight - finalHeight - DEFAULT_MARGIN)
@@ -109,9 +124,15 @@ export const applySignatureToPdf = async ({
     const scaledHeight = embedHeight * scale;
     const finalHeight = height ?? scaledHeight;
     const baselineRatio = position?.baselineRatio ?? 0.65;
-    let y = position?.baseline
-      ? rawY - finalHeight * baselineRatio
-      : rawY;
+    let y = rawY;
+    if (position?.fromTop) {
+      const baselineYFromTop = rawY;
+      y = position?.baseline
+        ? (pageHeight - baselineYFromTop) - finalHeight * baselineRatio
+        : (pageHeight - baselineYFromTop) - finalHeight;
+    } else {
+      y = position?.baseline ? rawY - finalHeight * baselineRatio : rawY;
+    }
     y = Math.max(
       DEFAULT_MARGIN,
       Math.min(y, pageHeight - finalHeight - DEFAULT_MARGIN)
