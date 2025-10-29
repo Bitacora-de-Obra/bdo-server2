@@ -630,120 +630,152 @@ const extractUserIds = (input: unknown): string[] => {
   return Array.from(ids);
 };
 
-const formatLogEntry = (entry: any) => {
-  const signatureTasksRaw: any[] = entry.signatureTasks || [];
-  const formattedSignatureTasks: Array<{
+interface SignatureRecord {
+  id: string;
+  signerId?: string;
+  signer?: {
     id: string;
-    status: string;
-    assignedAt: string | null;
-    signedAt?: string | null;
-    signer: ReturnType<typeof mapUserBasic> | null;
-  }> = signatureTasksRaw.map((task: any) => ({
+    [key: string]: any;
+  };
+  signedAt?: Date | string | null;
+  signatureTaskId?: string | null;
+}
+
+interface NormalizedSignature {
+  id: string;
+  logEntryId: string;
+  signerId: string;
+  signer: {
+    id: string;
+    fullName?: string;
+    email?: string;
+    avatarUrl?: string;
+    appRole?: string;
+    projectRole?: string;
+  } | null;
+  signedAt: Date | string | null;
+  signatureTaskId: string | null;
+  signatureTaskStatus: 'SIGNED' | 'PENDING';
+}
+
+interface SignatureTask {
+  id: string;
+  status: 'SIGNED' | 'PENDING';
+  assignedAt: Date | string | null;
+  signedAt?: Date | string | null;
+  signer: {
+    id: string;
+    fullName?: string;
+    email?: string;
+    [key: string]: any;
+  };
+}
+
+function normalizeSignedAt(date: string | Date | null | undefined): Date {
+  if (!date) {
+    return new Date();
+  }
+  return typeof date === 'string' ? new Date(date) : date;
+}
+
+function normalizeSignatureStatus(status: string | undefined): 'SIGNED' | 'PENDING' {
+  if (status?.toUpperCase() === 'SIGNED') {
+    return 'SIGNED';
+  }
+  return 'PENDING';
+}
+
+const formatLogEntry = (entry: any) => {
+  const formattedSignatureTasks: SignatureTask[] = (entry.signatureTasks || []).map((task: any) => ({
     id: task.id,
-    status: task.status,
-    assignedAt:
-      task.assignedAt instanceof Date
-        ? task.assignedAt.toISOString()
-        : task.assignedAt,
-    signedAt:
-      task.signedAt instanceof Date
-        ? task.signedAt.toISOString()
-        : task.signedAt,
-    signer: mapUserBasic(task.signer),
+    status: task.status || 'PENDING',
+    assignedAt: task.assignedAt ? new Date(task.assignedAt) : null,
+    signedAt: task.signedAt ? new Date(task.signedAt) : null,
+    signer: mapUserBasic(task.signer)
   }));
 
   const totalSignatureTasks = formattedSignatureTasks.length;
   const signedSignatureTasks = formattedSignatureTasks.filter(
-    (task) => task.status === "SIGNED"
+    (task: SignatureTask) => task.status === "SIGNED"
   );
   const pendingSignatureTasks = formattedSignatureTasks.filter(
-    (task) => task.status !== "SIGNED"
+    (task: SignatureTask) => task.status !== "SIGNED"
   );
 
   const requiredSigners =
     formattedSignatureTasks.length > 0
       ? formattedSignatureTasks
-          .map((task) => task.signer)
-          .filter((signer): signer is ReturnType<typeof mapUserBasic> => Boolean(signer))
+          .map((task: SignatureTask) => task.signer)
+          .filter((signer): signer is NonNullable<ReturnType<typeof mapUserBasic>> => Boolean(signer))
       : entry.author
-      ? [mapUserBasic(entry.author)].filter(Boolean)
+      ? [mapUserBasic(entry.author)].filter((s): s is NonNullable<ReturnType<typeof mapUserBasic>> => Boolean(s))
       : [];
 
-  const normalizeSignedAt = (value: any) => {
-    if (!value) {
-      return null;
-    }
-    if (value instanceof Date) {
-      return value.toISOString();
-    }
-    if (typeof value === "string") {
-      return value;
-    }
+  const normalizeSignedAt = (value: any): string | null => {
+    if (!value) return null;
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value === "string") return value;
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
   };
 
-  const signaturesBySignerId = new Map<string, any>();
+  // Process existing signatures with proper type checking
+  const existingSignatures: NormalizedSignature[] = (entry.signatures || [])
+    .map((sig: SignatureRecord) => {
+      const signerId = sig.signerId || sig.signer?.id;
+      if (!signerId) return null;
 
-  (entry.signatures || []).forEach((signature: any) => {
-    const signerId = signature.signerId || signature.signer?.id;
-    if (!signerId) return;
+      const signedAt = normalizeSignedAt(sig.signedAt);
+      return {
+        id: sig.id,
+        logEntryId: entry.id,
+        signerId,
+        signer: mapUserBasic(sig.signer),
+        signedAt,
+        signatureTaskId: sig.signatureTaskId || null,
+        signatureTaskStatus: signedAt ? "SIGNED" : "PENDING",
+      };
+    })
+    .filter((sig: any): sig is NormalizedSignature => sig !== null);
 
-    signaturesBySignerId.set(signerId, {
-      ...signature,
-      signerId,
-      signer: mapUserBasic(signature.signer),
-      signedAt: normalizeSignedAt(signature.signedAt),
-    });
-  });
+  // Create a map to check existing signatures
+  const signedByUserId = new Map(
+    existingSignatures.map((sig: NormalizedSignature) => [sig.signerId, sig])
+  );
 
-  const normalizedSignatures: Array<{
-    id: string;
-    logEntryId: string;
-    signerId: string | undefined;
-    signer: ReturnType<typeof mapUserBasic> | null;
-    signedAt: string | null;
-    signatureTaskId: string | null;
-    signatureTaskStatus: string | null;
-  }> = [];
+  // Create a copy of existing signatures to modify
+  const normalizedSignatures = existingSignatures.map((sig: NormalizedSignature) => ({...sig}));
 
-  formattedSignatureTasks.forEach((task) => {
+  // Process signature tasks
+  formattedSignatureTasks.forEach((task: SignatureTask) => {
     const signer = task.signer;
     if (!signer) return;
 
     const signerId = signer.id;
-    const existing = signaturesBySignerId.get(signerId);
-    const taskSignedAt = normalizeSignedAt(task.signedAt);
-
-    normalizedSignatures.push({
-      id: existing?.id || `task-${task.id}`,
-      logEntryId: entry.id,
-      signerId,
-      signer: signer || mapUserBasic(existing?.signer),
-      signedAt: existing?.signedAt || taskSignedAt,
-      signatureTaskId: task.id,
-      signatureTaskStatus: task.status,
-    });
-
-    if (existing && signerId) {
-      signaturesBySignerId.delete(signerId);
+    const existingSignatureIndex = normalizedSignatures.findIndex(sig => sig.signerId === signerId);
+    
+    if (existingSignatureIndex === -1) {
+      // No existing signature found, create a new one
+      normalizedSignatures.push({
+        id: randomUUID(), // Use UUID for unique ID generation
+        logEntryId: entry.id,
+        signerId,
+        signer: mapUserBasic(signer),
+        signedAt: normalizeSignedAt(task.signedAt),
+        signatureTaskId: task.id,
+        signatureTaskStatus: task.status,
+      });
+    } else {
+      // Update existing signature with task information while preserving the signature
+      const existingSignature = normalizedSignatures[existingSignatureIndex];
+      existingSignature.signatureTaskId = task.id;
+      existingSignature.signatureTaskStatus = task.status;
+      
+      // Only update signedAt if the task is marked as signed
+      if (task.status === "SIGNED" && task.signedAt) {
+        existingSignature.signedAt = normalizeSignedAt(task.signedAt);
+      }
     }
-  });
-
-  signaturesBySignerId.forEach((signature) => {
-    const fallbackSignedAt = normalizeSignedAt(signature.signedAt);
-    const signer = mapUserBasic(signature.signer);
-    const signerId = signature.signerId || signer?.id;
-
-    normalizedSignatures.push({
-      id: signature.id,
-      logEntryId: entry.id,
-      signerId,
-      signer,
-      signedAt: fallbackSignedAt,
-      signatureTaskId: null,
-      signatureTaskStatus: fallbackSignedAt ? "SIGNED" : null,
-    });
   });
 
   return {
@@ -796,7 +828,7 @@ const formatLogEntry = (entry: any) => {
     },
     pendingSignatureSignatories: pendingSignatureTasks
       .map((task) => task.signer)
-      .filter((signer): signer is ReturnType<typeof mapUserBasic> =>
+      .filter((signer): signer is NonNullable<ReturnType<typeof mapUserBasic>> =>
         Boolean(signer)
       ),
     history: (entry.history || []).map((change: any) => ({
@@ -954,18 +986,24 @@ const formatReportRecord = (report: any) => {
   };
 };
 
-const mapReportVersionSummary = (report: any) => ({
+interface ReportVersion {
+  id: string;
+  version: number;
+  status: string;
+  submissionDate: string | null;
+  createdAt: string | null;
+}
+
+const mapReportVersionSummary = (report: any): ReportVersion => ({
   id: report.id,
-  version: report.version,
+  version: report.version || 1,
   status: reportStatusReverseMap[report.status] || report.status,
-  submissionDate:
-    report.submissionDate instanceof Date
-      ? report.submissionDate.toISOString()
-      : report.submissionDate,
-  createdAt:
-    report.createdAt instanceof Date
-      ? report.createdAt.toISOString()
-      : report.createdAt,
+  submissionDate: report.submissionDate instanceof Date
+    ? report.submissionDate.toISOString()
+    : report.submissionDate,
+  createdAt: report.createdAt instanceof Date
+    ? report.createdAt.toISOString()
+    : report.createdAt
 });
 
 app.use(
@@ -1198,8 +1236,46 @@ app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, r
       return res.status(400).json({ error: "Solo se pueden firmar archivos PDF." });
     }
 
+    // Determinar el documento base para acumulación de firmas: usar el último PDF firmado si existe
+    let baseAttachment = attachment;
+    {
+      let documentType = "attachment";
+      let documentId: string = attachment.id;
+      if (attachment.logEntryId) {
+        documentType = "logEntry";
+        documentId = attachment.logEntryId;
+      } else if (attachment.reportId) {
+        documentType = "report";
+        documentId = attachment.reportId;
+      } else if (attachment.actaId) {
+        documentType = "acta";
+        documentId = attachment.actaId;
+      } else if (attachment.communicationId) {
+        documentType = "communication";
+        documentId = attachment.communicationId;
+      } else if (attachment.workActaId) {
+        documentType = "workActa";
+        documentId = attachment.workActaId;
+      } else if (attachment.weeklyReportId) {
+        documentType = "weeklyReport";
+        documentId = attachment.weeklyReportId;
+      } else if (attachment.costActaId) {
+        documentType = "costActa";
+        documentId = attachment.costActaId;
+      }
+
+      const latestSignature = await prisma.documentSignatureLog.findFirst({
+        where: { documentType, documentId },
+        orderBy: { createdAt: "desc" },
+        include: { signedAttachment: true },
+      });
+      if (latestSignature?.signedAttachment?.id) {
+        baseAttachment = latestSignature.signedAttachment as any;
+      }
+    }
+
     const [originalBuffer, signatureBuffer] = await Promise.all([
-      loadAttachmentBuffer(attachment),
+      loadAttachmentBuffer(baseAttachment),
       loadUserSignatureBuffer(signature),
     ]);
 
@@ -1293,7 +1369,7 @@ app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, r
     });
 
     const responsePayload: any = {
-      originalAttachmentId: attachment.id,
+      originalAttachmentId: baseAttachment.id,
       signedAttachment: buildAttachmentResponse(signedAttachment),
       auditLogId: signatureLog.id,
     };
@@ -4601,8 +4677,9 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
           data: {
             logEntryId: id,
             signerId,
-            status: signerId === existingEntry.authorId ? 'SIGNED' : 'PENDING',
-            signedAt: signerId === existingEntry.authorId ? new Date() : undefined,
+            // No auto-firmar al autor: siempre iniciar como PENDING
+            status: 'PENDING',
+            signedAt: undefined,
           },
         });
         signerAddedIds.push(signerId);
@@ -5049,14 +5126,20 @@ app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequ
 
     const updatedTasks = await prisma.logEntrySignatureTask.findMany({
       where: { logEntryId: id },
-      select: { status: true },
+      select: { status: true, signerId: true },
     });
 
     if (updatedTasks.length > 0 && updatedTasks.every((task) => task.status === 'SIGNED')) {
-      await prisma.logEntry.update({
-        where: { id },
-        data: { status: 'SIGNED' },
+      const uniqueSignerIds = Array.from(new Set(updatedTasks.map((t) => t.signerId)));
+      const signaturesCount = await prisma.signature.count({
+        where: { logEntryId: id, signerId: { in: uniqueSignerIds } },
       });
+      if (signaturesCount === uniqueSignerIds.length) {
+        await prisma.logEntry.update({
+          where: { id },
+          data: { status: 'SIGNED' },
+        });
+      }
     }
 
     const updatedEntry = await prisma.logEntry.findUnique({
@@ -5582,7 +5665,7 @@ app.get("/api/reports/:id", async (req, res) => {
         status: true,
         submissionDate: true,
         createdAt: true,
-      },
+      } as const,
       orderBy: { version: "desc" },
     });
 
@@ -5705,7 +5788,7 @@ app.post("/api/reports", async (req, res) => {
         status: true,
         submissionDate: true,
         createdAt: true,
-      },
+      } as const,
       orderBy: { version: "desc" },
     });
 
@@ -5765,7 +5848,7 @@ app.put("/api/reports/:id", async (req, res) => {
         status: true,
         submissionDate: true,
         createdAt: true,
-      },
+      } as const,
       orderBy: { version: "desc" },
     });
 
@@ -5894,7 +5977,7 @@ app.post("/api/reports/:id/signatures", async (req, res) => {
         status: true,
         submissionDate: true,
         createdAt: true,
-      },
+      } as const,
       orderBy: { version: "desc" },
     });
 
@@ -6253,7 +6336,7 @@ app.post(
           status: true,
           submissionDate: true,
           createdAt: true,
-        },
+        } as const,
         orderBy: { version: "desc" },
       });
       formattedReport.versions = versionHistory.map(mapReportVersionSummary);
