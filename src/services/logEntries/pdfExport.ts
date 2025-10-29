@@ -201,7 +201,7 @@ export const generateLogEntryPdf = async ({
   const fileName = `bitacora-${safeTitle}-${entryDateSlug}.pdf`;
   const filePath = path.join(generatedDir, fileName);
 
-  await new Promise<void>((resolve, reject) => {
+  await new Promise<void>(async (resolve, reject) => {
     const doc = new PDFDocument({ size: "LETTER", margin: 48 });
     const writeStream = fsSync.createWriteStream(filePath);
     const pageWidth = doc.page.width;
@@ -493,18 +493,86 @@ export const generateLogEntryPdf = async ({
     if (!entry.attachments.length) {
       doc.font("Helvetica").fontSize(11).text("No hay archivos adjuntos.");
     } else {
-      entry.attachments.forEach((attachment, index) => {
-        doc
-          .font("Helvetica")
-          .fontSize(11)
-          .text(
-            `${index + 1}. ${attachment.fileName} (${attachment.type || "desconocido"})`,
-            {
-              link: attachment.url,
-              underline: Boolean(attachment.url),
+      // Separar imágenes de otros archivos
+      const images = entry.attachments.filter(att => 
+        att.type && att.type.startsWith('image/')
+      );
+      const otherFiles = entry.attachments.filter(att => 
+        !att.type || !att.type.startsWith('image/')
+      );
+
+      // Mostrar imágenes con layout mejorado
+      if (images.length > 0) {
+        doc.font("Helvetica-Bold").fontSize(12).text("Fotos del día:");
+        doc.moveDown(0.3);
+        
+        // Procesar imágenes una por una con mejor control
+        for (let i = 0; i < images.length; i++) {
+          const image = images[i];
+          
+          try {
+            // Agregar nombre de archivo
+            doc.font("Helvetica-Bold").fontSize(10)
+              .text(`${i + 1}. ${image.fileName}`);
+            doc.moveDown(0.2);
+            
+            // Intentar cargar la imagen
+            const imagePath = path.join(uploadsDir, image.storagePath || '');
+            if (fsSync.existsSync(imagePath)) {
+              const imageBuffer = await fs.readFile(imagePath);
+              
+              // Verificar si necesitamos nueva página
+              const imageHeight = 150;
+              if (doc.y + imageHeight > doc.page.height - 100) {
+                doc.addPage();
+              }
+              
+              // Agregar imagen con posición fija
+              const startY = doc.y;
+              doc.image(imageBuffer, 50, startY, {
+                fit: [250, imageHeight]
+              });
+              
+              // Mover cursor después de la imagen
+              doc.y = startY + imageHeight + 20;
+              
+            } else {
+              doc.font("Helvetica").fontSize(10)
+                .text(`[Imagen no encontrada: ${image.fileName}]`);
+              doc.moveDown(0.3);
             }
-          );
-      });
+          } catch (error) {
+            doc.font("Helvetica").fontSize(10)
+              .text(`[Error cargando imagen: ${image.fileName}]`);
+            doc.moveDown(0.3);
+          }
+        }
+        
+        if (otherFiles.length > 0) {
+          doc.moveDown(0.5);
+        }
+      }
+
+      // Mostrar otros archivos
+      if (otherFiles.length > 0) {
+        if (images.length > 0) {
+          doc.font("Helvetica-Bold").fontSize(12).text("Otros archivos:");
+          doc.moveDown(0.2);
+        }
+        
+        otherFiles.forEach((attachment, index) => {
+          doc
+            .font("Helvetica")
+            .fontSize(11)
+            .text(
+              `${index + 1}. ${attachment.fileName} (${attachment.type || "desconocido"})`,
+              {
+                link: attachment.url,
+                underline: Boolean(attachment.url),
+              }
+            );
+        });
+      }
     }
 
     // Forzar que la sección de firmas inicie en una nueva página con layout predecible
