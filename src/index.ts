@@ -245,6 +245,18 @@ const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
   return next();
 };
 
+const requireEditor = (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) {
+    return res.status(401).json({ error: "Autenticación requerida." });
+  }
+  if (req.user.appRole === "viewer") {
+    return res
+      .status(403)
+      .json({ error: "Acceso restringido a editores y administradores." });
+  }
+  return next();
+};
+
 const ensureAppSettings = async () => {
   try {
     let settings = await prisma.appSetting.findFirst();
@@ -1213,7 +1225,7 @@ app.get("/api/attachments/:id/download", async (req, res) => {
   }
 });
 
-app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, res) => {
+app.post("/api/attachments/:id/sign", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const userId = req.user?.userId;
@@ -2430,7 +2442,7 @@ app.post("/api/chatbot/feedback", authMiddleware, async (req: AuthRequest, res) 
 
 
 // --- Endpoint para subir un único archivo ---
-app.post("/api/upload", async (req, res) => {
+app.post("/api/upload", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     // Usar una promesa para manejar la subida del archivo
     await new Promise((resolve, reject) => {
@@ -3631,7 +3643,7 @@ app.get("/api/contract-modifications", authMiddleware, async (req: AuthRequest, 
 });
 
 // Endpoint para crear una modificación contractual
-app.post("/api/contract-modifications", authMiddleware, async (req: AuthRequest, res) => {
+app.post("/api/contract-modifications", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { number, type, date, value, days, justification, attachmentId } = req.body;
 
@@ -3754,7 +3766,7 @@ app.get("/api/communications/:id", async (req, res) => {
   }
 });
 
-app.post("/api/communications", async (req, res) => {
+app.post("/api/communications", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const {
       radicado,
@@ -3772,9 +3784,13 @@ app.post("/api/communications", async (req, res) => {
       requiresResponse,
       responseDueDate,
       assigneeId,
-      uploaderId,
+      uploaderId: providedUploaderId,
       attachments = [],
     } = req.body;
+    const uploaderId = req.user?.userId || providedUploaderId;
+    if (!uploaderId) {
+      return res.status(400).json({ error: "El usuario que crea la comunicación es obligatorio." });
+    }
     const prismaDeliveryMethod = deliveryMethodMap[deliveryMethod] || "SYSTEM";
     const prismaDirection =
       communicationDirectionMap[direction] ||
@@ -3858,7 +3874,7 @@ app.post("/api/communications", async (req, res) => {
   }
 });
 
-app.put("/api/communications/:id/status", authMiddleware, async (req: AuthRequest, res) => {
+app.put("/api/communications/:id/status", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -3904,7 +3920,7 @@ app.put("/api/communications/:id/status", authMiddleware, async (req: AuthReques
   }
 });
 
-app.put("/api/communications/:id/assignment", authMiddleware, async (req: AuthRequest, res) => {
+app.put("/api/communications/:id/assignment", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { assigneeId } = req.body as { assigneeId?: string | null };
@@ -4057,7 +4073,7 @@ app.get("/api/drawings/:id", async (req, res) => {
   }
 });
 
-app.post("/api/drawings", async (req, res) => {
+app.post("/api/drawings", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { code, title, discipline, version } = req.body;
     const prismaDiscipline = drawingDisciplineMap[discipline] || "OTHER";
@@ -4109,7 +4125,7 @@ app.post("/api/drawings", async (req, res) => {
   }
 });
 
-app.post("/api/drawings/:id/versions", async (req, res) => {
+app.post("/api/drawings/:id/versions", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { version } = req.body;
@@ -4163,11 +4179,12 @@ app.post("/api/drawings/:id/versions", async (req, res) => {
   }
 });
 
-app.post("/api/drawings/:id/comments", async (req, res) => {
+app.post("/api/drawings/:id/comments", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { content, authorId } = req.body;
-    if (!content || !authorId) {
+    const resolvedAuthorId = req.user?.userId || authorId;
+    if (!content || !resolvedAuthorId) {
       return res
         .status(400)
         .json({ error: "El contenido y el autor son obligatorios." });
@@ -4175,7 +4192,7 @@ app.post("/api/drawings/:id/comments", async (req, res) => {
     const newComment = await prisma.comment.create({
       data: {
         content,
-        author: { connect: { id: authorId } },
+        author: { connect: { id: resolvedAuthorId } },
         drawing: { connect: { id: id } },
       },
       include: { author: true },
@@ -4229,7 +4246,7 @@ app.get("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-app.post("/api/actas", async (req, res) => {
+app.post("/api/actas", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const {
       number,
@@ -4286,7 +4303,7 @@ app.post("/api/actas", async (req, res) => {
   }
 });
 
-app.put("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
+app.put("/api/actas/:id", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { number, title, date, area, status, summary } = req.body;
@@ -4328,7 +4345,7 @@ app.put("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-app.put("/api/actas/:actaId/commitments/:commitmentId", authMiddleware, async (req: AuthRequest, res) => {
+app.put("/api/actas/:actaId/commitments/:commitmentId", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { actaId, commitmentId } = req.params;
     const { status } = req.body;
@@ -4358,7 +4375,7 @@ app.put("/api/actas/:actaId/commitments/:commitmentId", authMiddleware, async (r
   }
 });
 
-app.post("/api/actas/:actaId/commitments/:commitmentId/reminder", authMiddleware, async (req: AuthRequest, res) => {
+app.post("/api/actas/:actaId/commitments/:commitmentId/reminder", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { actaId, commitmentId } = req.params;
 
@@ -4379,7 +4396,7 @@ app.post("/api/actas/:actaId/commitments/:commitmentId/reminder", authMiddleware
   }
 });
 
-app.post("/api/actas/:id/signatures", authMiddleware, async (req: AuthRequest, res) => {
+app.post("/api/actas/:id/signatures", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { signerId, password } = req.body;
@@ -4496,7 +4513,7 @@ app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
+app.post("/api/log-entries", authMiddleware, requireEditor, (req: AuthRequest, res) => {
   const uploadMiddleware = upload.array('attachments', 5);
   
   uploadMiddleware(req, res, async (err) => {
@@ -4905,7 +4922,7 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
 
 });
 
-app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) => {
+app.put("/api/log-entries/:id", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const existingEntry = await prisma.logEntry.findUnique({
@@ -5300,7 +5317,7 @@ app.put("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
   }
 });
 
-app.delete("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) => {
+app.delete("/api/log-entries/:id", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     console.log("DELETE /api/log-entries/:id - Eliminando anotación...");
     const { id } = req.params;
@@ -5359,7 +5376,7 @@ app.delete("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res)
   }
 });
 
-app.post("/api/log-entries/:id/comments", authMiddleware, (req: AuthRequest, res) => {
+app.post("/api/log-entries/:id/comments", authMiddleware, requireEditor, (req: AuthRequest, res) => {
   const uploadMiddleware = upload.array('attachments', 5);
   
   uploadMiddleware(req, res, async (err) => {
@@ -5433,7 +5450,7 @@ app.post("/api/log-entries/:id/comments", authMiddleware, (req: AuthRequest, res
   });
 });
 
-app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequest, res) => {
+app.post("/api/log-entries/:id/signatures", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { signerId, password } = req.body;
@@ -5805,7 +5822,7 @@ app.get("/api/work-actas/:id", authMiddleware, async (req: AuthRequest, res) => 
   }
 });
 
-app.post("/api/work-actas", authMiddleware, async (req: AuthRequest, res) => {
+app.post("/api/work-actas", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { number, period, date, status, items, attachments = [] } = req.body;
     if (!number || !period || !date || !items || items.length === 0) {
@@ -5856,7 +5873,7 @@ app.post("/api/work-actas", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-app.put("/api/work-actas/:id", authMiddleware, async (req: AuthRequest, res) => {
+app.put("/api/work-actas/:id", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -5954,7 +5971,7 @@ app.get("/api/cost-actas/:id", async (req, res) => {
 });
 
 // Crear una nueva acta de costo
-app.post("/api/cost-actas", async (req, res) => {
+app.post("/api/cost-actas", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     // Recibimos los IDs de los adjuntos que ya se subieron
     const {
@@ -6013,7 +6030,7 @@ app.post("/api/cost-actas", async (req, res) => {
   }
 });
 
-app.put("/api/cost-actas/:id", async (req, res) => {
+app.put("/api/cost-actas/:id", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { status, relatedProgress } = req.body;
@@ -6075,12 +6092,14 @@ app.put("/api/cost-actas/:id", async (req, res) => {
 });
 
 // Añadir una observación a un acta de costo
-app.post("/api/cost-actas/:id/observations", async (req, res) => {
+app.post("/api/cost-actas/:id/observations", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { text, authorId } = req.body;
 
-    if (!text || !authorId) {
+    const resolvedAuthorId = req.user?.userId || authorId;
+
+    if (!text || !resolvedAuthorId) {
       return res.status(400).json({
         error: "El texto y el autor son obligatorios para la observación.",
       });
@@ -6089,7 +6108,7 @@ app.post("/api/cost-actas/:id/observations", async (req, res) => {
     const newObservation = await prisma.observation.create({
       data: {
         text,
-        author: { connect: { id: authorId } },
+        author: { connect: { id: resolvedAuthorId } },
         costActa: { connect: { id: id } },
       },
       include: { author: true }, // Devolvemos la observación con el autor
@@ -6214,7 +6233,7 @@ app.get("/api/reports/:id", async (req, res) => {
 });
 
 // Crear un nuevo informe
-app.post("/api/reports", async (req, res) => {
+app.post("/api/reports", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const {
       type,
@@ -6229,7 +6248,9 @@ app.post("/api/reports", async (req, res) => {
       previousReportId,
     } = req.body;
 
-    if (!period || !submissionDate || !summary || !authorId) {
+    const resolvedAuthorId = req.user?.userId || authorId;
+
+    if (!period || !submissionDate || !summary || !resolvedAuthorId) {
       return res
         .status(400)
         .json({ error: "Faltan datos obligatorios para crear el informe." });
@@ -6298,7 +6319,7 @@ app.post("/api/reports", async (req, res) => {
         submissionDate: new Date(submissionDate),
         summary,
         status: "DRAFT",
-        author: { connect: { id: authorId } },
+        author: { connect: { id: resolvedAuthorId } },
         requiredSignatoriesJson: JSON.stringify(
           requiredSignatories.map((u: any) => u.id)
         ),
@@ -6343,7 +6364,7 @@ app.post("/api/reports", async (req, res) => {
 });
 
 // Actualizar un informe (principalmente estado)
-app.put("/api/reports/:id", async (req, res) => {
+app.put("/api/reports/:id", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { status, summary, requiredSignatories = [] } = req.body; // Campos que permitimos actualizar
@@ -6400,7 +6421,7 @@ app.put("/api/reports/:id", async (req, res) => {
 });
 
 // Añadir una firma a un informe
-app.post("/api/reports/:id/signatures", async (req, res) => {
+app.post("/api/reports/:id/signatures", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { signerId, password } = req.body; // Recibimos el ID del firmante y su contraseña
@@ -6621,7 +6642,7 @@ app.get("/api/control-points", async (req, res) => {
 });
 
 // Crear un nuevo punto de control
-app.post("/api/control-points", async (req, res) => {
+app.post("/api/control-points", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { name, description, location } = req.body;
 
@@ -6643,13 +6664,14 @@ app.post("/api/control-points", async (req, res) => {
 });
 
 // Añadir una foto a un punto de control existente
-app.post("/api/control-points/:id/photos", async (req, res) => {
+app.post("/api/control-points/:id/photos", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params; // ID del ControlPoint
     // Recibe el ID del Attachment y las notas
     const { notes, authorId, attachmentId } = req.body;
+    const resolvedAuthorId = req.user?.userId || authorId;
 
-    if (!authorId || !attachmentId) {
+    if (!resolvedAuthorId || !attachmentId) {
       return res
         .status(400)
         .json({ error: "Faltan datos del autor o del archivo adjunto." });
@@ -6676,7 +6698,7 @@ app.post("/api/control-points/:id/photos", async (req, res) => {
       data: {
         notes,
         url: attachment.url, // <-- ¡AÑADE ESTA LÍNEA! Pasa la URL del attachment
-        author: { connect: { id: authorId } },
+        author: { connect: { id: resolvedAuthorId } },
         controlPoint: { connect: { id: id } },
         attachment: { connect: { id: attachmentId } },
       },
@@ -6737,7 +6759,7 @@ app.get("/api/project-tasks", async (req, res) => {
   }
 });
 
-app.post("/api/project-tasks/import", authMiddleware, async (req: AuthRequest, res) => {
+app.post("/api/project-tasks/import", authMiddleware, requireEditor, async (req: AuthRequest, res) => {
   try {
     let incomingTasks: any[] | undefined;
     if (Array.isArray((req.body as any)?.tasks)) {
