@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 
 export interface JsonObject {
-  [key: string]: JsonValue;
+  [key: string]: JsonValue | undefined;
 }
 
 export type JsonValue = string | number | boolean | null | JsonObject | JsonArray;

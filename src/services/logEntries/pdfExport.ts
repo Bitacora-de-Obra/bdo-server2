@@ -561,17 +561,17 @@ export const generateLogEntryPdf = async ({
         }
         
         otherFiles.forEach((attachment, index) => {
-          doc
-            .font("Helvetica")
-            .fontSize(11)
-            .text(
-              `${index + 1}. ${attachment.fileName} (${attachment.type || "desconocido"})`,
-              {
-                link: attachment.url,
-                underline: Boolean(attachment.url),
-              }
-            );
-        });
+        doc
+          .font("Helvetica")
+          .fontSize(11)
+          .text(
+            `${index + 1}. ${attachment.fileName} (${attachment.type || "desconocido"})`,
+            {
+              link: attachment.url,
+              underline: Boolean(attachment.url),
+            }
+          );
+      });
       }
     }
 

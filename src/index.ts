@@ -555,10 +555,24 @@ const resolveProjectRole = (value?: string): UserRole | undefined => {
   return undefined;
 };
 
-const buildAttachmentResponse = (attachment: any) => ({
-  ...attachment,
-  downloadUrl: `http://localhost:${port}/api/attachments/${attachment.id}/download`,
-});
+const resolveServerPublicUrl = () => {
+  const raw = process.env.SERVER_PUBLIC_URL?.trim();
+  if (raw) {
+    return raw.replace(/\/+$/, "");
+  }
+  return `http://localhost:${port}`;
+};
+
+const buildAttachmentResponse = (attachment: any) => {
+  const relativePath = `/api/attachments/${attachment.id}/download`;
+  const publicUrl = resolveServerPublicUrl();
+
+  return {
+    ...attachment,
+    downloadUrl: `${publicUrl}${relativePath}`,
+    downloadPath: relativePath,
+  };
+};
 
 const resolveStorageKeyFromUrl = (fileUrl?: string | null): string | null => {
   if (!fileUrl) return null;
