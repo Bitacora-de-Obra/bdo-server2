@@ -1,0 +1,728 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  RESIDENT
+  SUPERVISOR
+  CONTRACTOR_REP
+}
+
+enum AppRole {
+  admin
+  editor
+  viewer
+}
+
+enum EntryType {
+  GENERAL
+  QUALITY
+  SAFETY
+  ADMINISTRATIVE
+  TECHNICAL
+}
+
+enum EntryStatus {
+  DRAFT
+  SUBMITTED
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+  SIGNED
+}
+
+enum ActaArea {
+  COMITE_OBRA
+  COMITE_TECNICO
+  HSE
+  CALIDAD
+  SOCIAL
+  AMBIENTAL
+  OTHER
+}
+
+enum ActaStatus {
+  DRAFT
+  FOR_SIGNATURES
+  SIGNED
+  CANCELLED
+}
+
+enum CommitmentStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+  DELAYED
+}
+
+enum CommunicationStatus {
+  PENDIENTE
+  EN_TRAMITE
+  RESUELTO
+  ARCHIVADO
+}
+
+enum DeliveryMethod {
+  SYSTEM
+  MAIL
+  PHYSICAL
+}
+
+enum DrawingDiscipline {
+  ARQUITECTONICO
+  ESTRUCTURAL
+  HIDROSANITARIO
+  ELECTRICO
+  MECANICO
+  SENALIZACION
+  OTHER
+}
+
+enum DrawingStatus {
+  VIGENTE
+  OBSOLETO
+  ANULADO
+}
+
+enum CostActaStatus {
+  SUBMITTED
+  IN_REVIEW
+  OBSERVED
+  APPROVED
+  IN_PAYMENT
+  PAID
+  REJECTED
+}
+
+enum WorkActaStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum ReportScope {
+  OBRA
+  INTERVENTORIA
+}
+
+enum ReportStatus {
+  DRAFT
+  SUBMITTED
+  OBSERVED
+  APPROVED
+  REJECTED
+}
+
+enum ModificationType {
+  ADDITION
+  TIME_EXTENSION
+  SCOPE_CHANGE
+  SUSPENSION
+  REINSTATEMENT
+  OTHER
+}
+
+enum CommunicationDirection {
+  SENT
+  RECEIVED
+}
+
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  password        String
+  fullName        String
+  projectRole     UserRole
+  appRole         AppRole
+  avatarUrl       String?
+  status          String // "active" | "inactive"
+  lastLoginAt     DateTime?
+  tokenVersion    Int       @default(0) // Para invalidar tokens
+  emailVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relaciones
+  logEntries              LogEntry[]                   @relation("Author")
+  assignedTo              LogEntry[]                   @relation("Assignees")
+  comments                Comment[]
+  signatures              Signature[]
+  communications          Communication[]              @relation("Uploader")
+  statusChanges           CommunicationStatusHistory[]
+  photoEntries            PhotoEntry[]
+  responsibleFor          Commitment[]
+  observations            Observation[]
+  reports                 Report[]
+  drawingVersions         DrawingVersion[]
+  logEntryHistory         LogEntryHistory[]
+  auditLogs               AuditLog[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  assignedCommunications  Communication[]             @relation("CommunicationAssignedTo")
+  chatbotUsage            ChatbotUsage[]
+  userSignatures          UserSignature[]
+  documentSignatureLogs   DocumentSignatureLog[]
+  signatureTasks          LogEntrySignatureTask[]
+}
+
+model Project {
+  id                        String         @id @default(uuid())
+  name                      String
+  contractId                String         @unique
+  object                    String
+  contractorName            String
+  supervisorName            String
+  initialValue              Float
+  startDate                 DateTime
+  initialEndDate            DateTime
+  keyPersonnel              KeyPersonnel[]
+  logEntries                LogEntry[]
+  projectTasks              ProjectTask[]
+  interventoriaContractId   String
+  interventoriaInitialValue Float
+  technicalSupervisorName   String
+  createdAt                 DateTime       @default(now())
+  updatedAt                 DateTime       @updatedAt
+}
+
+model KeyPersonnel {
+  id        String  @id @default(uuid())
+  name      String
+  role      String
+  company   String
+  email     String
+  phone     String
+  project   Project @relation(fields: [projectId], references: [id])
+  projectId String
+}
+
+model Communication {
+  id              String                       @id @default(uuid())
+  radicado        String                       @unique
+  subject         String
+  description     String
+  senderEntity    String
+  senderName      String
+  senderTitle     String
+  recipientEntity String
+  recipientName   String
+  recipientTitle  String
+  signerName      String
+  sentDate        DateTime
+  dueDate         DateTime?
+  deliveryMethod  DeliveryMethod
+  notes           String?
+  status          CommunicationStatus
+  direction       CommunicationDirection
+  requiresResponse Boolean                @default(false)
+  responseDueDate  DateTime?
+  uploader        User                         @relation("Uploader", fields: [uploaderId], references: [id])
+  uploaderId      String
+  assignee        User?                        @relation("CommunicationAssignedTo", fields: [assigneeId], references: [id])
+  assigneeId      String?
+  assignedAt      DateTime?
+  parent          Communication?               @relation("Replies", fields: [parentId], references: [id])
+  parentId        String?
+  replies         Communication[]              @relation("Replies")
+  statusHistory   CommunicationStatusHistory[]
+  attachments     Attachment[]
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+}
+
+model AppSetting {
+  id                       String   @id @default(uuid())
+  companyName              String
+  timezone                 String
+  locale                   String   @default("es-ES")
+  requireStrongPassword    Boolean  @default(true)
+  enable2FA                Boolean  @default(false)
+  sessionTimeoutMinutes    Int      @default(60)
+  photoIntervalDays        Int      @default(3)
+  defaultProjectVisibility String   @default("private")
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  timestamp  DateTime @default(now())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id])
+  actorEmail String?
+  action     String
+  entityType String
+  entityId   String?
+  diff       Json?
+}
+
+model CommunicationStatusHistory {
+  id              String        @id @default(uuid())
+  status          String // CommunicationStatus enum
+  timestamp       DateTime      @default(now())
+  communication   Communication @relation(fields: [communicationId], references: [id])
+  communicationId String
+  user            User          @relation(fields: [userId], references: [id])
+  userId          String
+}
+
+model ContractModification {
+  id            String           @id @default(uuid())
+  number        String           @unique
+  type          ModificationType
+  date          DateTime
+  value         Float?
+  days          Int?
+  justification String
+  attachment    Attachment?      @relation(fields: [attachmentId], references: [id])
+  attachmentId  String?          @unique
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+}
+
+model WeeklyReport {
+  id              String       @id @default(uuid())
+  number          String       @unique
+  startDate       DateTime
+  endDate         DateTime
+  summary         String
+  progressSummary String?
+  nextWeekPlan    String?
+  issues          String?
+  attachments     Attachment[]
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+// Resto de modelos existentes...
+model LogEntry {
+  id                String            @id @default(uuid())
+  folioNumber       Int               @unique @default(autoincrement())
+  title             String
+  description       String
+  entryDate         DateTime
+  activitiesPerformed     String @default("")
+  materialsUsed           String @default("")
+  workforce               String @default("")
+  weatherConditions       String @default("")
+  additionalObservations  String @default("")
+  contractorPersonnel     String?
+  interventoriaPersonnel  String?
+  equipmentResources      String?
+  executedActivities      String?
+  executedQuantities      String?
+  scheduledActivities     String?
+  qualityControls         String?
+  materialsReceived       String?
+  safetyNotes             String?
+  projectIssues           String?
+  siteVisits              String?
+  weatherReport           String?
+  contractorObservations  String?
+  interventoriaObservations String?
+  locationDetails         String @default("")
+  scheduleDay             Int? @default(0)
+  type              EntryType
+  subject           String
+  location          String
+  activityStartDate DateTime
+  activityEndDate   DateTime
+  isConfidential    Boolean           @default(false)
+  status            EntryStatus
+  author            User              @relation("Author", fields: [authorId], references: [id])
+  authorId          String
+  project           Project           @relation(fields: [projectId], references: [id])
+  projectId         String
+  assignees         User[]            @relation("Assignees")
+  comments          Comment[]
+  attachments       Attachment[]
+  signatures        Signature[]
+  history           LogEntryHistory[]
+  signatureTasks    LogEntrySignatureTask[]
+  documentSignatureLogs DocumentSignatureLog[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@unique([projectId, entryDate])
+}
+
+model LogEntryHistory {
+  id         String   @id @default(uuid())
+  fieldName  String
+  oldValue   String?
+  newValue   String?
+  timestamp  DateTime @default(now())
+  logEntry   LogEntry @relation(fields: [logEntryId], references: [id])
+  logEntryId String
+  user       User?    @relation(fields: [userId], references: [id])
+  userId     String?
+}
+
+model Comment {
+  id          String       @id @default(uuid())
+  content     String
+  timestamp   DateTime     @default(now())
+  author      User         @relation(fields: [authorId], references: [id])
+  authorId    String
+  logEntry    LogEntry?    @relation(fields: [logEntryId], references: [id])
+  logEntryId  String?
+  drawing     Drawing?     @relation(fields: [drawingId], references: [id])
+  drawingId   String?
+  attachments Attachment[]
+}
+
+model Signature {
+  id         String    @id @default(uuid())
+  signedAt   DateTime  @default(now())
+  signer     User      @relation(fields: [signerId], references: [id])
+  signerId   String
+  logEntry   LogEntry? @relation(fields: [logEntryId], references: [id])
+  logEntryId String?
+  acta       Acta?     @relation(fields: [actaId], references: [id])
+  actaId     String?
+  report     Report?   @relation(fields: [reportId], references: [id])
+  reportId   String?
+}
+
+model UserSignature {
+  id        String   @id @default(uuid())
+  userId    String
+  signature String?  // Base64 encoded signature image
+  fileName  String?
+  mimeType  String?
+  size      Int?
+  url       String?
+  hash      String?
+  storagePath String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId])
+  @@index([userId])
+}
+
+model DocumentSignatureLog {
+  id              String   @id @default(uuid())
+  logEntryId      String?
+  originalPdfId   String?
+  signedPdfId     String?
+  signerId        String?
+  documentType    String?
+  documentId      String?
+  signedAttachmentId String?
+  signedAt        DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  logEntry        LogEntry? @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+  originalPdf     Attachment? @relation("OriginalPdf", fields: [originalPdfId], references: [id])
+  signedPdf       Attachment? @relation("SignedPdf", fields: [signedPdfId], references: [id])
+  signedAttachment Attachment? @relation("SignedAttachment", fields: [signedAttachmentId], references: [id])
+  signer          User?     @relation(fields: [signerId], references: [id])
+
+  @@index([logEntryId])
+  @@index([signerId])
+  @@index([originalPdfId])
+  @@index([signedPdfId])
+  @@index([documentId])
+}
+
+model LogEntrySignatureTask {
+  id        String      @id @default(uuid())
+  logEntryId String
+  signerId  String
+  status    SignatureTaskStatus @default(PENDING)
+  assignedAt DateTime?
+  signedAt  DateTime?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  logEntry  LogEntry    @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+  signer    User        @relation(fields: [signerId], references: [id])
+
+  @@unique([logEntryId, signerId])
+  @@index([logEntryId])
+  @@index([signerId])
+}
+
+enum SignatureTaskStatus {
+  PENDING
+  SIGNED
+}
+
+model Attachment {
+  id              String                @id @default(uuid())
+  fileName        String
+  url             String
+  size            Int
+  type            String
+  storagePath     String?
+  logEntry        LogEntry?             @relation(fields: [logEntryId], references: [id])
+  logEntryId      String?
+  communication   Communication?        @relation(fields: [communicationId], references: [id])
+  communicationId String?
+  acta            Acta?                 @relation(fields: [actaId], references: [id])
+  actaId          String?
+  costActa        CostActa?             @relation(fields: [costActaId], references: [id])
+  costActaId      String?
+  report          Report?               @relation(fields: [reportId], references: [id])
+  reportId        String?
+  comment         Comment?              @relation(fields: [commentId], references: [id])
+  commentId       String?
+  contractMod     ContractModification? @relation()
+  workActa        WorkActa?             @relation(fields: [workActaId], references: [id])
+  workActaId      String?
+  originalPdfs    DocumentSignatureLog[] @relation("OriginalPdf")
+  signedPdfs      DocumentSignatureLog[] @relation("SignedPdf")
+  signedAttachments DocumentSignatureLog[] @relation("SignedAttachment")
+  weeklyReport    WeeklyReport?         @relation(fields: [weeklyReportId], references: [id])
+  weeklyReportId  String?
+  photoEntry      PhotoEntry?           @relation("PhotoAttachment")
+  createdAt       DateTime              @default(now())
+
+  @@index([workActaId])
+}
+
+model Acta {
+  id                      String       @id @default(uuid())
+  number                  String       @unique
+  title                   String
+  date                    DateTime
+  area                    ActaArea
+  status                  ActaStatus
+  summary                 String
+  attachments             Attachment[]
+  signatures              Signature[]
+  commitments             Commitment[]
+  requiredSignatoriesJson String?
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+}
+
+model Commitment {
+  id            String           @id @default(uuid())
+  description   String
+  dueDate       DateTime
+  status        CommitmentStatus
+  responsible   User             @relation(fields: [responsibleId], references: [id])
+  responsibleId String
+  acta          Acta             @relation(fields: [actaId], references: [id])
+  actaId        String
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+}
+
+model CostActa {
+  id                 String         @id @default(uuid())
+  number             String         @unique
+  period             String
+  submissionDate     DateTime
+  approvalDate       DateTime?
+  paymentDueDate     DateTime?
+  billedAmount       Float
+  totalContractValue Float
+  status             CostActaStatus
+  relatedProgress    String?
+  observations       Observation[]
+  attachments        Attachment[]
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+}
+
+model Observation {
+  id         String   @id @default(uuid())
+  text       String
+  timestamp  DateTime @default(now())
+  author     User     @relation(fields: [authorId], references: [id])
+  authorId   String
+  costActa   CostActa @relation(fields: [costActaId], references: [id])
+  costActaId String
+}
+
+model Report {
+  id                      String       @id @default(uuid())
+  type                    String // "Weekly" | "Monthly"
+  reportScope             ReportScope
+  number                  String
+  version                 Int          @default(1)
+  previousReport          Report?      @relation("ReportVersionChain", fields: [previousReportId], references: [id])
+  previousReportId        String?
+  nextVersions            Report[]     @relation("ReportVersionChain")
+  period                  String
+  submissionDate          DateTime
+  summary                 String
+  status                  ReportStatus
+  author                  User         @relation(fields: [authorId], references: [id])
+  authorId                String
+  attachments             Attachment[]
+  signatures              Signature[]
+  requiredSignatoriesJson String?
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+
+  @@unique([number, version])
+}
+
+model Drawing {
+  id         String            @id @default(uuid())
+  code       String            @unique
+  title      String
+  discipline DrawingDiscipline
+  status     DrawingStatus
+  versions   DrawingVersion[]
+  comments   Comment[]
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+}
+
+model DrawingVersion {
+  id            String   @id @default(uuid())
+  versionNumber Int
+  fileName      String
+  url           String
+  size          Int
+  uploadDate    DateTime @default(now())
+  uploader      User     @relation(fields: [uploaderId], references: [id])
+  uploaderId    String
+  drawing       Drawing  @relation(fields: [drawingId], references: [id])
+  drawingId     String
+}
+
+model PhotoEntry {
+  id             String       @id @default(uuid())
+  url            String
+  date           DateTime     @default(now())
+  notes          String?
+  author         User         @relation(fields: [authorId], references: [id])
+  authorId       String
+  controlPoint   ControlPoint @relation(fields: [controlPointId], references: [id])
+  controlPointId String
+  attachment     Attachment?  @relation("PhotoAttachment", fields: [attachmentId], references: [id])
+  attachmentId   String?      @unique
+}
+
+model ControlPoint {
+  id          String       @id @default(uuid())
+  name        String
+  description String?
+  location    String?
+  photos      PhotoEntry[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model ProjectTask {
+  id           String   @id @default(uuid())
+  taskId       String   @unique
+  name         String   @db.VarChar(512)
+  startDate    DateTime
+  endDate      DateTime
+  progress     Int      @default(0)
+  duration     Int
+  isSummary    Boolean  @default(false)
+  outlineLevel Int      @default(1)
+  dependencies String?  @db.Text // Stored as JSON array of task IDs
+  
+  parentId     String?
+  parent       ProjectTask?  @relation("TaskHierarchy", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  children     ProjectTask[] @relation("TaskHierarchy")
+  
+  successors   ProjectTask[] @relation("TaskDependencies")
+  predecessors ProjectTask[] @relation("TaskDependencies")
+  
+  projectId    String?
+  project      Project? @relation(fields: [projectId], references: [id])
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model ContractItem {
+  id               String         @id @default(uuid())
+  itemCode         String         @unique
+  description      String
+  unit             String
+  unitPrice        Float
+  contractQuantity Float
+  workActaItems    WorkActaItem[]
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+}
+
+model WorkActa {
+  id          String         @id @default(uuid())
+  number      String         @unique
+  period      String
+  date        DateTime
+  status      WorkActaStatus
+  items       WorkActaItem[]
+  attachments Attachment[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model WorkActaItem {
+  id             String       @id @default(uuid())
+  quantity       Float
+  workActa       WorkActa     @relation(fields: [workActaId], references: [id])
+  workActaId     String
+  contractItem   ContractItem @relation(fields: [contractItemId], references: [id])
+  contractItemId String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([workActaId])
+  @@index([contractItemId])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model ChatbotUsage {
+  id          String   @id @default(uuid())
+  userId      String
+  date        DateTime @db.Date
+  queryCount  Int      @default(0)
+  cost        Decimal  @default(0.00) @db.Decimal(10, 4)
+  model       String?
+  tokensUsed  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([date])
+}

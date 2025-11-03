@@ -245,8 +245,8 @@ export const generateLogEntryPdf = async ({
       ["Confidencial", entry.isConfidential ? "Sí" : "No"],
       [
         "Día del plazo",
-        entry.scheduleDay && entry.scheduleDay.trim()
-          ? entry.scheduleDay.trim()
+        entry.scheduleDay && entry.scheduleDay !== 0
+          ? String(entry.scheduleDay)
           : "—",
       ],
       [
@@ -324,8 +324,8 @@ export const generateLogEntryPdf = async ({
       project?.contractId
         ? `Contrato: ${project.contractId}`
         : null,
-      entry.scheduleDay && entry.scheduleDay.trim()
-        ? `Día del plazo: ${entry.scheduleDay.trim()}`
+      entry.scheduleDay && entry.scheduleDay !== 0
+        ? `Día del plazo: ${entry.scheduleDay}`
         : null,
       entry.locationDetails && entry.locationDetails.trim()
         ? `Localización / Tramo: ${entry.locationDetails.trim()}`

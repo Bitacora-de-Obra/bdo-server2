@@ -817,6 +817,7 @@ const formatLogEntry = (entry: any) => {
         comment.timestamp instanceof Date
           ? comment.timestamp.toISOString()
           : comment.timestamp,
+      attachments: (comment.attachments || []).map(buildAttachmentResponse),
     })),
     attachments: (entry.attachments || []).map(buildAttachmentResponse),
     signatures: normalizedSignatures,
@@ -1371,7 +1372,7 @@ app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, r
       originalPdf: originalBuffer,
       signature: {
         buffer: signatureBuffer,
-        mimeType: signature.mimeType,
+        mimeType: signature.mimeType || 'image/png',
       },
       position: {
         page,
@@ -1443,12 +1444,8 @@ app.post("/api/attachments/:id/sign", authMiddleware, async (req: AuthRequest, r
         signerId: userId,
         documentType,
         documentId,
-        originalAttachmentId: attachment.id,
+        originalPdfId: attachment.id,
         signedAttachmentId: signedAttachment.id,
-        originalHash: sha256(originalBuffer),
-        signedHash: sha256(signedBuffer),
-        ipAddress: req.ip,
-        consentStatement,
       },
     });
 
@@ -2968,11 +2965,13 @@ app.delete("/api/users/me/signature", authMiddleware, async (req: AuthRequest, r
 
     const storage = getStorage();
     await prisma.userSignature.delete({ where: { id: existing.id } });
-    await storage.remove(existing.storagePath).catch((error) => {
-      console.warn("No se pudo eliminar el archivo de firma del almacenamiento.", {
-        error,
+    if (existing.storagePath) {
+      await storage.remove(existing.storagePath).catch((error) => {
+        console.warn("No se pudo eliminar el archivo de firma del almacenamiento.", {
+          error,
+        });
       });
-    });
+    }
 
     res.status(204).send();
   } catch (error) {
@@ -4188,7 +4187,7 @@ app.get("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res) =>
       include: {
         author: true,
         attachments: true,
-        comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
+        comments: { include: { author: true, attachments: true }, orderBy: { timestamp: "asc" } },
         signatures: { include: { signer: true } },
         assignees: true,
         signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
@@ -4218,7 +4217,7 @@ app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
       include: {
         author: true,
         attachments: true,
-        comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
+        comments: { include: { author: true, attachments: true }, orderBy: { timestamp: "asc" } },
         signatures: { include: { signer: true } },
         assignees: true,
         signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
@@ -4457,25 +4456,25 @@ app.post("/api/log-entries", authMiddleware, (req: AuthRequest, res) => {
         isConfidential: isConfidentialValue,
         status: prismaStatus,
         scheduleDay:
-          typeof (formData as any).scheduleDay === "string"
-            ? (formData as any).scheduleDay.trim()
-            : "",
+          typeof (formData as any).scheduleDay === "string" && (formData as any).scheduleDay.trim() !== ""
+            ? parseInt((formData as any).scheduleDay.trim(), 10) || 0
+            : 0,
         locationDetails:
           typeof (formData as any).locationDetails === "string"
             ? (formData as any).locationDetails.trim()
             : "",
-        weatherReport: normalizedWeatherReport as unknown as Prisma.InputJsonValue,
-        contractorPersonnel: normalizedContractorPersonnel as unknown as Prisma.InputJsonValue,
-        interventoriaPersonnel: normalizedInterventoriaPersonnel as unknown as Prisma.InputJsonValue,
-        equipmentResources: normalizedEquipmentResources as unknown as Prisma.InputJsonValue,
-        executedActivities: normalizedExecutedActivities as unknown as Prisma.InputJsonValue,
-        executedQuantities: normalizedExecutedQuantities as unknown as Prisma.InputJsonValue,
-        scheduledActivities: normalizedScheduledActivities as unknown as Prisma.InputJsonValue,
-        qualityControls: normalizedQualityControls as unknown as Prisma.InputJsonValue,
-        materialsReceived: normalizedMaterialsReceived as unknown as Prisma.InputJsonValue,
-        safetyNotes: normalizedSafetyNotes as unknown as Prisma.InputJsonValue,
-        projectIssues: normalizedProjectIssues as unknown as Prisma.InputJsonValue,
-        siteVisits: normalizedSiteVisits as unknown as Prisma.InputJsonValue,
+        weatherReport: normalizedWeatherReport ? JSON.stringify(normalizedWeatherReport) : null,
+        contractorPersonnel: JSON.stringify(normalizedContractorPersonnel),
+        interventoriaPersonnel: JSON.stringify(normalizedInterventoriaPersonnel),
+        equipmentResources: JSON.stringify(normalizedEquipmentResources),
+        executedActivities: JSON.stringify(normalizedExecutedActivities),
+        executedQuantities: JSON.stringify(normalizedExecutedQuantities),
+        scheduledActivities: JSON.stringify(normalizedScheduledActivities),
+        qualityControls: JSON.stringify(normalizedQualityControls),
+        materialsReceived: JSON.stringify(normalizedMaterialsReceived),
+        safetyNotes: JSON.stringify(normalizedSafetyNotes),
+        projectIssues: JSON.stringify(normalizedProjectIssues),
+        siteVisits: JSON.stringify(normalizedSiteVisits),
         contractorObservations:
           typeof (formData as any).contractorObservations === "string"
             ? (formData as any).contractorObservations.trim()
@@ -5097,39 +5096,78 @@ app.delete("/api/log-entries/:id", authMiddleware, async (req: AuthRequest, res)
   }
 });
 
-app.post("/api/log-entries/:id/comments", authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    const { id } = req.params;
-    const { content, authorId } = req.body;
-
-    if (!content || !authorId) {
-      return res.status(400).json({ error: "Contenido y autor son obligatorios." });
+app.post("/api/log-entries/:id/comments", authMiddleware, (req: AuthRequest, res) => {
+  const uploadMiddleware = upload.array('attachments', 5);
+  
+  uploadMiddleware(req, res, async (err) => {
+    if (err instanceof multer.MulterError) {
+      return res.status(400).json({ error: err.message });
+    } else if (err) {
+      return res.status(500).json({ error: err.message });
     }
 
-    const logEntry = await prisma.logEntry.findUnique({ where: { id } });
-    if (!logEntry) {
-      return res.status(404).json({ error: "Anotación no encontrada." });
+    try {
+      const { id } = req.params;
+      const { content, authorId } = req.body;
+
+      if (!content || !authorId) {
+        return res.status(400).json({ error: "Contenido y autor son obligatorios." });
+      }
+
+      const logEntry = await prisma.logEntry.findUnique({ where: { id } });
+      if (!logEntry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      const author = await prisma.user.findUnique({ where: { id: authorId } });
+      if (!author) {
+        return res.status(404).json({ error: "Autor no encontrado." });
+      }
+
+      // Procesar archivos subidos
+      const uploadedFiles = (req.files || []) as Express.Multer.File[];
+      const attachments = [];
+      for (const file of uploadedFiles) {
+        try {
+          if (!file.buffer) {
+            logger.warn("Archivo sin buffer recibido", { originalName: file.originalname });
+            continue;
+          }
+          const stored = await persistUploadedFile(file, "comments");
+          const attachment = await prisma.attachment.create({
+            data: {
+              fileName: file.originalname,
+              url: stored.url,
+              storagePath: stored.key,
+              size: file.size,
+              type: file.mimetype,
+            },
+          });
+          attachments.push({ id: attachment.id });
+        } catch (e) {
+          console.error('Error creating attachment:', e);
+        }
+      }
+
+      const newComment = await prisma.comment.create({
+        data: {
+          content,
+          author: { connect: { id: authorId } },
+          logEntry: { connect: { id } },
+          attachments: attachments.length > 0 ? { connect: attachments } : undefined,
+        },
+        include: { 
+          author: true,
+          attachments: true,
+        },
+      });
+
+      res.status(201).json(newComment);
+    } catch (error) {
+      console.error("Error al crear comentario de bitácora:", error);
+      res.status(500).json({ error: "No se pudo crear el comentario." });
     }
-
-    const author = await prisma.user.findUnique({ where: { id: authorId } });
-    if (!author) {
-      return res.status(404).json({ error: "Autor no encontrado." });
-    }
-
-    const newComment = await prisma.comment.create({
-      data: {
-        content,
-        author: { connect: { id: authorId } },
-        logEntry: { connect: { id } },
-      },
-      include: { author: true },
-    });
-
-    res.status(201).json(newComment);
-  } catch (error) {
-    console.error("Error al crear comentario de bitácora:", error);
-    res.status(500).json({ error: "No se pudo crear el comentario." });
-  }
+  });
 });
 
 app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequest, res) => {
@@ -5292,7 +5330,7 @@ app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequ
               originalPdf: originalBuffer,
               signature: {
                 buffer: signatureBuffer,
-                mimeType: userSignature.mimeType,
+                mimeType: userSignature.mimeType || 'image/png',
               },
               position: {
                 x: xPos,
@@ -5334,12 +5372,8 @@ app.post("/api/log-entries/:id/signatures", authMiddleware, async (req: AuthRequ
                 signerId: signerId,
                 documentType: "logEntry",
                 documentId: id,
-                originalAttachmentId: basePdf.id,
+                originalPdfId: basePdf.id,
                 signedAttachmentId: signedAttachment.id,
-                originalHash: sha256(originalBuffer),
-                signedHash: sha256(signedBuffer),
-                ipAddress: req.ip,
-                consentStatement: "Firma aplicada mediante contraseña",
               },
             });
           }
@@ -6492,6 +6526,7 @@ app.post("/api/project-tasks/import", authMiddleware, async (req: AuthRequest, r
 
       return {
         id,
+        taskId: id,
         name: safeName,
         startDate: parsedStart,
         endDate: parsedEnd,
