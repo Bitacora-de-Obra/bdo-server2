@@ -83,6 +83,17 @@ const prisma = new PrismaClient();
 const port = 4001;
 const isProduction = process.env.NODE_ENV === "production";
 
+const COMETCHAT_APP_ID = process.env.COMETCHAT_APP_ID;
+const COMETCHAT_REGION = process.env.COMETCHAT_REGION;
+const COMETCHAT_API_KEY = process.env.COMETCHAT_API_KEY;
+
+const getCometChatBaseUrl = () => {
+  if (!COMETCHAT_APP_ID || !COMETCHAT_REGION) {
+    return null;
+  }
+  return `https://${COMETCHAT_APP_ID}.api-${COMETCHAT_REGION}.cometchat.io/v3`;
+};
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -2437,6 +2448,83 @@ app.post("/api/chatbot/feedback", authMiddleware, async (req: AuthRequest, res) 
   } catch (error) {
     console.error("Error al registrar feedback del chatbot:", error);
     res.status(500).json({ error: "No se pudo guardar el feedback del chatbot." });
+  }
+});
+
+app.post("/api/chat/cometchat/session", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const baseUrl = getCometChatBaseUrl();
+    if (!baseUrl || !COMETCHAT_API_KEY) {
+      return res.status(501).json({ error: "CometChat no está configurado en el servidor." });
+    }
+
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Usuario no autenticado." });
+    }
+
+    const dbUser = await prisma.user.findUnique({ where: { id: userId } });
+    if (!dbUser) {
+      return res.status(404).json({ error: "Usuario no encontrado." });
+    }
+
+    const headers: Record<string, string> = {
+      accept: "application/json",
+      "content-type": "application/json",
+      apiKey: COMETCHAT_API_KEY,
+    };
+
+    const uid = dbUser.id;
+
+    const userResponse = await fetch(`${baseUrl}/users/${uid}`, { headers });
+    if (userResponse.status === 404) {
+      const createResponse = await fetch(`${baseUrl}/users`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          uid,
+          name: dbUser.fullName || dbUser.email || uid,
+          avatar: dbUser.avatarUrl || undefined,
+          metadata: {
+            email: dbUser.email,
+            projectRole: dbUser.projectRole,
+            appRole: dbUser.appRole,
+          },
+        }),
+      });
+      if (!createResponse.ok) {
+        const body = await createResponse.text();
+        logger.error("CometChat: error creando usuario", { status: createResponse.status, body });
+        return res.status(500).json({ error: "No se pudo crear el usuario en CometChat." });
+      }
+    } else if (!userResponse.ok) {
+      const body = await userResponse.text();
+      logger.error("CometChat: error consultando usuario", { status: userResponse.status, body });
+      return res.status(500).json({ error: "No se pudo sincronizar el usuario con CometChat." });
+    }
+
+    const tokenResponse = await fetch(`${baseUrl}/users/${uid}/auth_tokens`, {
+      method: "POST",
+      headers,
+    });
+
+    if (!tokenResponse.ok) {
+      const body = await tokenResponse.text();
+      logger.error("CometChat: error generando token", { status: tokenResponse.status, body });
+      return res.status(500).json({ error: "No se pudo generar el token de acceso para CometChat." });
+    }
+
+    const tokenPayload: any = await tokenResponse.json();
+    const authToken = tokenPayload?.data?.authToken;
+    if (!authToken) {
+      logger.error("CometChat: respuesta sin authToken", { data: tokenPayload });
+      return res.status(500).json({ error: "No se pudo generar el token de acceso para CometChat." });
+    }
+
+    res.json({ authToken, expiresAt: tokenPayload?.data?.expiresAt ?? null });
+  } catch (error) {
+    logger.error("CometChat: error generando sesión", { error });
+    res.status(500).json({ error: "No se pudo iniciar la sesión de chat." });
   }
 });
 
