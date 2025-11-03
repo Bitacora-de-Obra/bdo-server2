@@ -15,6 +15,7 @@ import {
   ProjectTask,
   CommitmentStatus,
   ModificationType,
+  ChatbotFeedbackRating,
 } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -71,6 +72,11 @@ import {
   isEmailServiceConfigured,
   sendCommunicationAssignmentEmail,
 } from "./services/email";
+import {
+  ChatbotContextSection,
+  sectionToText,
+  selectRelevantSections,
+} from "./services/chatbot/contextUtils";
 // El middleware de autenticación ya está importado arriba
 const app = express();
 const prisma = new PrismaClient();
@@ -117,6 +123,13 @@ const DEFAULT_APP_SETTINGS = {
   sessionTimeoutMinutes: 60,
   photoIntervalDays: 3,
   defaultProjectVisibility: "private",
+};
+
+const MODEL_COST_PER_K_TOKENS: Record<string, number> = {
+  "gpt-4o-mini": 0.150,
+  "gpt-4o": 0.060,
+  "gpt-4.1-mini": 0.140,
+  "gpt-3.5-turbo": 0.002,
 };
 
 const REFRESH_TOKEN_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 días
@@ -1520,7 +1533,7 @@ app.get("/api/ping", (req, res) => {
 // --- INICIO: Endpoint del Chatbot ---
 // --- INICIO: Endpoint del Chatbot (Versión OpenAI) ---
 app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => {
-  const { query } = req.body;
+  const { query, history } = req.body;
   const userId = req.user?.userId;
 
   if (!query) {
@@ -1531,6 +1544,22 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
   }
 
   try {
+    const conversationHistory: Array<{ role: "assistant" | "user"; content: string }> = Array.isArray(history)
+      ? history
+          .filter(
+            (item: any) =>
+              item &&
+              typeof item.content === "string" &&
+              item.content.trim() &&
+              (item.role === "user" || item.role === "assistant")
+          )
+          .map((item: any) => ({
+            role: item.role,
+            content: item.content.slice(0, 1500),
+          }))
+          .slice(-6)
+      : [];
+
     const [
       project,
       contractModifications,
@@ -1710,7 +1739,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
       return `${value.toFixed(decimals)}%`;
     };
 
-    const contextoSecciones: string[] = [];
+    const contextSections: ChatbotContextSection[] = [];
 
     if (project) {
       const startDate = project.startDate ? new Date(project.startDate) : null;
@@ -1803,9 +1832,12 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         );
       }
 
-      contextoSecciones.push(
-        `Resumen del proyecto:\n${projectSummary.join("\n")}`
-      );
+      contextSections.push({
+        id: "project-overview",
+        heading: "Resumen ejecutivo del proyecto",
+        body: projectSummary.join("\n"),
+        priority: 2,
+      });
 
       if (contractModifications.length) {
         const modificationsSummary = contractModifications
@@ -1826,9 +1858,12 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
             return `• ${partes.join(" | ")}`;
           })
           .join("\n");
-        contextoSecciones.push(
-          `Modificaciones contractuales recientes (máx. 5):\n${modificationsSummary}`
-        );
+        contextSections.push({
+          id: "contract-modifications",
+          heading: "Modificaciones contractuales recientes (máx. 5)",
+          body: modificationsSummary,
+          priority: 1,
+        });
       }
     }
 
@@ -1902,9 +1937,11 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
               1
             )}).${item.lastActaSummary}`
         );
-        contextoSecciones.push(
-          `Avance por ítems contractuales clave:\n${lines.join("\n")}`
-        );
+        contextSections.push({
+          id: "contract-items-progress",
+          heading: "Avance por ítems contractuales clave",
+          body: lines.join("\n"),
+        });
       }
     }
 
@@ -1953,9 +1990,11 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         )}. Ítems destacados: ${principales || "sin ítems cargados"}.`;
       });
 
-      contextoSecciones.push(
-        `Actas de obra más recientes (máx. 5):\n${workActaLines.join("\n")}`
-      );
+      contextSections.push({
+        id: "work-actas",
+        heading: "Actas de obra más recientes (máx. 5)",
+        body: workActaLines.join("\n"),
+      });
     }
 
     if (projectTasks.length) {
@@ -1969,9 +2008,11 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         )}, duración ${task.duration} días.`;
       });
 
-      contextoSecciones.push(
-        `Tareas del cronograma consultadas (máx. 10):\n${taskLines.join("\n")}`
-      );
+      contextSections.push({
+        id: "project-tasks",
+        heading: "Tareas del cronograma consultadas (máx. 10)",
+        body: taskLines.join("\n"),
+      });
     }
 
     if (ultimaAnotacion) {
@@ -1988,9 +2029,12 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         }`,
       ].join("\n");
 
-      contextoSecciones.push(
-        `Última anotación registrada en la bitácora:\n${ultimaAnotacionResumen}`
-      );
+      contextSections.push({
+        id: "last-log-entry",
+        heading: "Última anotación registrada en la bitácora",
+        body: ultimaAnotacionResumen,
+        priority: 1,
+      });
     }
 
     // Add communications context
@@ -2002,9 +2046,11 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         return `• Radicado ${comm.radicado}: "${comm.subject}" - De: ${sender} - Para: ${recipient} - Estado: ${status} - Fecha: ${formatDate(comm.sentDate)}`;
       }).join("\n");
       
-      contextoSecciones.push(
-        `Comunicaciones oficiales recientes:\n${communicationsSummary}`
-      );
+      contextSections.push({
+        id: "communications",
+        heading: "Comunicaciones oficiales recientes",
+        body: communicationsSummary,
+      });
     }
 
     // Add actas context
@@ -2016,9 +2062,11 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         return `• ${acta.number}: "${acta.title}" - Área: ${area} - Estado: ${status} - Compromisos: ${commitmentsCount} - Fecha: ${formatDate(acta.date)}`;
       }).join("\n");
       
-      contextoSecciones.push(
-        `Actas de comité recientes:\n${actasSummary}`
-      );
+      contextSections.push({
+        id: "committee-actas",
+        heading: "Actas de comité recientes",
+        body: actasSummary,
+      });
     }
 
     // Add cost actas context
@@ -2028,9 +2076,11 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         return `• ${acta.number}: Período ${acta.period} - Valor: ${formatCurrency(acta.billedAmount)} - Estado: ${status} - Fecha: ${formatDate(acta.submissionDate)}`;
       }).join("\n");
       
-      contextoSecciones.push(
-        `Actas de costo recientes:\n${costActasSummary}`
-      );
+      contextSections.push({
+        id: "cost-actas",
+        heading: "Actas de costo recientes",
+        body: costActasSummary,
+      });
     }
 
     // Add reports context
@@ -2041,9 +2091,11 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         return `• ${report.type} ${report.number}: ${scope} - Estado: ${status} - Autor: ${report.author?.fullName} - Fecha: ${formatDate(report.submissionDate)}`;
       }).join("\n");
       
-      contextoSecciones.push(
-        `Informes recientes:\n${reportsSummary}`
-      );
+      contextSections.push({
+        id: "reports",
+        heading: "Informes recientes",
+        body: reportsSummary,
+      });
     }
 
     // Add drawings context
@@ -2055,9 +2107,11 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         return `• ${drawing.code}: "${drawing.title}" - Disciplina: ${discipline} - Estado: ${status} - Versiones: ${versionsCount}`;
       }).join("\n");
       
-      contextoSecciones.push(
-        `Planos del proyecto:\n${drawingsSummary}`
-      );
+      contextSections.push({
+        id: "drawings",
+        heading: "Planos del proyecto",
+        body: drawingsSummary,
+      });
     }
 
     // Add control points context
@@ -2067,9 +2121,11 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         return `• ${point.name}: ${point.description} - Ubicación: ${point.location} - Fotos: ${photosCount}`;
       }).join("\n");
       
-      contextoSecciones.push(
-        `Puntos de control fotográfico:\n${controlPointsSummary}`
-      );
+      contextSections.push({
+        id: "control-points",
+        heading: "Puntos de control fotográfico",
+        body: controlPointsSummary,
+      });
     }
 
     // Add pending commitments context
@@ -2080,9 +2136,12 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         return `• ${commitment.description} - Responsable: ${responsible} (${role}) - Vence: ${formatDate(commitment.dueDate)}`;
       }).join("\n");
       
-      contextoSecciones.push(
-        `Compromisos pendientes:\n${commitmentsSummary}`
-      );
+      contextSections.push({
+        id: "pending-commitments",
+        heading: "Compromisos pendientes",
+        body: commitmentsSummary,
+        priority: 1,
+      });
     }
 
     // Add recent log entries context
@@ -2095,57 +2154,192 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         return `• "${entry.title}" - Autor: ${author} - Tipo: ${type} - Estado: ${status} - Asignados: ${assignees} - Fecha: ${formatDate(entry.createdAt)}`;
       }).join("\n");
       
-      contextoSecciones.push(
-        `Anotaciones recientes en bitácora:\n${logEntriesSummary}`
-      );
+      contextSections.push({
+        id: "recent-log-entries",
+        heading: "Anotaciones recientes en bitácora",
+        body: logEntriesSummary,
+      });
     }
 
-    const contexto =
-      contextoSecciones.join("\n\n") ||
-      "No se encontró información contextual relevante en la base de datos.";
+    const fallbackContext =
+      contextSections.length > 0
+        ? contextSections.map(sectionToText).join("\n\n")
+        : "No se encontró información contextual relevante en la base de datos.";
+
+    let selectedContextSections: ChatbotContextSection[] = [];
+    let retrievalPrompt = String(query);
+    let contexto = fallbackContext;
+
+    if (contextSections.length) {
+      retrievalPrompt = conversationHistory.length
+        ? `${conversationHistory[conversationHistory.length - 1].content}\n${query}`
+        : String(query);
+      const selectedSections = await selectRelevantSections({
+        query: retrievalPrompt,
+        sections: contextSections,
+        openaiClient: openai,
+        maxSections: 6,
+      });
+
+      if (selectedSections.length) {
+        selectedContextSections = selectedSections;
+        contexto = selectedSections.map(sectionToText).join("\n\n");
+      } else {
+        selectedContextSections = contextSections.slice(
+          0,
+          Math.min(6, contextSections.length)
+        );
+        contexto = selectedContextSections.map(sectionToText).join("\n\n");
+      }
+    } else {
+      selectedContextSections = [];
+    }
+
+    const systemPrompt = [
+      "Eres Aurora, asistente virtual de la plataforma Bitácora de Obra.",
+      "Ayudas a residentes, interventores y contratistas a entender el estado del proyecto usando la información auditada que recibes.",
+      "",
+      "Guías obligatorias:",
+      "1. Utiliza únicamente el contexto suministrado; no inventes datos ni supongas valores faltantes.",
+      "2. Indica con claridad cuando un dato no aparezca en el contexto e invita a consultar al responsable correspondiente.",
+      "3. Prioriza riesgos, vencimientos próximos, responsables y fechas clave.",
+      "4. Redacta en español colombiano técnico, tono profesional y directo.",
+      "5. Mantén la respuesta en máximo dos párrafos o viñetas breves (máx. 6 frases).",
+      "6. Si el usuario pide procedimientos o recomendaciones, apóyate en el contexto; si no existe, di que no está disponible.",
+      "7. Incluye cifras, unidades y fuentes del contexto cuando sea posible.",
+      "",
+      "Ejemplo de estilo cuando falta información:",
+      "«No encuentro inspecciones de seguridad en el contexto entregado; por favor revisa la bitácora o consulta al residente de obra.»",
+    ].join("\n");
+
+    const exampleMessages: Array<{ role: "user" | "assistant"; content: string }> = [
+      {
+        role: "user",
+        content:
+          "Ejemplo (no responder al usuario real): ¿Qué compromisos vencen esta semana?",
+      },
+      {
+        role: "assistant",
+        content:
+          "Ejemplo: Los compromisos con vencimiento más próximo son... (lista los hitos relevantes con fecha y responsable).",
+      },
+      {
+        role: "user",
+        content:
+          "Ejemplo (no responder al usuario real): Dame cifras aunque no estén en el contexto.",
+      },
+      {
+        role: "assistant",
+        content:
+          "Ejemplo: No puedo inventar datos; según el contexto compartido no hay cifras disponibles para esa consulta.",
+      },
+    ];
+
+    const contextMessage = {
+      role: "system" as const,
+      content: `Contexto operativo del proyecto (usar estrictamente):\n${contexto}`,
+    };
+
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: systemPrompt },
+      ...exampleMessages,
+      ...conversationHistory,
+      contextMessage,
+      { role: "user", content: String(query) },
+    ];
+
+    const chatModel = process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini";
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: chatModel,
       temperature: 0.2,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Eres un asistente virtual especializado en gestión de proyectos de construcción y bitácoras de obra. Tu conocimiento incluye:\n\n" +
-            "1. GESTIÓN DE PROYECTOS: Cronogramas, avances, modificaciones contractuales, actas de obra, control de costos\n" +
-            "2. COMUNICACIONES: Correspondencia oficial, radicados, seguimiento de comunicaciones\n" +
-            "3. DOCUMENTACIÓN: Planos, informes, actas de comité, reportes semanales y mensuales\n" +
-            "4. CONTROL DE CALIDAD: Puntos de control, registro fotográfico, anotaciones de bitácora\n" +
-            "5. COMPROMISOS: Seguimiento de compromisos, responsables, fechas de vencimiento\n" +
-            "6. PERSONAL: Roles del proyecto, contactos, responsabilidades\n\n" +
-            "INSTRUCCIONES:\n" +
-            "- Usa ÚNICAMENTE la información del contexto proporcionado\n" +
-            "- Si no tienes la información específica, indica claramente que no está disponible en el contexto\n" +
-            "- Proporciona respuestas precisas y útiles basadas en los datos reales del proyecto\n" +
-            "- Responde en español colombiano, usando terminología técnica apropiada\n" +
-            "- Mantén las respuestas concisas pero informativas (máximo 5 frases)\n" +
-            "- Si se pregunta sobre procedimientos o procesos, explica basándote en la información disponible\n" +
-            "- Para cálculos o análisis, usa los datos numéricos del contexto\n" +
-            "- Si hay múltiples elementos similares, menciona los más relevantes o recientes",
-        },
-        {
-          role: "user",
-          content: `Contexto disponible:
-${contexto}
-
----
-
-Pregunta del usuario:
-${query}`,
-        },
-      ],
+      messages,
     });
 
     const botResponse =
       completion.choices?.[0]?.message?.content?.trim() ||
       "No pude generar una respuesta.";
 
-    res.json({ response: botResponse });
+    const promptTokens = completion.usage?.prompt_tokens ?? 0;
+    const completionTokens = completion.usage?.completion_tokens ?? 0;
+    const totalTokens = promptTokens + completionTokens;
+    const costPer1K = MODEL_COST_PER_K_TOKENS[chatModel] ?? 0;
+    const estimatedCost =
+      costPer1K > 0 && totalTokens > 0
+        ? (totalTokens / 1000) * costPer1K
+        : 0;
+    const costIncrementDecimal = new Prisma.Decimal(estimatedCost.toFixed(4));
+
+    let interactionId: string | null = null;
+
+    try {
+      const newInteractionId = randomUUID();
+      interactionId = newInteractionId;
+      await prisma.chatbotInteraction.create({
+        data: {
+          id: newInteractionId,
+          userId,
+          question: String(query),
+          answer: botResponse,
+          model: chatModel,
+          tokensPrompt: promptTokens,
+          tokensCompletion: completionTokens,
+          selectedSections: selectedContextSections.map((section) => ({
+            id: section.id,
+            heading: section.heading,
+          })),
+          metadata: {
+            totalSectionsAvailable: contextSections.length,
+            selectedCount: selectedContextSections.length,
+            hasConversationHistory: conversationHistory.length > 0,
+            retrievalPromptLength: retrievalPrompt.length,
+            totalTokens,
+            estimatedCost,
+          },
+        },
+      });
+    } catch (loggingError) {
+      console.warn("No fue posible guardar la interacción del chatbot:", loggingError);
+    }
+
+    try {
+      const usageDate = new Date();
+      usageDate.setHours(0, 0, 0, 0);
+
+      await prisma.chatbotUsage.upsert({
+        where: {
+          userId_date: {
+            userId,
+            date: usageDate,
+          },
+        },
+        update: {
+          queryCount: { increment: 1 },
+          tokensUsed: { increment: totalTokens },
+          cost: { increment: costIncrementDecimal },
+          model: chatModel,
+        },
+        create: {
+          userId,
+          date: usageDate,
+          queryCount: 1,
+          tokensUsed: totalTokens,
+          cost: costIncrementDecimal,
+          model: chatModel,
+        },
+      });
+    } catch (usageError) {
+      console.warn("No se pudo actualizar las métricas de uso del chatbot:", usageError);
+    }
+
+    res.json({
+      response: botResponse,
+      interactionId,
+      contextSections: selectedContextSections.map((section) => ({
+        id: section.id,
+        heading: section.heading,
+      })),
+    });
 
   } catch (error: any) {
     console.error("Error al contactar la API de OpenAI:", error);
@@ -2164,6 +2358,61 @@ ${query}`,
 });
 // --- FIN: Endpoint del Chatbot ---
 // --- FIN: Endpoint del Chatbot ---
+
+app.post("/api/chatbot/feedback", authMiddleware, async (req: AuthRequest, res) => {
+  const { interactionId, rating, comment, tags } = req.body ?? {};
+  const userId = req.user?.userId;
+
+  if (!interactionId || typeof interactionId !== "string") {
+    return res.status(400).json({ error: "interactionId es obligatorio." });
+  }
+  if (!rating || (rating !== "POSITIVE" && rating !== "NEGATIVE")) {
+    return res.status(400).json({ error: "rating debe ser POSITIVE o NEGATIVE." });
+  }
+  if (!userId) {
+    return res.status(401).json({ error: "Usuario no autenticado." });
+  }
+
+  try {
+    const interaction = await prisma.chatbotInteraction.findUnique({
+      where: { id: interactionId },
+      select: { userId: true },
+    });
+
+    if (!interaction) {
+      return res.status(404).json({ error: "No se encontró la interacción especificada." });
+    }
+
+    if (interaction.userId !== userId) {
+      return res.status(403).json({ error: "No tienes permisos para calificar esta interacción." });
+    }
+
+    const metadata =
+      tags && Array.isArray(tags) && tags.length
+        ? { tags }
+        : undefined;
+
+    await prisma.chatbotFeedback.upsert({
+      where: { interactionId },
+      update: {
+        rating: rating as ChatbotFeedbackRating,
+        comment: typeof comment === "string" ? comment : undefined,
+        metadata,
+      },
+      create: {
+        interactionId,
+        rating: rating as ChatbotFeedbackRating,
+        comment: typeof comment === "string" ? comment : undefined,
+        metadata,
+      },
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error al registrar feedback del chatbot:", error);
+    res.status(500).json({ error: "No se pudo guardar el feedback del chatbot." });
+  }
+});
 
 
 // --- Endpoint para subir un único archivo ---

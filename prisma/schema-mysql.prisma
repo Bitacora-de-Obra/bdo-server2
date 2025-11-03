@@ -132,11 +132,6 @@ enum ModificationType {
   OTHER
 }
 
-enum ChatbotFeedbackRating {
-  POSITIVE
-  NEGATIVE
-}
-
 enum CommunicationDirection {
   SENT
   RECEIVED
@@ -175,7 +170,6 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   assignedCommunications  Communication[]             @relation("CommunicationAssignedTo")
   chatbotUsage            ChatbotUsage[]
-  chatbotInteractions     ChatbotInteraction[]
   userSignatures          UserSignature[]
   documentSignatureLogs   DocumentSignatureLog[]
   signatureTasks          LogEntrySignatureTask[]
@@ -193,7 +187,6 @@ model Project {
   initialEndDate            DateTime
   keyPersonnel              KeyPersonnel[]
   logEntries                LogEntry[]
-  projectTasks              ProjectTask[]
   interventoriaContractId   String
   interventoriaInitialValue Float
   technicalSupervisorName   String
@@ -628,7 +621,6 @@ model ControlPoint {
 
 model ProjectTask {
   id           String   @id @default(uuid())
-  taskId       String   @unique
   name         String   @db.VarChar(512)
   startDate    DateTime
   endDate      DateTime
@@ -637,17 +629,6 @@ model ProjectTask {
   isSummary    Boolean  @default(false)
   outlineLevel Int      @default(1)
   dependencies String?  @db.Text // Stored as JSON array of task IDs
-  
-  parentId     String?
-  parent       ProjectTask?  @relation("TaskHierarchy", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  children     ProjectTask[] @relation("TaskHierarchy")
-  
-  successors   ProjectTask[] @relation("TaskDependencies")
-  predecessors ProjectTask[] @relation("TaskDependencies")
-  
-  projectId    String?
-  project      Project? @relation(fields: [projectId], references: [id])
-  
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
@@ -731,31 +712,4 @@ model ChatbotUsage {
   @@unique([userId, date])
   @@index([userId])
   @@index([date])
-}
-
-model ChatbotInteraction {
-  id               String   @id @default(uuid())
-  userId           String
-  question         String
-  answer           String
-  model            String
-  tokensPrompt     Int?
-  tokensCompletion Int?
-  selectedSections Json?
-  metadata         Json?
-  createdAt        DateTime @default(now())
-  feedback         ChatbotFeedback?
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, createdAt])
-}
-
-model ChatbotFeedback {
-  id             String                 @id @default(uuid())
-  interactionId  String                 @unique
-  rating         ChatbotFeedbackRating
-  comment        String?
-  metadata       Json?
-  createdAt      DateTime               @default(now())
-  interaction    ChatbotInteraction     @relation(fields: [interactionId], references: [id], onDelete: Cascade)
 }

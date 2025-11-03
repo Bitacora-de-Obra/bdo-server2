@@ -1,0 +1,118 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      String   // UserRole as String for MySQL
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("projects")
+}
+
+model LogEntry {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  entryDate   DateTime
+  activitiesPerformed    String   @default("")
+  materialsUsed          String   @default("")
+  workforce              String   @default("")
+  weatherConditions      String   @default("")
+  additionalObservations String   @default("")
+  type        String   // EntryType as String
+  status      String   // EntryStatus as String
+  authorId    String
+  projectId   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  author  User    @relation(fields: [authorId], references: [id])
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@map("log_entries")
+  @@unique([projectId, entryDate])
+}
+
+model Communication {
+  id              String   @id @default(uuid())
+  subject         String
+  content         String
+  status          String   // CommunicationStatus as String
+  senderEntity    String
+  senderName      String
+  senderTitle     String
+  recipientEntity String
+  recipientName   String
+  recipientTitle  String
+  direction       String
+  requiresResponse Boolean  @default(false)
+  responseDueDate DateTime?
+  projectId       String
+  assigneeId      String?
+  assignedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id])
+  assignee User?  @relation(fields: [assigneeId], references: [id])
+
+  @@map("communications")
+}
+
+model Commitment {
+  id          String   @id @default(uuid())
+  description String
+  status      String   // CommitmentStatus as String
+  dueDate     DateTime
+  projectId   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@map("commitments")
+}
+
+model AppSetting {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String
+}
+
+// Relations
+model User {
+  logEntries     LogEntry[]
+  communications Communication[]
+  commitments    Commitment[]
+  assignedCommunications Communication[]
+}
+
+model Project {
+  logEntries     LogEntry[]
+  communications Communication[]
+  commitments    Commitment[]
+}
+
