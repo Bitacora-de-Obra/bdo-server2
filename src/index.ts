@@ -71,7 +71,11 @@ import {
   sendCommitmentReminderEmail,
   isEmailServiceConfigured,
   sendCommunicationAssignmentEmail,
+  getEmailConfigurationSummary,
+  verifyEmailTransporter,
+  sendTestEmail,
 } from "./services/email";
+import { buildUserNotifications } from "./services/notifications";
 import {
   ChatbotContextSection,
   sectionToText,
@@ -82,6 +86,17 @@ const app = express();
 const prisma = new PrismaClient();
 const port = 4001;
 const isProduction = process.env.NODE_ENV === "production";
+
+if (isEmailServiceConfigured()) {
+  const summary = getEmailConfigurationSummary();
+  logger.info(
+    `Servicio de correo habilitado (host: ${summary.host}, puerto: ${summary.port}, secure: ${summary.secure ? "sí" : "no"}, remitente: ${summary.defaultFrom}).`
+  );
+} else {
+  logger.warn(
+    "Servicio de correo deshabilitado. Configura SMTP_HOST y credenciales SMTP para habilitar el envío de emails."
+  );
+}
 
 const COMETCHAT_APP_ID = process.env.COMETCHAT_APP_ID;
 const COMETCHAT_REGION = process.env.COMETCHAT_REGION;
@@ -3680,6 +3695,113 @@ app.put(
     }
   }
 );
+
+app.get(
+  "/api/admin/system/email",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const summary = getEmailConfigurationSummary();
+      const shouldVerify =
+        typeof req.query.verify === "string" &&
+        req.query.verify.toLowerCase() === "true";
+
+      let verification:
+        | { verified: boolean; error?: string }
+        | undefined = undefined;
+
+      if (shouldVerify && summary.configured) {
+        try {
+          await verifyEmailTransporter();
+          verification = { verified: true };
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "No se pudo verificar la conexión SMTP.";
+          verification = { verified: false, error: message };
+        }
+      } else if (shouldVerify && !summary.configured) {
+        verification = {
+          verified: false,
+          error: "El servicio de correo no está configurado.",
+        };
+      }
+
+      res.json({
+        ...summary,
+        verification: verification ?? undefined,
+      });
+    } catch (error) {
+      console.error("Error al consultar estado del correo:", error);
+      res.status(500).json({
+        error: "No se pudo consultar el estado del servicio de correo.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/admin/system/email/test",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const toRaw = req.body?.to;
+      const toCandidate =
+        typeof toRaw === "string" && toRaw.trim().length > 0
+          ? toRaw.trim()
+          : undefined;
+      const target = toCandidate ?? req.user?.email;
+
+      if (!target) {
+        return res.status(400).json({
+          error:
+            "Proporciona un correo de destino en el cuerpo de la solicitud (campo 'to').",
+        });
+      }
+
+      await sendTestEmail(target, req.user?.email || undefined);
+      res.json({
+        success: true,
+        to: target,
+        message: "Correo de prueba enviado correctamente.",
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "No se pudo enviar el correo de prueba.";
+      const normalized = message.toLowerCase();
+      const status = normalized.includes("no está configurado") ? 400 : 500;
+      console.error("Error al enviar correo de prueba:", error);
+      res.status(status).json({ error: message });
+    }
+  }
+);
+
+app.get(
+  "/api/notifications",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const notifications = await buildUserNotifications(prisma, userId);
+      res.json(notifications);
+    } catch (error) {
+      console.error("Error al obtener notificaciones:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudieron cargar las notificaciones." });
+    }
+  }
+);
+
 // Endpoint para obtener detalles del proyecto
 app.get("/api/project-details", authMiddleware, async (req: AuthRequest, res) => {
   try {

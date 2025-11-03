@@ -62,6 +62,26 @@ let transporterRef: nodemailer.Transporter | null = null;
 
 export const isEmailServiceConfigured = () => Boolean(smtpHost);
 
+export const getEmailConfigurationSummary = () => ({
+  configured: isEmailServiceConfigured(),
+  host: smtpHost || null,
+  port: smtpPort,
+  secure: smtpSecure,
+  defaultFrom,
+  auth: smtpUser
+    ? {
+        user: smtpUser,
+        hasPassword: Boolean(smtpPass),
+      }
+    : null,
+  overrides: {
+    emailVerificationUrl: Boolean(process.env.EMAIL_VERIFICATION_URL),
+    passwordResetUrl: Boolean(process.env.PASSWORD_RESET_URL),
+    commitmentReminderCc: Boolean(process.env.COMMITMENT_REMINDER_CC),
+    commitmentReminderBcc: Boolean(process.env.COMMITMENT_REMINDER_BCC),
+  },
+});
+
 const getTransporter = () => {
   if (!isEmailServiceConfigured()) {
     return null;
@@ -354,6 +374,72 @@ export const sendCommitmentReminderEmail = async ({
     cc: ccList.length ? ccList : undefined,
     bcc: bccList.length ? bccList : undefined,
   });
+};
+
+export const verifyEmailTransporter = async () => {
+  const transporter = getTransporter();
+  if (!transporter) {
+    throw new Error(
+      "El servicio de correo no está configurado. Define las variables SMTP_HOST, SMTP_PORT, SMTP_USER/PASS."
+    );
+  }
+
+  try {
+    await transporter.verify();
+    return true;
+  } catch (error) {
+    logger.error("Error al verificar el transporte SMTP.", { error });
+    throw error;
+  }
+};
+
+export const sendTestEmail = async (to: string, initiatedBy?: string) => {
+  if (!to) {
+    throw new Error("Debes indicar un correo de destino para la prueba.");
+  }
+
+  if (!isEmailServiceConfigured()) {
+    throw new Error(
+      "El servicio de correo no está configurado. Configura SMTP_HOST para habilitarlo."
+    );
+  }
+
+  const subject = "Bitácora Digital · Correo de prueba";
+  const intro = initiatedBy
+    ? `Este mensaje fue solicitado por ${initiatedBy}.`
+    : "Este mensaje fue generado desde la herramienta de diagnóstico.";
+
+  const html = `
+    <p>Hola,</p>
+    <p>${intro}</p>
+    <p>El envío confirma que la configuración SMTP de Bitácora Digital está operativa.</p>
+    <p>Fecha y hora: <strong>${new Date().toLocaleString("es-CO", {
+      timeZone: process.env.REMINDER_TIMEZONE || "America/Bogota",
+    })}</strong></p>
+    <hr/>
+    <p>Si tú no solicitaste esta prueba, puedes ignorar este correo.</p>
+  `;
+
+  const text = [
+    "Hola,",
+    intro,
+    "El envío confirma que la configuración SMTP de Bitácora Digital está operativa.",
+    `Fecha y hora: ${new Date().toLocaleString("es-CO", {
+      timeZone: process.env.REMINDER_TIMEZONE || "America/Bogota",
+    })}`,
+    "",
+    "Si tú no solicitaste esta prueba, puedes ignorar este correo.",
+  ].join("\n");
+
+  const sent = await sendEmail({ to, subject, html, text });
+
+  if (!sent) {
+    throw new Error(
+      "El correo de prueba no se envió porque el servicio está en modo 'desactivado' (sin SMTP_HOST)."
+    );
+  }
+
+  return true;
 };
 
 export const sendCommunicationAssignmentEmail = async ({

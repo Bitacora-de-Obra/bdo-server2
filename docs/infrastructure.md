@@ -12,6 +12,7 @@
   - `SMTP_*`, `EMAIL_FROM`: credenciales SMTP para correos de verificación y restablecimiento.
   - `APP_BASE_URL`, `EMAIL_VERIFICATION_URL`, `PASSWORD_RESET_URL`: base y plantillas de enlaces enviados por correo.
   - `EMAIL_VERIFICATION_TOKEN_TTL_HOURS`, `PASSWORD_RESET_TOKEN_TTL_MINUTES`: vigencia de tokens.
+- Guía detallada de correo: `docs/email-setup.md`.
 - Usa `cp .env.example .env` en dev y ajusta según ambiente.
 
 ## Storage de adjuntos
