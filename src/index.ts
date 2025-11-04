@@ -1096,9 +1096,32 @@ const mapReportVersionSummary = (report: any): ReportVersion => ({
     : report.createdAt
 });
 
+const normalizeOrigin = (value?: string | null) =>
+  value ? value.replace(/\/$/, "") : undefined;
+
+const allowedOrigins = new Set(
+  [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:5173",
+    normalizeOrigin(process.env.FRONTEND_URL),
+    normalizeOrigin(process.env.APP_BASE_URL),
+    normalizeOrigin(process.env.SERVER_PUBLIC_URL),
+  ].filter(Boolean) as string[]
+);
+
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173"], // Permite puertos de React y Vite
+    origin: (origin, callback) => {
+      if (!origin) {
+        return callback(null, true);
+      }
+      const normalized = normalizeOrigin(origin);
+      if (normalized && allowedOrigins.has(normalized)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`Not allowed by CORS: ${origin}`));
+    },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], // Incluye OPTIONS para preflight
     allowedHeaders: ["Content-Type", "Authorization"], // Headers permitidos
     credentials: true, // Necesario para cookies/sesiones
