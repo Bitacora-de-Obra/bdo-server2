@@ -87,6 +87,10 @@ const prisma = new PrismaClient();
 const port = Number(process.env.PORT || 4001);
 const isProduction = process.env.NODE_ENV === "production";
 
+app.get("/healthz", (_req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
 if (isEmailServiceConfigured()) {
   const summary = getEmailConfigurationSummary();
   logger.info(
