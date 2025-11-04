@@ -84,7 +84,7 @@ import {
 // El middleware de autenticación ya está importado arriba
 const app = express();
 const prisma = new PrismaClient();
-const port = 4001;
+const port = Number(process.env.PORT || 4001);
 const isProduction = process.env.NODE_ENV === "production";
 
 if (isEmailServiceConfigured()) {
