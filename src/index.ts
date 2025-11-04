@@ -7060,7 +7060,7 @@ app.post("/api/project-tasks/import", authMiddleware, requireEditor, async (req:
 });
 
 app.listen(port, () => {
-  console.log(`Servidor escuchando en http://localhost:${port}`);
+  console.log(`Servidor escuchando en http://0.0.0.0:${port}`);
 });
 import mime from "mime-types";
 
