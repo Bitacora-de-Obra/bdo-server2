@@ -1099,16 +1099,22 @@ const mapReportVersionSummary = (report: any): ReportVersion => ({
 const normalizeOrigin = (value?: string | null) =>
   value ? value.replace(/\/$/, "") : undefined;
 
-const allowedOrigins = new Set(
-  [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:5173",
-    normalizeOrigin(process.env.FRONTEND_URL),
-    normalizeOrigin(process.env.APP_BASE_URL),
-    normalizeOrigin(process.env.SERVER_PUBLIC_URL),
-  ].filter(Boolean) as string[]
-);
+const baseOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:5173",
+  normalizeOrigin(process.env.FRONTEND_URL),
+  normalizeOrigin(process.env.APP_BASE_URL),
+  normalizeOrigin(process.env.SERVER_PUBLIC_URL),
+];
+
+const extraOriginsRaw = process.env.CORS_ALLOWED_ORIGINS || "";
+const extraOrigins = extraOriginsRaw
+  .split(",")
+  .map((item) => normalizeOrigin(item.trim()))
+  .filter(Boolean) as string[];
+
+const allowedOrigins = new Set<string>([...baseOrigins, ...extraOrigins].filter(Boolean) as string[]);
 
 app.use(
   cors({
