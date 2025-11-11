@@ -1785,6 +1785,68 @@ app.post("/api/admin/migrate-urls-to-r2", authMiddleware, requireAdmin, async (r
   }
 });
 
+// Database migration fix endpoint - SOLO PARA EMERGENCIAS
+app.post("/api/admin/fix-migrations", authMiddleware, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    console.log("🔧 Iniciando corrección de migraciones...");
+    
+    // Verificar que estemos en producción
+    if (process.env.NODE_ENV !== 'production') {
+      return res.status(400).json({ 
+        error: "Este endpoint solo se debe usar en producción" 
+      });
+    }
+
+    // Ejecutar comando para resolver migraciones fallidas
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execAsync = util.promisify(exec);
+
+    try {
+      // Primero, marcar la migración fallida como resuelta
+      console.log("Marcando migración fallida como resuelta...");
+      await execAsync('npx prisma migrate resolve --applied 20250321510000_add_report_versions');
+      
+      // Luego, aplicar las migraciones pendientes
+      console.log("Aplicando migraciones pendientes...");
+      await execAsync('npx prisma migrate deploy');
+      
+      console.log("✅ Migraciones corregidas exitosamente");
+      
+      res.json({
+        success: true,
+        message: "Migraciones de base de datos corregidas exitosamente",
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (migrationError) {
+      console.error("Error en migración:", migrationError);
+      
+      // Si falla, intentar solo deploy
+      try {
+        console.log("Intentando solo deploy...");
+        await execAsync('npx prisma migrate deploy --accept-data-loss');
+        
+        res.json({
+          success: true,
+          message: "Migraciones aplicadas con data loss acceptance",
+          warning: "Se usó --accept-data-loss",
+          timestamp: new Date().toISOString()
+        });
+      } catch (deployError) {
+        throw deployError;
+      }
+    }
+
+  } catch (error) {
+    console.error("Error corrigiendo migraciones:", error);
+    res.status(500).json({ 
+      error: "Error corrigiendo migraciones de base de datos",
+      details: error instanceof Error ? error.message : "Error desconocido"
+    });
+  }
+});
+
 // Health check endpoint
 app.get("/", (req, res) => {
   res.json({ 
