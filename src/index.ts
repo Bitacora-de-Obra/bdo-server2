@@ -5639,6 +5639,58 @@ app.post(
   }
 );
 
+app.post(
+  "/api/log-entries/:id/export-pdf",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const baseUrl =
+        process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+
+      const result = await generateLogEntryPdf({
+        prisma,
+        logEntryId: id,
+        uploadsDir: process.env.UPLOADS_DIR || "./uploads",
+        baseUrl,
+      });
+
+      const updated = await prisma.logEntry.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          comments: {
+            include: { author: true },
+            orderBy: { timestamp: "asc" },
+          },
+          signatures: { include: { signer: true } },
+          signatureTasks: { include: { signer: true } },
+          assignees: true,
+          history: { include: { user: true }, orderBy: { timestamp: "desc" } },
+        },
+      });
+
+      if (!updated) {
+        return res
+          .status(404)
+          .json({ error: "Anotación no encontrada tras generar el PDF." });
+      }
+
+      res.json({
+        entry: formatLogEntry(updated),
+        attachment: buildAttachmentResponse(result.attachment),
+      });
+    } catch (error) {
+      console.error("Error al generar PDF de anotación:", error);
+      if (error instanceof Error && error.message.includes("no encontrado")) {
+        return res.status(404).json({ error: error.message });
+      }
+      res.status(500).json({ error: "No se pudo generar el PDF." });
+    }
+  }
+);
+
 // --- RUTAS PARA ACTAS DE COSTO ---
 app.get("/api/cost-actas", async (_req, res) => {
   try {
