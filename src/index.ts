@@ -685,9 +685,43 @@ const loadAttachmentBuffer = async (attachment: any): Promise<Buffer> => {
   return storage.read(storagePath);
 };
 
-const loadUserSignatureBuffer = async (userSignature: any): Promise<Buffer> => {
+const loadUserSignatureBuffer = async (
+  userSignature: any
+): Promise<Buffer> => {
   const storage = getStorage();
-  return storage.read(userSignature.storagePath);
+  const candidates = [
+    userSignature.storagePath,
+    resolveStorageKeyFromUrl(userSignature.url),
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
+    try {
+      return await storage.read(candidate);
+    } catch (error) {
+      console.warn("No se pudo leer la firma desde storage.", {
+        candidate,
+        error,
+      });
+    }
+  }
+
+  if (typeof userSignature.url === "string") {
+    try {
+      const response = await fetch(userSignature.url);
+      if (!response.ok) {
+        throw new Error(`Descarga fallida con status ${response.status}`);
+      }
+      const arrayBuffer = await response.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    } catch (error) {
+      console.warn("No se pudo descargar la firma desde la URL.", {
+        url: userSignature.url,
+        error,
+      });
+    }
+  }
+
+  throw new Error("No se pudo cargar la firma manuscrita del usuario.");
 };
 
 const mapUserBasic = (user: any) => {
@@ -961,12 +995,30 @@ const formatLogEntry = (entry: any) => {
     interventoriaObservations: entry.interventoriaObservations || "",
     requiredSignatories: requiredSigners,
     signatureTasks: formattedSignatureTasks,
-    signatureSummary: {
-      total: totalSignatureTasks,
-      signed: signedSignatureTasks.length,
-      pending: pendingSignatureTasks.length,
-      completed: totalSignatureTasks > 0 && pendingSignatureTasks.length === 0,
-    },
+    signatureSummary: (() => {
+      const totalTasks = totalSignatureTasks;
+      const signedTasksCount = signedSignatureTasks.length;
+      const pendingTasksCount = pendingSignatureTasks.length;
+
+      const totalSignatures =
+        totalTasks > 0 ? totalTasks : normalizedSignatures.length;
+      const signedSignaturesCount =
+        totalTasks > 0
+          ? signedTasksCount
+          : normalizedSignatures.filter(
+              (sig) => sig.signatureTaskStatus === "SIGNED"
+            ).length;
+      const pendingSignaturesCount =
+        totalSignatures - signedSignaturesCount;
+
+      return {
+        total: totalSignatures,
+        signed: signedSignaturesCount,
+        pending: pendingSignaturesCount,
+        completed:
+          totalSignatures > 0 && pendingSignaturesCount === 0,
+      };
+    })(),
     pendingSignatureSignatories: pendingSignatureTasks
       .map((task) => task.signer)
       .filter(
