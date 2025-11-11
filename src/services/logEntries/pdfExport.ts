@@ -239,18 +239,20 @@ export const generateLogEntryPdf = async ({
       .text(entry.title, { align: "center" })
       .moveDown();
 
+    const formatScheduleDay = (value: number | null | undefined) => {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return String(value);
+      }
+      return "—";
+    };
+
     const infoRows: Array<[string, string]> = [
       ["Autor", entry.author?.fullName || "—"],
       ["Correo autor", entry.author?.email || "—"],
       ["Estado", entryStatusLabels[entry.status] || entry.status],
       ["Tipo", entryTypeLabels[entry.type] || entry.type],
       ["Confidencial", entry.isConfidential ? "Sí" : "No"],
-      [
-        "Día del plazo",
-        entry.scheduleDay && entry.scheduleDay.trim()
-          ? entry.scheduleDay.trim()
-          : "—",
-      ],
+      ["Día del plazo", formatScheduleDay(entry.scheduleDay as number | null)],
       [
         "Localización / Tramo",
         entry.locationDetails && entry.locationDetails.trim()
@@ -323,8 +325,8 @@ export const generateLogEntryPdf = async ({
     const generalInfoItems = [
       project ? `Identificación del proyecto: ${project.name}` : null,
       project?.contractId ? `Contrato: ${project.contractId}` : null,
-      entry.scheduleDay && entry.scheduleDay.trim()
-        ? `Día del plazo: ${entry.scheduleDay.trim()}`
+      typeof entry.scheduleDay === "number" && Number.isFinite(entry.scheduleDay)
+        ? `Día del plazo: ${entry.scheduleDay}`
         : null,
       entry.locationDetails && entry.locationDetails.trim()
         ? `Localización / Tramo: ${entry.locationDetails.trim()}`
@@ -335,10 +337,15 @@ export const generateLogEntryPdf = async ({
 
     const rainIntervalLines = (weatherReportNormalized?.rainEvents || [])
       .map((event) => {
-        const start =
-          event.start && event.start.trim().length ? event.start.trim() : "—";
-        const end =
-          event.end && event.end.trim().length ? event.end.trim() : "—";
+        const formatRain = (value?: string | null) => {
+          if (typeof value !== "string") {
+            return "—";
+          }
+          const trimmed = value.trim();
+          return trimmed.length ? trimmed : "—";
+        };
+        const start = formatRain(event.start);
+        const end = formatRain(event.end);
         return `${start} a ${end}`;
       })
       .filter((value) => Boolean(value));

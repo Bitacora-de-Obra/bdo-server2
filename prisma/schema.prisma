@@ -322,18 +322,18 @@ model LogEntry {
   workforce               String @default("")
   weatherConditions       String @default("")
   additionalObservations  String @default("")
-  contractorPersonnel     String?
-  interventoriaPersonnel  String?
-  equipmentResources      String?
-  executedActivities      String?
-  executedQuantities      String?
-  scheduledActivities     String?
-  qualityControls         String?
-  materialsReceived       String?
-  safetyNotes             String?
-  projectIssues           String?
-  siteVisits              String?
-  weatherReport           String?
+  contractorPersonnel     Json?
+  interventoriaPersonnel  Json?
+  equipmentResources      Json?
+  executedActivities      Json?
+  executedQuantities      Json?
+  scheduledActivities     Json?
+  qualityControls         Json?
+  materialsReceived       Json?
+  safetyNotes             Json?
+  projectIssues           Json?
+  siteVisits              Json?
+  weatherReport           Json?
   contractorObservations  String?
   interventoriaObservations String?
   locationDetails         String @default("")
@@ -427,6 +427,10 @@ model DocumentSignatureLog {
   documentType    String?
   documentId      String?
   signedAttachmentId String?
+  originalHash    String?
+  signedHash      String?
+  ipAddress       String?
+  consentStatement String?
   signedAt        DateTime @default(now())
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
