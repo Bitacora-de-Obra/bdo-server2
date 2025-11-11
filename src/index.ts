@@ -2788,6 +2788,19 @@ app.post(
       res.status(201).json(formatLogEntry(entryWithRelations));
     } catch (error) {
       console.error("Error al crear anotación:", error);
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002" &&
+        Array.isArray((error.meta as any)?.target) &&
+        ((error.meta as any).target as string[]).includes(
+          "LogEntry_projectId_entryDate_key"
+        )
+      ) {
+        return res.status(409).json({
+          error:
+            "Ya existe una bitácora registrada para este proyecto en la fecha seleccionada.",
+        });
+      }
       res.status(500).json({ error: "No se pudo crear la anotación." });
     }
   }
