@@ -2235,6 +2235,736 @@ app.post(
   }
 );
 
+// --- RUTAS PARA ACTAS DE COMITÉ ---
+app.get("/api/actas", async (_req, res) => {
+  try {
+    const actas = await prisma.acta.findMany({
+      orderBy: { date: "desc" },
+      include: {
+        attachments: true,
+        commitments: { include: { responsible: true } },
+        signatures: { include: { signer: true } },
+      },
+    });
+    res.json(actas.map(formatActa));
+  } catch (error) {
+    console.error("Error al obtener actas:", error);
+    res.status(500).json({ error: "No se pudieron obtener las actas." });
+  }
+});
+
+app.get("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const acta = await prisma.acta.findUnique({
+      where: { id },
+      include: {
+        attachments: true,
+        commitments: { include: { responsible: true } },
+        signatures: { include: { signer: true } },
+      },
+    });
+
+    if (!acta) {
+      return res.status(404).json({ error: "Acta no encontrada." });
+    }
+
+    res.json(formatActa(acta));
+  } catch (error) {
+    console.error("Error al obtener acta:", error);
+    res.status(500).json({ error: "No se pudo obtener el acta." });
+  }
+});
+
+app.post("/api/actas", async (req, res) => {
+  try {
+    const {
+      number,
+      title,
+      date,
+      area,
+      status,
+      summary,
+      commitments = [],
+      attachments = [],
+      requiredSignatories = [],
+    } = req.body ?? {};
+
+    if (!number || !title || !date) {
+      return res.status(400).json({
+        error: "Número, título y fecha son obligatorios para crear un acta.",
+      });
+    }
+
+    const prismaArea = actaAreaMap[area] || "OTHER";
+    const prismaStatus = actaStatusMap[status] || "DRAFT";
+
+    const newActa = await prisma.acta.create({
+      data: {
+        number,
+        title,
+        date: new Date(date),
+        area: prismaArea,
+        status: prismaStatus,
+        summary,
+        commitments: {
+          create: commitments.map((commitment: any) => ({
+            description: commitment.description,
+            dueDate: commitment.dueDate ? new Date(commitment.dueDate) : null,
+            status: "PENDING",
+            responsible: commitment.responsible?.id
+              ? { connect: { id: commitment.responsible.id } }
+              : undefined,
+          })),
+        },
+        attachments: {
+          create: attachments.map((att: any) => ({
+            fileName: att.fileName,
+            url: att.url,
+            size: att.size,
+            type: att.type,
+          })),
+        },
+        requiredSignatoriesJson: JSON.stringify(
+          (requiredSignatories || []).map((u: any) => u.id)
+        ),
+      },
+      include: {
+        commitments: { include: { responsible: true } },
+        attachments: true,
+        signatures: { include: { signer: true } },
+      },
+    });
+
+    res.status(201).json(formatActa(newActa));
+  } catch (error) {
+    console.error("Error al crear el acta:", error);
+    res.status(500).json({ error: "No se pudo crear el acta." });
+  }
+});
+
+app.put("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const { number, title, date, area, status, summary } = req.body ?? {};
+
+    const data: Record<string, unknown> = {};
+    if (number) data.number = number;
+    if (title) data.title = title;
+    if (summary !== undefined) data.summary = summary;
+    if (date) {
+      const parsed = new Date(date);
+      if (!Number.isNaN(parsed.getTime())) {
+        data.date = parsed;
+      }
+    }
+    if (area) {
+      data.area =
+        actaAreaMap[area] ||
+        actaAreaMap[actaAreaReverseMap[area] || "Otro"] ||
+        "OTHER";
+    }
+    if (status) {
+      data.status =
+        actaStatusMap[status] ||
+        actaStatusMap[actaStatusReverseMap[status] || "En Borrador"] ||
+        "DRAFT";
+    }
+
+    const updatedActa = await prisma.acta.update({
+      where: { id },
+      data,
+      include: {
+        commitments: {
+          include: { responsible: true },
+          orderBy: { dueDate: "asc" },
+        },
+        attachments: true,
+        signatures: { include: { signer: true } },
+      },
+    });
+
+    res.json(formatActa(updatedActa));
+  } catch (error) {
+    console.error("Error al actualizar acta:", error);
+    if ((error as any)?.code === "P2025") {
+      return res.status(404).json({ error: "Acta no encontrada." });
+    }
+    res.status(500).json({ error: "No se pudo actualizar el acta." });
+  }
+});
+
+app.put(
+  "/api/actas/:actaId/commitments/:commitmentId",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { commitmentId } = req.params;
+      const { status } = req.body ?? {};
+
+      if (!status) {
+        return res.status(400).json({ error: "El estado es obligatorio." });
+      }
+
+      const prismaStatus =
+        commitmentStatusMap[status] ||
+        commitmentStatusMap[
+          commitmentStatusReverseMap[status] || "Pendiente"
+        ] ||
+        "PENDING";
+
+      const updatedCommitment = await prisma.commitment.update({
+        where: { id: commitmentId },
+        data: { status: prismaStatus },
+        include: { responsible: true },
+      });
+
+      res.json({
+        ...updatedCommitment,
+        status:
+          commitmentStatusReverseMap[updatedCommitment.status] ||
+          updatedCommitment.status,
+      });
+    } catch (error) {
+      console.error("Error al actualizar compromiso:", error);
+      if ((error as any)?.code === "P2025") {
+        return res.status(404).json({ error: "Compromiso no encontrado." });
+      }
+      res.status(500).json({ error: "No se pudo actualizar el compromiso." });
+    }
+  }
+);
+
+app.post(
+  "/api/actas/:actaId/commitments/:commitmentId/reminder",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { actaId, commitmentId } = req.params;
+
+      const commitment = await prisma.commitment.findFirst({
+        where: { id: commitmentId, actaId },
+        include: {
+          responsible: true,
+          acta: { select: { number: true, title: true } },
+        },
+      });
+
+      if (!commitment) {
+        return res.status(404).json({ error: "Compromiso no encontrado." });
+      }
+
+      if (commitment.responsible?.email) {
+        try {
+          const dueDate = commitment.dueDate ?? new Date();
+          const msDiff = dueDate.getTime() - Date.now();
+          const daysUntilDue = Math.floor(msDiff / (1000 * 60 * 60 * 24));
+
+          await sendCommitmentReminderEmail({
+            to: commitment.responsible.email,
+            recipientName: commitment.responsible.fullName,
+            commitments: [
+              {
+                id: commitment.id,
+                description: commitment.description,
+                dueDate,
+                actaNumber: commitment.acta?.number ?? null,
+                actaTitle: commitment.acta?.title ?? null,
+                daysUntilDue,
+              },
+            ],
+          });
+        } catch (emailError) {
+          console.warn(
+            "No se pudo enviar correo de recordatorio de compromiso.",
+            emailError
+          );
+        }
+      }
+
+      res.json({ message: "Recordatorio procesado correctamente." });
+    } catch (error) {
+      console.error("Error al enviar recordatorio de compromiso:", error);
+      res.status(500).json({ error: "No se pudo enviar el recordatorio." });
+    }
+  }
+);
+
+app.post(
+  "/api/actas/:id/signatures",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { signerId, password } = req.body ?? {};
+
+      if (!signerId || !password) {
+        return res
+          .status(400)
+          .json({ error: "Se requieren el firmante y la contraseña." });
+      }
+
+      const signer = await prisma.user.findUnique({ where: { id: signerId } });
+      if (!signer) {
+        return res.status(404).json({ error: "Firmante no encontrado." });
+      }
+
+      const validPassword = await bcrypt.compare(password, signer.password);
+      if (!validPassword) {
+        return res.status(401).json({ error: "Contraseña incorrecta." });
+      }
+
+      const acta = await prisma.acta.findUnique({ where: { id } });
+      if (!acta) {
+        return res.status(404).json({ error: "Acta no encontrada." });
+      }
+
+      const existingSignature = await prisma.signature.findFirst({
+        where: { actaId: id, signerId },
+      });
+
+      if (existingSignature) {
+        await prisma.signature.update({
+          where: { id: existingSignature.id },
+          data: { signedAt: new Date() },
+        });
+      } else {
+        await prisma.signature.create({
+          data: {
+            signer: { connect: { id: signerId } },
+            acta: { connect: { id } },
+          },
+        });
+      }
+
+      const updatedActa = await prisma.acta.findUnique({
+        where: { id },
+        include: {
+          commitments: {
+            include: { responsible: true },
+            orderBy: { dueDate: "asc" },
+          },
+          attachments: true,
+          signatures: { include: { signer: true } },
+        },
+      });
+
+      if (!updatedActa) {
+        return res
+          .status(404)
+          .json({ error: "Acta no encontrada tras firmar." });
+      }
+
+      res.json(formatActa(updatedActa));
+    } catch (error) {
+      console.error("Error al firmar acta:", error);
+      res.status(500).json({ error: "No se pudo firmar el acta." });
+    }
+  }
+);
+
+// --- RUTAS DE BITÁCORA ---
+app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const entries = await prisma.logEntry.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        author: true,
+        attachments: true,
+        comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
+        signatures: { include: { signer: true } },
+        assignees: true,
+        history: { include: { user: true }, orderBy: { timestamp: "desc" } },
+      },
+    });
+
+    const formattedEntries = entries.map((entry) => ({
+      ...formatLogEntry(entry),
+      attachments: (entry.attachments || []).map(buildAttachmentResponse),
+    }));
+
+    res.json(formattedEntries);
+  } catch (error) {
+    console.error("Error al obtener anotaciones:", error);
+    res.status(500).json({ error: "No se pudieron obtener las anotaciones." });
+  }
+});
+
+app.get(
+  "/api/log-entries/:id",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          comments: {
+            include: { author: true },
+            orderBy: { timestamp: "asc" },
+          },
+          signatures: { include: { signer: true } },
+          assignees: true,
+          history: { include: { user: true }, orderBy: { timestamp: "desc" } },
+        },
+      });
+
+      if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      const formattedEntry = {
+        ...formatLogEntry(entry),
+        attachments: (entry.attachments || []).map(buildAttachmentResponse),
+      };
+
+      res.json(formattedEntry);
+    } catch (error) {
+      console.error("Error al obtener anotación:", error);
+      res.status(500).json({ error: "No se pudo obtener la anotación." });
+    }
+  }
+);
+
+// --- RUTAS PARA COMUNICACIONES ---
+app.get("/api/communications", async (_req, res) => {
+  try {
+    const communications = await prisma.communication.findMany({
+      orderBy: { sentDate: "desc" },
+      include: {
+        uploader: true,
+        assignee: true,
+        attachments: true,
+        statusHistory: {
+          include: { user: true },
+          orderBy: { timestamp: "asc" },
+        },
+      },
+    });
+    const formatted = communications.map((communication) => ({
+      ...formatCommunication(communication),
+      attachments: (communication.attachments || []).map(
+        buildAttachmentResponse
+      ),
+    }));
+    res.json(formatted);
+  } catch (error) {
+    console.error("Error al obtener comunicaciones:", error);
+    res.status(500).json({ error: "No se pudieron obtener las comunicaciones." });
+  }
+});
+
+app.get("/api/communications/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const communication = await prisma.communication.findUnique({
+      where: { id },
+      include: {
+        uploader: true,
+        assignee: true,
+        attachments: true,
+        statusHistory: {
+          include: { user: true },
+          orderBy: { timestamp: "asc" },
+        },
+      },
+    });
+
+    if (!communication) {
+      return res.status(404).json({ error: "Comunicación no encontrada." });
+    }
+
+    const formatted = formatCommunication(communication);
+    formatted.attachments = (communication.attachments || []).map(
+      buildAttachmentResponse
+    );
+    res.json(formatted);
+  } catch (error) {
+    console.error("Error al obtener la comunicación:", error);
+    res.status(500).json({ error: "No se pudo obtener la comunicación." });
+  }
+});
+
+app.post("/api/communications", async (req, res) => {
+  try {
+    const {
+      radicado,
+      subject,
+      description,
+      senderDetails,
+      recipientDetails,
+      signerName,
+      sentDate,
+      dueDate,
+      deliveryMethod,
+      notes,
+      parentId,
+      direction,
+      requiresResponse,
+      responseDueDate,
+      assigneeId,
+      uploaderId,
+      attachments = [],
+    } = req.body ?? {};
+
+    if (!radicado || !subject || !description || !uploaderId || !sentDate) {
+      return res.status(400).json({
+        error:
+          "radicado, asunto, descripción, fecha de envío y usuario cargador son obligatorios.",
+      });
+    }
+
+    const prismaDeliveryMethod = deliveryMethodMap[deliveryMethod] || "SYSTEM";
+    const prismaDirection =
+      communicationDirectionMap[direction] ||
+      communicationDirectionMap[
+        communicationDirectionReverseMap[direction] || "Recibida"
+      ] ||
+      "RECEIVED";
+    const normalizedRequiresResponse = Boolean(requiresResponse);
+
+    const newComm = await prisma.communication.create({
+      data: {
+        radicado,
+        subject,
+        description,
+        senderEntity: senderDetails?.entity,
+        senderName: senderDetails?.personName,
+        senderTitle: senderDetails?.personTitle,
+        recipientEntity: recipientDetails?.entity,
+        recipientName: recipientDetails?.personName,
+        recipientTitle: recipientDetails?.personTitle,
+        signerName,
+        sentDate: new Date(sentDate),
+        dueDate: dueDate ? new Date(dueDate) : null,
+        deliveryMethod: prismaDeliveryMethod,
+        notes,
+        status: "PENDIENTE",
+        direction: prismaDirection,
+        requiresResponse: normalizedRequiresResponse,
+        responseDueDate:
+          normalizedRequiresResponse && responseDueDate
+            ? new Date(responseDueDate)
+            : null,
+        uploader: { connect: { id: uploaderId } },
+        assignee: assigneeId ? { connect: { id: assigneeId } } : undefined,
+        assignedAt: assigneeId ? new Date() : null,
+        parent: parentId ? { connect: { id: parentId } } : undefined,
+        attachments: Array.isArray(attachments)
+          ? {
+              connect: attachments
+                .filter((att: any) => att?.id)
+                .map((att: any) => ({ id: att.id })),
+            }
+          : undefined,
+        statusHistory: {
+          create: {
+            status: communicationStatusMap["Pendiente"] || "PENDIENTE",
+            user: { connect: { id: uploaderId } },
+          },
+        },
+      },
+      include: {
+        uploader: true,
+        assignee: true,
+        attachments: true,
+        statusHistory: {
+          include: { user: true },
+          orderBy: { timestamp: "asc" },
+        },
+      },
+    });
+
+    if (newComm.assignee && newComm.assignee.email) {
+      try {
+        await sendCommunicationAssignmentEmail({
+          to: newComm.assignee.email,
+          recipientName: newComm.assignee.fullName,
+          assignerName: newComm.uploader?.fullName,
+          communication: {
+            radicado: newComm.radicado,
+            subject: newComm.subject,
+            sentDate: newComm.sentDate,
+            responseDueDate: newComm.responseDueDate ?? undefined,
+          },
+        });
+      } catch (emailError) {
+        logger.warn(
+          "No se pudo enviar el correo de asignación de comunicación.",
+          emailError
+        );
+      }
+    }
+
+    const formatted = formatCommunication(newComm);
+    formatted.attachments = (newComm.attachments || []).map(
+      buildAttachmentResponse
+    );
+    res.status(201).json(formatted);
+  } catch (error) {
+    console.error("Error al crear la comunicación:", error);
+    res.status(500).json({ error: "No se pudo crear la comunicación." });
+  }
+});
+
+app.put(
+  "/api/communications/:id/status",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body ?? {};
+
+      if (!status) {
+        return res.status(400).json({ error: "El estado es obligatorio." });
+      }
+
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "No autorizado." });
+      }
+
+      const prismaStatus =
+        communicationStatusMap[status] ||
+        communicationStatusMap[
+          communicationStatusReverseMap[status] || "Pendiente"
+        ] ||
+        "PENDIENTE";
+
+      const updated = await prisma.communication.update({
+        where: { id },
+        data: {
+          status: prismaStatus,
+          statusHistory: {
+            create: {
+              status: prismaStatus,
+              user: { connect: { id: userId } },
+            },
+          },
+        },
+        include: {
+          uploader: true,
+          assignee: true,
+          attachments: true,
+          statusHistory: {
+            include: { user: true },
+            orderBy: { timestamp: "asc" },
+          },
+        },
+      });
+
+      res.json(formatCommunication(updated));
+    } catch (error) {
+      console.error("Error al actualizar estado de la comunicación:", error);
+      if ((error as any)?.code === "P2025") {
+        return res.status(404).json({ error: "Comunicación no encontrada." });
+      }
+      res.status(500).json({ error: "No se pudo actualizar el estado." });
+    }
+  }
+);
+
+app.put(
+  "/api/communications/:id/assignment",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { assigneeId } = req.body as { assigneeId?: string | null };
+
+      const current = await prisma.communication.findUnique({
+        where: { id },
+        select: { assigneeId: true },
+      });
+
+      if (!current) {
+        return res.status(404).json({ error: "Comunicación no encontrada." });
+      }
+
+      const normalizedAssigneeId =
+        assigneeId && assigneeId.trim().length > 0 ? assigneeId.trim() : null;
+
+      if (current.assigneeId === normalizedAssigneeId) {
+        const communication = await prisma.communication.findUnique({
+          where: { id },
+          include: {
+            uploader: true,
+            assignee: true,
+            attachments: true,
+            statusHistory: {
+              include: { user: true },
+              orderBy: { timestamp: "asc" },
+            },
+          },
+        });
+        if (!communication) {
+          return res.status(404).json({ error: "Comunicación no encontrada." });
+        }
+        return res.json(formatCommunication(communication));
+      }
+
+      const updated = await prisma.communication.update({
+        where: { id },
+        data: {
+          assignee: normalizedAssigneeId
+            ? { connect: { id: normalizedAssigneeId } }
+            : { disconnect: true },
+          assignedAt: normalizedAssigneeId ? new Date() : null,
+        },
+        include: {
+          uploader: true,
+          assignee: true,
+          attachments: true,
+          statusHistory: {
+            include: { user: true },
+            orderBy: { timestamp: "asc" },
+          },
+        },
+      });
+
+      if (normalizedAssigneeId && updated.assignee?.email) {
+        try {
+          let assignerName: string | undefined;
+          if (req.user?.userId) {
+            const assigner = await prisma.user.findUnique({
+              where: { id: req.user.userId },
+              select: { fullName: true },
+            });
+            assignerName = assigner?.fullName || undefined;
+          }
+
+          await sendCommunicationAssignmentEmail({
+            to: updated.assignee.email,
+            recipientName: updated.assignee.fullName,
+            assignerName,
+            communication: {
+              radicado: updated.radicado,
+              subject: updated.subject,
+              sentDate: updated.sentDate,
+              responseDueDate: updated.responseDueDate ?? undefined,
+            },
+          });
+        } catch (emailError) {
+          logger.warn(
+            "No se pudo enviar el correo de asignación de comunicación.",
+            emailError
+          );
+        }
+      }
+
+      res.json(formatCommunication(updated));
+    } catch (error) {
+      console.error("Error al actualizar asignación de comunicación:", error);
+      if ((error as any)?.code === "P2025") {
+        return res.status(404).json({ error: "Comunicación no encontrada." });
+      }
+      res.status(500).json({ error: "No se pudo actualizar la asignación." });
+    }
+  }
+);
+
 // --- RUTAS DE AUTENTICACIÓN ---
 app.post("/api/auth/register", async (req, res) => {
   const { email, password, fullName, projectRole, appRole } = req.body;
