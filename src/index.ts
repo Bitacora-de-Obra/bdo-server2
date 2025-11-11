@@ -2590,6 +2590,143 @@ app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+app.post(
+  "/api/log-entries",
+  authMiddleware,
+  upload.array("attachments", 10),
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const {
+        title,
+        description,
+        type,
+        status,
+        subject,
+        location,
+        entryDate,
+        activityStartDate,
+        activityEndDate,
+        isConfidential,
+        projectId,
+        assigneeIds = [],
+      } = req.body ?? {};
+
+      if (!title || !description || !type) {
+        return res.status(400).json({
+          error: "Título, descripción y tipo son obligatorios.",
+        });
+      }
+
+      if (!projectId || typeof projectId !== "string") {
+        return res
+          .status(400)
+          .json({ error: "El identificador del proyecto es obligatorio." });
+      }
+
+      const prismaType = entryTypeMap[type] || entryTypeMap["Anotación"];
+      const prismaStatus =
+        entryStatusMap[status] ||
+        entryStatusMap[entryStatusReverseMap[status] || "Abierta"] ||
+        "OPEN";
+
+      const entryDateValue = entryDate ? new Date(entryDate) : new Date();
+      const activityStartValue = activityStartDate
+        ? new Date(activityStartDate)
+        : entryDateValue;
+      const activityEndValue = activityEndDate
+        ? new Date(activityEndDate)
+        : entryDateValue;
+
+      const storage = getStorage();
+      const attachmentRecords: {
+        fileName: string;
+        url: string;
+        size: number;
+        type: string;
+        storagePath: string;
+      }[] = [];
+
+      if (req.files && Array.isArray(req.files)) {
+        for (const file of req.files as Express.Multer.File[]) {
+          const key = createStorageKey(
+            "log-entries",
+            `${Date.now()}-${file.originalname}`
+          );
+          await storage.save({ path: key, content: file.buffer });
+          attachmentRecords.push({
+            fileName: file.originalname,
+            url: storage.getPublicUrl(key),
+            size: file.size,
+            type: file.mimetype,
+            storagePath: key,
+          });
+        }
+      }
+      const logEntry = await prisma.logEntry.create({
+        data: {
+          title,
+          description,
+          type: prismaType,
+          status: prismaStatus,
+          entryDate: entryDateValue,
+          subject: typeof subject === "string" ? subject : "",
+          location: typeof location === "string" ? location : "",
+          activityStartDate: activityStartValue,
+          activityEndDate: activityEndValue,
+          isConfidential: Boolean(isConfidential),
+          author: { connect: { id: userId } },
+          project: { connect: { id: projectId } },
+          assignees: {
+            connect: (Array.isArray(assigneeIds) ? assigneeIds : [])
+              .filter((id) => typeof id === "string" && id.trim().length > 0)
+              .map((id) => ({ id })),
+          },
+          attachments: {
+            create: attachmentRecords.map((att) => ({
+              fileName: att.fileName,
+              url: att.url,
+              size: att.size,
+              type: att.type,
+              storagePath: att.storagePath,
+            })),
+          },
+        },
+      });
+      const entryWithRelations = await prisma.logEntry.findUnique({
+        where: { id: logEntry.id },
+        include: {
+          author: true,
+          attachments: true,
+          comments: {
+            include: { author: true },
+            orderBy: { timestamp: "asc" },
+          },
+          signatures: { include: { signer: true } },
+          assignees: true,
+          history: {
+            include: { user: true },
+            orderBy: { timestamp: "desc" },
+          },
+        },
+      });
+
+      if (!entryWithRelations) {
+        throw new Error("No se pudo recuperar la anotación recién creada.");
+      }
+
+      res.status(201).json(formatLogEntry(entryWithRelations));
+    } catch (error) {
+      console.error("Error al crear anotación:", error);
+      res.status(500).json({ error: "No se pudo crear la anotación." });
+    }
+  }
+);
+
 app.get(
   "/api/log-entries/:id",
   authMiddleware,
@@ -2624,6 +2761,63 @@ app.get(
     } catch (error) {
       console.error("Error al obtener anotación:", error);
       res.status(500).json({ error: "No se pudo obtener la anotación." });
+    }
+  }
+);
+
+app.post(
+  "/api/log-entries/:id/comments",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { content, authorId } = req.body ?? {};
+
+      if (!content || typeof content !== "string" || !content.trim()) {
+        return res
+          .status(400)
+          .json({ error: "El contenido del comentario es obligatorio." });
+      }
+
+      const logEntry = await prisma.logEntry.findUnique({ where: { id } });
+      if (!logEntry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      const resolvedAuthorId = req.user?.userId || authorId;
+      if (!resolvedAuthorId) {
+        return res
+          .status(401)
+          .json({ error: "No se pudo determinar el autor del comentario." });
+      }
+
+      const author = await prisma.user.findUnique({
+        where: { id: resolvedAuthorId },
+      });
+      if (!author) {
+        return res.status(404).json({ error: "Autor no encontrado." });
+      }
+
+      const newComment = await prisma.comment.create({
+        data: {
+          content: content.trim(),
+          author: { connect: { id: author.id } },
+          logEntry: { connect: { id } },
+        },
+        include: { author: true },
+      });
+
+      await recordLogEntryChanges(id, req.user?.userId, [
+        {
+          fieldName: "Comentario Añadido",
+          newValue: `${author.fullName}: ${content.trim()}`,
+        },
+      ]);
+
+      res.status(201).json(newComment);
+    } catch (error) {
+      console.error("Error al crear comentario de bitácora:", error);
+      res.status(500).json({ error: "No se pudo crear el comentario." });
     }
   }
 );
@@ -2961,6 +3155,159 @@ app.put(
         return res.status(404).json({ error: "Comunicación no encontrada." });
       }
       res.status(500).json({ error: "No se pudo actualizar la asignación." });
+    }
+  }
+);
+
+// --- RUTAS DE FIRMA DEL USUARIO ---
+app.get("/api/users/me/signature", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Usuario no autenticado." });
+    }
+
+    const signature = await prisma.userSignature.findUnique({
+      where: { userId },
+    });
+
+    if (!signature) {
+      return res.json({ signature: null });
+    }
+
+    res.json({
+      signature: {
+        id: signature.id,
+        fileName: signature.fileName,
+        mimeType: signature.mimeType,
+        size: signature.size,
+        url: signature.url,
+        hash: signature.hash,
+        createdAt: signature.createdAt,
+        updatedAt: signature.updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error("Error al obtener la firma del usuario:", error);
+    res.status(500).json({ error: "No se pudo obtener la firma guardada." });
+  }
+});
+
+app.post(
+  "/api/users/me/signature",
+  authMiddleware,
+  signatureUpload.single("signature"),
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const file = req.file;
+      if (!file || !file.buffer) {
+        return res
+          .status(400)
+          .json({ error: "No se recibió ningún archivo válido." });
+      }
+
+      const existing = await prisma.userSignature.findUnique({
+        where: { userId },
+      });
+
+      const storage = getStorage();
+      const key = createStorageKey(
+        `user-signatures/${userId}`,
+        file.originalname
+      );
+      await storage.save({ path: key, content: file.buffer });
+      const url = storage.getPublicUrl(key);
+      const hash = sha256(file.buffer);
+
+      let newSignature: any = null;
+      await prisma.$transaction(async (tx) => {
+        if (existing) {
+          await tx.userSignature.delete({ where: { id: existing.id } });
+        }
+        newSignature = await tx.userSignature.create({
+          data: {
+            userId,
+            fileName: file.originalname,
+            mimeType: file.mimetype,
+            size: file.size,
+            storagePath: key,
+            url,
+            hash,
+          },
+        });
+      });
+
+      if (!newSignature) {
+        throw new Error("No se pudo registrar la nueva firma.");
+      }
+
+      if (existing?.storagePath && existing.storagePath !== key) {
+        await storage.remove(existing.storagePath).catch((error) => {
+          console.warn(
+            "No se pudo eliminar la firma anterior del almacenamiento.",
+            { error }
+          );
+        });
+      }
+
+      res.status(201).json({
+        signature: {
+          id: newSignature.id,
+          fileName: newSignature.fileName,
+          mimeType: newSignature.mimeType,
+          size: newSignature.size,
+          url: newSignature.url,
+          hash: newSignature.hash,
+          createdAt: newSignature.createdAt,
+          updatedAt: newSignature.updatedAt,
+        },
+      });
+    } catch (error) {
+      console.error("Error al guardar la firma del usuario:", error);
+      res.status(500).json({ error: "No se pudo guardar la firma." });
+    }
+  }
+);
+
+app.delete(
+  "/api/users/me/signature",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const existing = await prisma.userSignature.findUnique({
+        where: { userId },
+      });
+      if (!existing) {
+        return res
+          .status(404)
+          .json({ error: "No hay firma registrada para el usuario." });
+      }
+
+      const storage = getStorage();
+      await prisma.userSignature.delete({ where: { id: existing.id } });
+      if (existing.storagePath) {
+        await storage.remove(existing.storagePath).catch((error) => {
+          console.warn(
+            "No se pudo eliminar el archivo de firma del almacenamiento.",
+            { error }
+          );
+        });
+      }
+
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error al eliminar la firma del usuario:", error);
+      res.status(500).json({ error: "No se pudo eliminar la firma." });
     }
   }
 );
