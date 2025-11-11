@@ -1785,112 +1785,23 @@ app.post("/api/admin/migrate-urls-to-r2", authMiddleware, requireAdmin, async (r
   }
 });
 
-// Endpoint temporal para migrar URLs de almacenamiento local a Cloudflare R2
-app.post("/api/admin/migrate-urls-to-r2", authMiddleware, requireAdmin, async (req: AuthRequest, res) => {
-  try {
-    const storage = getStorage();
-    
-    // Solo ejecutar si estamos usando Cloudflare R2
-    if (process.env.STORAGE_DRIVER !== 'cloudflare') {
-      return res.status(400).json({ 
-        error: "Esta migración solo funciona cuando STORAGE_DRIVER=cloudflare" 
-      });
-    }
+// Health check endpoint
+app.get("/", (req, res) => {
+  res.json({ 
+    status: "OK", 
+    message: "BDO Server API is running",
+    timestamp: new Date().toISOString(),
+    version: "1.0.0"
+  });
+});
 
-    console.log("Iniciando migración de URLs a Cloudflare R2...");
-    
-    // Buscar todos los attachments que tienen URLs locales
-    const localAttachments = await prisma.attachment.findMany({
-      where: {
-        OR: [
-          { url: { startsWith: "http://localhost" } },
-          { url: { startsWith: "https://localhost" } },
-          { url: { startsWith: "/uploads/" } },
-          { url: { contains: "/uploads/" } }
-        ]
-      }
-    });
-
-    console.log(`Encontrados ${localAttachments.length} archivos con URLs locales`);
-
-    let migratedCount = 0;
-    let errorCount = 0;
-
-    for (const attachment of localAttachments) {
-      try {
-        // Extraer el storage path desde la URL local
-        let storagePath = attachment.storagePath;
-        
-        if (!storagePath && attachment.url) {
-          // Intentar extraer el path desde la URL
-          const urlPath = attachment.url.replace(/^.*\/uploads\//, '');
-          storagePath = urlPath;
-        }
-
-        if (storagePath) {
-          // Generar la nueva URL de Cloudflare R2
-          const newUrl = storage.getPublicUrl(storagePath);
-          
-          // Actualizar el attachment con la nueva URL
-          await prisma.attachment.update({
-            where: { id: attachment.id },
-            data: { 
-              url: newUrl,
-              storagePath: storagePath
-            }
-          });
-
-          console.log(`✅ Migrado: ${attachment.fileName} -> ${newUrl}`);
-          migratedCount++;
-        } else {
-          console.log(`⚠️  No se pudo determinar storagePath para: ${attachment.fileName}`);
-          errorCount++;
-        }
-      } catch (error) {
-        console.error(`❌ Error migrando ${attachment.fileName}:`, error);
-        errorCount++;
-      }
-    }
-
-    // También migrar UserSignatures si existen
-    const localSignatures = await prisma.userSignature.findMany({
-      where: {
-        url: { contains: "localhost" }
-      }
-    });
-
-    for (const signature of localSignatures) {
-      try {
-        if (signature.storagePath) {
-          const newUrl = storage.getPublicUrl(signature.storagePath);
-          await prisma.userSignature.update({
-            where: { id: signature.id },
-            data: { url: newUrl }
-          });
-          console.log(`✅ Firma migrada: ${signature.fileName} -> ${newUrl}`);
-          migratedCount++;
-        }
-      } catch (error) {
-        console.error(`❌ Error migrando firma ${signature.fileName}:`, error);
-        errorCount++;
-      }
-    }
-
-    res.json({
-      success: true,
-      message: `Migración completada. ${migratedCount} archivos migrados, ${errorCount} errores.`,
-      migrated: migratedCount,
-      errors: errorCount,
-      totalProcessed: localAttachments.length + localSignatures.length
-    });
-
-  } catch (error) {
-    console.error("Error durante la migración:", error);
-    res.status(500).json({ 
-      error: "Error durante la migración de URLs",
-      details: error instanceof Error ? error.message : "Error desconocido"
-    });
-  }
+app.get("/health", (req, res) => {
+  res.json({ 
+    status: "healthy", 
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    storage: process.env.STORAGE_DRIVER || 'local'
+  });
 });
 
 app.listen(port, () => {
