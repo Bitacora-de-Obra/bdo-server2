@@ -21,6 +21,7 @@ import {
   ProjectTask,
   CommitmentStatus,
   ModificationType,
+  ChatbotFeedbackRating,
 } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -87,6 +88,11 @@ import {
   sendCommunicationAssignmentEmail,
 } from "./services/email";
 import { buildUserNotifications } from "./services/notifications";
+import {
+  ChatbotContextSection,
+  sectionToText,
+  selectRelevantSections,
+} from "./services/chatbot/contextUtils";
 // El middleware de autenticación ya está importado arriba
 const app = express();
 const prisma = new PrismaClient();
@@ -144,6 +150,13 @@ const DEFAULT_APP_SETTINGS = {
   sessionTimeoutMinutes: 60,
   photoIntervalDays: 3,
   defaultProjectVisibility: "private",
+};
+
+const MODEL_COST_PER_K_TOKENS: Record<string, number> = {
+  "gpt-4o-mini": 0.15,
+  "gpt-4o": 0.06,
+  "gpt-4.1-mini": 0.14,
+  "gpt-3.5-turbo": 0.002,
 };
 
 const REFRESH_TOKEN_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 días
@@ -3173,6 +3186,943 @@ app.put(
         return res.status(404).json({ error: "Comunicación no encontrada." });
       }
       res.status(500).json({ error: "No se pudo actualizar la asignación." });
+    }
+  }
+);
+
+// --- RUTAS DEL ASISTENTE VIRTUAL ---
+app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => {
+  const { query, history } = req.body ?? {};
+  const userId = req.user?.userId;
+
+  if (!query || typeof query !== "string") {
+    return res
+      .status(400)
+      .json({ error: "No se proporcionó una consulta válida (query)." });
+  }
+  if (!userId) {
+    return res.status(401).json({ error: "Usuario no autenticado." });
+  }
+
+  try {
+    const conversationHistory: Array<{
+      role: "assistant" | "user";
+      content: string;
+    }> = Array.isArray(history)
+      ? history
+          .filter(
+            (item: any) =>
+              item &&
+              typeof item.content === "string" &&
+              item.content.trim() &&
+              (item.role === "user" || item.role === "assistant")
+          )
+          .map((item: any) => ({
+            role: item.role,
+            content: item.content.slice(0, 1500),
+          }))
+          .slice(-6)
+      : [];
+
+    const [
+      project,
+      contractModifications,
+      ultimaAnotacion,
+      contractItems,
+      workActas,
+      projectTasks,
+      communications,
+      actas,
+      costActas,
+      reports,
+      drawings,
+      controlPoints,
+      pendingCommitments,
+      recentLogEntries,
+    ] = await Promise.all([
+      prisma.project.findFirst({ include: { keyPersonnel: true } }),
+      prisma.contractModification.findMany({
+        orderBy: { date: "desc" },
+        take: 10,
+      }),
+      prisma.logEntry.findFirst({
+        orderBy: { createdAt: "desc" },
+        include: { author: { select: { fullName: true } } },
+      }),
+      prisma.contractItem.findMany({
+        include: {
+          workActaItems: {
+            include: {
+              workActa: {
+                select: { id: true, number: true, date: true, status: true },
+              },
+            },
+          },
+        },
+        orderBy: { itemCode: "asc" },
+      }),
+      prisma.workActa.findMany({
+        include: {
+          items: {
+            include: {
+              contractItem: {
+                select: {
+                  id: true,
+                  itemCode: true,
+                  description: true,
+                  unit: true,
+                  unitPrice: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: { date: "desc" },
+        take: 10,
+      }),
+      prisma.projectTask.findMany({
+        orderBy: { startDate: "asc" },
+        take: 20,
+      }),
+      prisma.communication.findMany({
+        orderBy: { sentDate: "desc" },
+        take: 10,
+      }),
+      prisma.acta.findMany({
+        orderBy: { date: "desc" },
+        take: 10,
+        include: {
+          commitments: {
+            include: {
+              responsible: {
+                select: { fullName: true, projectRole: true },
+              },
+            },
+          },
+        },
+      }),
+      prisma.costActa.findMany({
+        orderBy: { submissionDate: "desc" },
+        take: 10,
+      }),
+      prisma.report.findMany({
+        orderBy: { submissionDate: "desc" },
+        take: 10,
+        include: {
+          author: {
+            select: { fullName: true, projectRole: true },
+          },
+        },
+      }),
+      prisma.drawing.findMany({
+        orderBy: { code: "asc" },
+        take: 20,
+        include: {
+          versions: {
+            orderBy: { versionNumber: "desc" },
+            take: 1,
+          },
+        },
+      }),
+      prisma.controlPoint.findMany({
+        include: {
+          photos: {
+            orderBy: { date: "desc" },
+            take: 3,
+          },
+        },
+        take: 10,
+      }),
+      prisma.commitment.findMany({
+        where: {
+          status: "PENDING",
+          dueDate: { gte: new Date() },
+        },
+        include: {
+          responsible: {
+            select: { fullName: true, projectRole: true },
+          },
+        },
+        orderBy: { dueDate: "asc" },
+        take: 10,
+      }),
+      prisma.logEntry.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: {
+          author: { select: { fullName: true, projectRole: true } },
+          assignees: { select: { fullName: true, projectRole: true } },
+        },
+      }),
+    ]);
+
+    const formatCurrency = (value?: number | null) => {
+      if (value === null || value === undefined || Number.isNaN(value)) {
+        return "N/D";
+      }
+      return new Intl.NumberFormat("es-CO", {
+        style: "currency",
+        currency: "COP",
+        maximumFractionDigits: 0,
+      }).format(value);
+    };
+
+    const formatDate = (dateLike?: Date | string | null) => {
+      if (!dateLike) {
+        return "N/D";
+      }
+      const date = dateLike instanceof Date ? dateLike : new Date(dateLike);
+      if (Number.isNaN(date.getTime())) {
+        return "N/D";
+      }
+      return date.toLocaleDateString("es-CO", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+    };
+
+    const formatNumber = (value?: number | null, decimals = 2) => {
+      if (value === null || value === undefined || Number.isNaN(value)) {
+        return "0";
+      }
+      return new Intl.NumberFormat("es-CO", {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      }).format(value);
+    };
+
+    const formatPercentage = (value?: number | null, decimals = 1) => {
+      if (value === null || value === undefined || Number.isNaN(value)) {
+        return "0%";
+      }
+      return `${value.toFixed(decimals)}%`;
+    };
+
+    const contextSections: ChatbotContextSection[] = [];
+
+    if (project) {
+      const startDate = project.startDate ? new Date(project.startDate) : null;
+      const initialEndDate = project.initialEndDate
+        ? new Date(project.initialEndDate)
+        : null;
+
+      const totalAdditionsValue = contractModifications
+        .filter((mod) => mod.type === "ADDITION" && mod.value)
+        .reduce((sum, mod) => sum + (mod.value || 0), 0);
+
+      const totalExtensionsDays = contractModifications
+        .filter((mod) => mod.type === "TIME_EXTENSION" && mod.days)
+        .reduce((sum, mod) => sum + (mod.days || 0), 0);
+
+      let initialDurationDays: number | null = null;
+      if (startDate && initialEndDate) {
+        initialDurationDays = Math.ceil(
+          (initialEndDate.getTime() - startDate.getTime()) /
+            (1000 * 60 * 60 * 24)
+        );
+      }
+
+      let currentEndDate: Date | null = initialEndDate
+        ? new Date(initialEndDate)
+        : null;
+      if (currentEndDate) {
+        currentEndDate.setDate(currentEndDate.getDate() + totalExtensionsDays);
+      }
+
+      const projectSummary: string[] = [
+        `Nombre: ${project.name}`,
+        `Contrato: ${project.contractId}`,
+        `Objeto: ${project.object}`,
+        `Contratista: ${project.contractorName}`,
+        `Interventoría: ${project.supervisorName}`,
+        `Valor inicial: ${formatCurrency(project.initialValue)}`,
+        `Valor de adiciones: ${formatCurrency(totalAdditionsValue)}`,
+        `Valor total vigente: ${formatCurrency(
+          project.initialValue + totalAdditionsValue
+        )}`,
+        `Fecha de inicio: ${formatDate(startDate)}`,
+      ];
+
+      if (initialEndDate) {
+        projectSummary.push(
+          `Fecha de finalización contractual original: ${formatDate(
+            initialEndDate
+          )}`
+        );
+      }
+
+      if (currentEndDate) {
+        projectSummary.push(
+          `Fecha de finalización vigente: ${formatDate(currentEndDate)}`
+        );
+      }
+
+      if (initialDurationDays !== null) {
+        projectSummary.push(`Plazo inicial: ${initialDurationDays} días`);
+        projectSummary.push(
+          `Plazo total vigente: ${
+            initialDurationDays + totalExtensionsDays
+          } días`
+        );
+      }
+
+      if (totalExtensionsDays) {
+        projectSummary.push(
+          `Días adicionales por prórrogas: ${totalExtensionsDays}`
+        );
+      }
+
+      if (project.keyPersonnel?.length) {
+        const highlightedPersonnel = project.keyPersonnel
+          .slice(0, 5)
+          .map(
+            (person) =>
+              `${person.role} (${person.company}): ${person.name} | Correo: ${
+                person.email
+              } | Teléfono: ${person.phone || "N/D"}`
+          )
+          .join("\n- ");
+        projectSummary.push(
+          `Personal clave relevante:\n- ${highlightedPersonnel}${
+            project.keyPersonnel.length > 5
+              ? "\n- ... (ver más en la plataforma)"
+              : ""
+          }`
+        );
+      }
+
+      contextSections.push({
+        id: "project-overview",
+        heading: "Resumen ejecutivo del proyecto",
+        body: projectSummary.join("\n"),
+        priority: 2,
+      });
+
+      if (contractModifications.length) {
+        const modificationsSummary = contractModifications
+          .slice(0, 5)
+          .map((mod) => {
+            const partes: string[] = [
+              `${mod.number} - ${
+                modificationTypeReverseMap[mod.type] || mod.type
+              }`,
+            ];
+            partes.push(`Fecha: ${formatDate(mod.date)}`);
+            if (mod.value !== null && mod.value !== undefined) {
+              partes.push(`Valor: ${formatCurrency(mod.value)}`);
+            }
+            if (mod.days !== null && mod.days !== undefined) {
+              partes.push(`Días: ${mod.days}`);
+            }
+            return `• ${partes.join(" | ")}`;
+          })
+          .join("\n");
+        contextSections.push({
+          id: "contract-modifications",
+          heading: "Modificaciones contractuales recientes (máx. 5)",
+          body: modificationsSummary,
+          priority: 1,
+        });
+      }
+    }
+
+    if (contractItems.length) {
+      const itemsWithProgress = contractItems.map((item) => {
+        const executedQuantity = item.workActaItems.reduce((sum, entry) => {
+          const quantity =
+            typeof entry.quantity === "number"
+              ? entry.quantity
+              : Number(entry.quantity) || 0;
+          return sum + quantity;
+        }, 0);
+
+        const percentage =
+          item.contractQuantity > 0
+            ? (executedQuantity / item.contractQuantity) * 100
+            : 0;
+
+        const latestEntry = item.workActaItems
+          .filter((entry) => entry.workActa?.date)
+          .sort((a, b) => {
+            const dateA = a.workActa?.date
+              ? new Date(a.workActa.date as unknown as string).getTime()
+              : 0;
+            const dateB = b.workActa?.date
+              ? new Date(b.workActa.date as unknown as string).getTime()
+              : 0;
+            return dateB - dateA;
+          })[0];
+
+        let lastActaSummary = "";
+        if (latestEntry?.workActa) {
+          const acta = latestEntry.workActa;
+          const actaStatus =
+            workActaStatusReverseMap[acta.status] || acta.status;
+          lastActaSummary = ` Último reporte: acta ${acta.number} (${formatDate(
+            acta.date
+          )}) en estado ${actaStatus}.`;
+        }
+
+        return {
+          itemCode: item.itemCode,
+          description: item.description,
+          unit: item.unit,
+          contractQuantity: item.contractQuantity,
+          executedQuantity,
+          percentage,
+          lastActaSummary,
+        };
+      });
+
+      const topItems = itemsWithProgress
+        .sort(
+          (a, b) =>
+            b.percentage - a.percentage ||
+            b.executedQuantity - a.executedQuantity
+        )
+        .slice(0, 8);
+
+      if (topItems.length) {
+        const lines = topItems.map(
+          (item) =>
+            `• ${item.itemCode} - ${item.description}: Contratado ${formatNumber(
+              item.contractQuantity,
+              2
+            )} ${item.unit}, Ejecutado ${formatNumber(
+              item.executedQuantity,
+              2
+            )} ${item.unit} (avance ${formatPercentage(
+              item.percentage,
+              1
+            )}).${item.lastActaSummary}`
+        );
+        contextSections.push({
+          id: "contract-items-progress",
+          heading: "Avance por ítems contractuales clave",
+          body: lines.join("\n"),
+        });
+      }
+    }
+
+    if (workActas.length) {
+      const workActaLines = workActas.map((acta) => {
+        const totalQuantity = acta.items.reduce((sum, item) => {
+          const quantity =
+            typeof item.quantity === "number"
+              ? item.quantity
+              : Number(item.quantity) || 0;
+          return sum + quantity;
+        }, 0);
+
+        const totalValue = acta.items.reduce((sum, item) => {
+          const quantity =
+            typeof item.quantity === "number"
+              ? item.quantity
+              : Number(item.quantity) || 0;
+          const unitPrice = item.contractItem?.unitPrice || 0;
+          return sum + quantity * unitPrice;
+        }, 0);
+
+        const principales = acta.items
+          .slice(0, 3)
+          .map((item) => {
+            const code = item.contractItem?.itemCode || "N/D";
+            const qty =
+              typeof item.quantity === "number"
+                ? item.quantity
+                : Number(item.quantity) || 0;
+            const unit = item.contractItem?.unit || "";
+            return `${code}: ${formatNumber(qty, 2)} ${unit}`;
+          })
+          .join("; ");
+
+        const status =
+          workActaStatusReverseMap[acta.status] || acta.status;
+
+        return `• ${acta.number} (${formatDate(
+          acta.date
+        )}) – Estado: ${status}. Cantidad total reportada: ${formatNumber(
+          totalQuantity,
+          2
+        )}. Valor estimado: ${formatCurrency(
+          totalValue
+        )}. Ítems destacados: ${principales || "sin ítems cargados"}.`;
+      });
+
+      contextSections.push({
+        id: "work-actas",
+        heading: "Actas de obra más recientes (máx. 5)",
+        body: workActaLines.join("\n"),
+      });
+    }
+
+    if (projectTasks.length) {
+      const taskLines = projectTasks.map((task) => {
+        const label = task.isSummary ? "hito" : "tarea";
+        return `• ${task.name} (${label}): avance ${formatPercentage(
+          task.progress,
+          0
+        )}, inicio ${formatDate(task.startDate)}, fin ${formatDate(
+          task.endDate
+        )}, duración ${task.duration} días.`;
+      });
+
+      contextSections.push({
+        id: "project-tasks",
+        heading: "Tareas del cronograma consultadas (máx. 10)",
+        body: taskLines.join("\n"),
+      });
+    }
+
+    if (ultimaAnotacion) {
+      const ultimaAnotacionResumen = [
+        `Título: ${ultimaAnotacion.title}`,
+        `Descripción: ${ultimaAnotacion.description}`,
+        `Autor: ${ultimaAnotacion.author?.fullName || "No especificado"}`,
+        `Fecha: ${formatDate(ultimaAnotacion.createdAt)}`,
+        `Tipo: ${
+          entryTypeReverseMap[ultimaAnotacion.type] ||
+          ultimaAnotacion.type
+        }`,
+        `Estado: ${
+          entryStatusReverseMap[ultimaAnotacion.status] ||
+          ultimaAnotacion.status
+        }`,
+      ].join("\n");
+
+      contextSections.push({
+        id: "last-log-entry",
+        heading: "Última anotación registrada en la bitácora",
+        body: ultimaAnotacionResumen,
+        priority: 1,
+      });
+    }
+
+    if (communications.length) {
+      const communicationsSummary = communications
+        .map((comm) => {
+          const sender = comm.senderEntity || "No especificado";
+          const recipient = comm.recipientEntity || "No especificado";
+          const status =
+            communicationStatusReverseMap[comm.status] || comm.status;
+          return `• Radicado ${comm.radicado}: "${comm.subject}" - De: ${sender} - Para: ${recipient} - Estado: ${status} - Fecha: ${formatDate(
+            comm.sentDate
+          )}`;
+        })
+        .join("\n");
+
+      contextSections.push({
+        id: "communications",
+        heading: "Comunicaciones oficiales recientes",
+        body: communicationsSummary,
+      });
+    }
+
+    if (actas.length) {
+      const actasSummary = actas
+        .map((acta) => {
+          const area = actaAreaReverseMap[acta.area] || acta.area;
+          const status = actaStatusReverseMap[acta.status] || acta.status;
+          const commitmentsCount = acta.commitments?.length || 0;
+          return `• ${acta.number}: "${acta.title}" - Área: ${area} - Estado: ${status} - Compromisos: ${commitmentsCount} - Fecha: ${formatDate(
+            acta.date
+          )}`;
+        })
+        .join("\n");
+
+      contextSections.push({
+        id: "committee-actas",
+        heading: "Actas de comité recientes",
+        body: actasSummary,
+      });
+    }
+
+    if (costActas.length) {
+      const costActasSummary = costActas
+        .map((acta) => {
+          const status =
+            costActaStatusReverseMap[acta.status] || acta.status;
+          return `• ${acta.number}: Período ${acta.period} - Valor: ${formatCurrency(
+            acta.billedAmount
+          )} - Estado: ${status} - Fecha: ${formatDate(
+            acta.submissionDate
+          )}`;
+        })
+        .join("\n");
+
+      contextSections.push({
+        id: "cost-actas",
+        heading: "Actas de costo recientes",
+        body: costActasSummary,
+      });
+    }
+
+    if (reports.length) {
+      const reportsSummary = reports
+        .map((report) => {
+          const scope =
+            reportScopeReverseMap[report.reportScope] || report.reportScope;
+          const status = reportStatusReverseMap[report.status] || report.status;
+          return `• ${report.type} ${report.number}: ${scope} - Estado: ${status} - Autor: ${report.author?.fullName} - Fecha: ${formatDate(
+            report.submissionDate
+          )}`;
+        })
+        .join("\n");
+
+      contextSections.push({
+        id: "reports",
+        heading: "Informes recientes",
+        body: reportsSummary,
+      });
+    }
+
+    if (drawings.length) {
+      const drawingsSummary = drawings
+        .map((drawing) => {
+          const discipline =
+            drawingDisciplineMap[drawing.discipline] || drawing.discipline;
+          const status =
+            drawing.status === "VIGENTE" ? "Vigente" : "Obsoleto";
+          const versionsCount = drawing.versions?.length || 0;
+          return `• ${drawing.code}: "${drawing.title}" - Disciplina: ${discipline} - Estado: ${status} - Versiones: ${versionsCount}`;
+        })
+        .join("\n");
+
+      contextSections.push({
+        id: "drawings",
+        heading: "Planos del proyecto",
+        body: drawingsSummary,
+      });
+    }
+
+    if (controlPoints.length) {
+      const controlPointsSummary = controlPoints
+        .map((point) => {
+          const photosCount = point.photos?.length || 0;
+          return `• ${point.name}: ${point.description} - Ubicación: ${point.location} - Fotos: ${photosCount}`;
+        })
+        .join("\n");
+
+      contextSections.push({
+        id: "control-points",
+        heading: "Puntos de control fotográfico",
+        body: controlPointsSummary,
+      });
+    }
+
+    if (pendingCommitments.length) {
+      const commitmentsSummary = pendingCommitments
+        .map((commitment) => {
+          const responsible =
+            commitment.responsible?.fullName || "No asignado";
+          const role = commitment.responsible?.projectRole || "";
+          return `• ${commitment.description} - Responsable: ${responsible} (${role}) - Vence: ${formatDate(
+            commitment.dueDate
+          )}`;
+        })
+        .join("\n");
+
+      contextSections.push({
+        id: "pending-commitments",
+        heading: "Compromisos pendientes",
+        body: commitmentsSummary,
+        priority: 1,
+      });
+    }
+
+    if (recentLogEntries.length) {
+      const logEntriesSummary = recentLogEntries
+        .map((entry) => {
+          const author = entry.author?.fullName || "No especificado";
+          const type = entryTypeReverseMap[entry.type] || entry.type;
+          const status = entryStatusReverseMap[entry.status] || entry.status;
+          const assignees =
+            entry.assignees?.map((a) => a.fullName).join(", ") ||
+            "Sin asignados";
+          return `• "${entry.title}" - Autor: ${author} - Tipo: ${type} - Estado: ${status} - Asignados: ${assignees} - Fecha: ${formatDate(
+            entry.createdAt
+          )}`;
+        })
+        .join("\n");
+
+      contextSections.push({
+        id: "recent-log-entries",
+        heading: "Anotaciones recientes en bitácora",
+        body: logEntriesSummary,
+      });
+    }
+
+    const fallbackContext =
+      contextSections.length > 0
+        ? contextSections.map(sectionToText).join("\n\n")
+        : "No se encontró información contextual relevante en la base de datos.";
+
+    let selectedContextSections: ChatbotContextSection[] = [];
+    let retrievalPrompt = String(query);
+    let contexto = fallbackContext;
+
+    if (contextSections.length) {
+      retrievalPrompt = conversationHistory.length
+        ? `${conversationHistory[conversationHistory.length - 1].content}\n${query}`
+        : String(query);
+      const selectedSections = await selectRelevantSections({
+        query: retrievalPrompt,
+        sections: contextSections,
+        openaiClient: openai,
+        maxSections: 6,
+      });
+
+      if (selectedSections.length) {
+        selectedContextSections = selectedSections;
+        contexto = selectedSections.map(sectionToText).join("\n\n");
+      } else {
+        selectedContextSections = contextSections.slice(
+          0,
+          Math.min(6, contextSections.length)
+        );
+        contexto = selectedContextSections.map(sectionToText).join("\n\n");
+      }
+    } else {
+      selectedContextSections = [];
+    }
+
+    const systemPrompt = [
+      "Eres Aurora, asistente virtual de la plataforma Bitácora de Obra.",
+      "Ayudas a residentes, interventores y contratistas a entender el estado del proyecto usando la información auditada que recibes.",
+      "",
+      "Guías obligatorias:",
+      "1. Utiliza únicamente el contexto suministrado; no inventes datos ni supongas valores faltantes.",
+      "2. Indica con claridad cuando un dato no aparezca en el contexto e invita a consultar al responsable correspondiente.",
+      "3. Prioriza riesgos, vencimientos próximos, responsables y fechas clave.",
+      "4. Redacta en español colombiano técnico, tono profesional y directo.",
+      "5. Mantén la respuesta en máximo dos párrafos o viñetas breves (máx. 6 frases).",
+      "6. Si el usuario pide procedimientos o recomendaciones, apóyate en el contexto; si no existe, di que no está disponible.",
+      "7. Incluye cifras, unidades y fuentes del contexto cuando sea posible.",
+      "",
+      "Ejemplo de estilo cuando falta información:",
+      "«No encuentro inspecciones de seguridad en el contexto entregado; por favor revisa la bitácora o consulta al residente de obra.»",
+    ].join("\n");
+
+    const exampleMessages: Array<{ role: "user" | "assistant"; content: string }> = [
+      {
+        role: "user",
+        content:
+          "Ejemplo (no responder al usuario real): ¿Qué compromisos vencen esta semana?",
+      },
+      {
+        role: "assistant",
+        content:
+          "Ejemplo: Los compromisos con vencimiento más próximo son... (lista los hitos relevantes con fecha y responsable).",
+      },
+      {
+        role: "user",
+        content:
+          "Ejemplo (no responder al usuario real): Dame cifras aunque no estén en el contexto.",
+      },
+      {
+        role: "assistant",
+        content:
+          "Ejemplo: No puedo inventar datos; según el contexto compartido no hay cifras disponibles para esa consulta.",
+      },
+    ];
+
+    const contextMessage = {
+      role: "system" as const,
+      content: `Contexto operativo del proyecto (usar estrictamente):\n${contexto}`,
+    };
+
+    const messages: Array<{
+      role: "system" | "user" | "assistant";
+      content: string;
+    }> = [
+      { role: "system", content: systemPrompt },
+      ...exampleMessages,
+      ...conversationHistory,
+      contextMessage,
+      { role: "user", content: String(query) },
+    ];
+
+    const chatModel = process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini";
+
+    const completion = await openai.chat.completions.create({
+      model: chatModel,
+      temperature: 0.2,
+      messages,
+    });
+
+    const botResponse =
+      completion.choices?.[0]?.message?.content?.trim() ||
+      "No pude generar una respuesta.";
+
+    const promptTokens = completion.usage?.prompt_tokens ?? 0;
+    const completionTokens = completion.usage?.completion_tokens ?? 0;
+    const totalTokens = promptTokens + completionTokens;
+    const costPer1K = MODEL_COST_PER_K_TOKENS[chatModel] ?? 0;
+    const estimatedCost =
+      costPer1K > 0 && totalTokens > 0
+        ? (totalTokens / 1000) * costPer1K
+        : 0;
+    const costIncrementDecimal = new Prisma.Decimal(estimatedCost.toFixed(4));
+
+    let interactionId: string | null = null;
+
+    try {
+      const newInteractionId = randomUUID();
+      interactionId = newInteractionId;
+      await prisma.chatbotInteraction.create({
+        data: {
+          id: newInteractionId,
+          userId,
+          question: String(query),
+          answer: botResponse,
+          model: chatModel,
+          tokensPrompt: promptTokens,
+          tokensCompletion: completionTokens,
+          selectedSections: selectedContextSections.map((section) => ({
+            id: section.id,
+            heading: section.heading,
+          })),
+          metadata: {
+            totalSectionsAvailable: contextSections.length,
+            selectedCount: selectedContextSections.length,
+            hasConversationHistory: conversationHistory.length > 0,
+            retrievalPromptLength: retrievalPrompt.length,
+            totalTokens,
+            estimatedCost,
+          },
+        },
+      });
+    } catch (loggingError) {
+      console.warn(
+        "No fue posible guardar la interacción del chatbot:",
+        loggingError
+      );
+    }
+
+    try {
+      const usageDate = new Date();
+      usageDate.setHours(0, 0, 0, 0);
+
+      await prisma.chatbotUsage.upsert({
+        where: {
+          userId_date: {
+            userId,
+            date: usageDate,
+          },
+        },
+        update: {
+          queryCount: { increment: 1 },
+          tokensUsed: { increment: totalTokens },
+          cost: { increment: costIncrementDecimal },
+          model: chatModel,
+        },
+        create: {
+          userId,
+          date: usageDate,
+          queryCount: 1,
+          tokensUsed: totalTokens,
+          cost: costIncrementDecimal,
+          model: chatModel,
+        },
+      });
+    } catch (usageError) {
+      console.warn(
+        "No se pudo actualizar las métricas de uso del chatbot:",
+        usageError
+      );
+    }
+
+    res.json({
+      response: botResponse,
+      interactionId,
+      contextSections: selectedContextSections.map((section) => ({
+        id: section.id,
+        heading: section.heading,
+      })),
+    });
+  } catch (error: any) {
+    console.error("Error al contactar la API de OpenAI:", error);
+    if (error.response) {
+      console.error("Detalle del error:", error.response.data);
+      if (error.response.status === 401) {
+        return res.status(500).json({
+          error: "La clave de API de OpenAI no es válida. Revisa tu .env.",
+        });
+      }
+      if (error.response.status === 429) {
+        return res.status(500).json({
+          error: "Límite de cuota de OpenAI excedido. Revisa tu facturación.",
+        });
+      }
+    }
+    res.status(500).json({ error: "Error al procesar la respuesta del chatbot." });
+  }
+});
+
+app.post(
+  "/api/chatbot/feedback",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    const { interactionId, rating, comment, tags } = req.body ?? {};
+    const userId = req.user?.userId;
+
+    if (!interactionId || typeof interactionId !== "string") {
+      return res
+        .status(400)
+        .json({ error: "interactionId es obligatorio para enviar feedback." });
+    }
+    if (rating !== "POSITIVE" && rating !== "NEGATIVE") {
+      return res.status(400).json({
+        error: "rating debe ser POSITIVE o NEGATIVE.",
+      });
+    }
+    if (!userId) {
+      return res.status(401).json({ error: "Usuario no autenticado." });
+    }
+
+    try {
+      const interaction = await prisma.chatbotInteraction.findUnique({
+        where: { id: interactionId },
+        select: { userId: true },
+      });
+
+      if (!interaction) {
+        return res
+          .status(404)
+          .json({ error: "No se encontró la interacción especificada." });
+      }
+
+      if (interaction.userId !== userId) {
+        return res.status(403).json({
+          error: "No tienes permisos para calificar esta interacción.",
+        });
+      }
+
+      const metadata =
+        tags && Array.isArray(tags) && tags.length ? { tags } : undefined;
+
+      await prisma.chatbotFeedback.upsert({
+        where: { interactionId },
+        update: {
+          rating: rating as ChatbotFeedbackRating,
+          comment: typeof comment === "string" ? comment : undefined,
+          metadata,
+        },
+        create: {
+          interactionId,
+          rating: rating as ChatbotFeedbackRating,
+          comment: typeof comment === "string" ? comment : undefined,
+          metadata,
+        },
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error al registrar feedback del chatbot:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudo guardar el feedback del chatbot." });
     }
   }
 );
