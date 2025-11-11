@@ -1,5 +1,4 @@
--- Create table for tracking chatbot usage metrics
-CREATE TABLE `ChatbotUsage` (
+CREATE TABLE IF NOT EXISTS `ChatbotUsage` (
   `id` VARCHAR(191) NOT NULL,
   `userId` VARCHAR(191) NOT NULL,
   `date` DATE NOT NULL,
@@ -19,7 +18,7 @@ CREATE TABLE `ChatbotUsage` (
 );
 
 -- Create table that stores the individual chatbot interactions
-CREATE TABLE `ChatbotInteraction` (
+CREATE TABLE IF NOT EXISTS `ChatbotInteraction` (
   `id` VARCHAR(191) NOT NULL,
   `userId` VARCHAR(191) NOT NULL,
   `question` LONGTEXT NOT NULL,
@@ -38,7 +37,7 @@ CREATE TABLE `ChatbotInteraction` (
 );
 
 -- Create table that stores feedback linked to chatbot interactions
-CREATE TABLE `ChatbotFeedback` (
+CREATE TABLE IF NOT EXISTS `ChatbotFeedback` (
   `id` VARCHAR(191) NOT NULL,
   `interactionId` VARCHAR(191) NOT NULL,
   `rating` ENUM('POSITIVE', 'NEGATIVE') NOT NULL,
