@@ -264,6 +264,24 @@ const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
   return next();
 };
 
+const requireEditor = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  if (!req.user) {
+    return res.status(401).json({ error: "Usuario no autenticado." });
+  }
+
+  if (req.user.appRole === "viewer") {
+    return res.status(403).json({
+      error: "Acceso restringido a editores y administradores.",
+    });
+  }
+
+  return next();
+};
+
 const ensureAppSettings = async () => {
   try {
     let settings = await prisma.appSetting.findFirst();
@@ -3308,6 +3326,263 @@ app.delete(
     } catch (error) {
       console.error("Error al eliminar la firma del usuario:", error);
       res.status(500).json({ error: "No se pudo eliminar la firma." });
+    }
+  }
+);
+
+// --- RUTAS PARA PLANOS (DRAWINGS) ---
+app.get("/api/drawings", async (_req, res) => {
+  try {
+    const drawings = await prisma.drawing.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        versions: {
+          orderBy: { versionNumber: "desc" },
+          include: { uploader: true },
+        },
+        comments: {
+          include: { author: true, attachments: true },
+          orderBy: { timestamp: "asc" },
+        },
+      },
+    });
+
+    const formatted = drawings.map((drawing) => ({
+      ...drawing,
+      discipline:
+        Object.keys(drawingDisciplineMap).find(
+          (key) => drawingDisciplineMap[key] === drawing.discipline
+        ) || drawing.discipline,
+      versions: (drawing.versions || []).map((version: any) => ({
+        ...version,
+        createdAt:
+          version.createdAt instanceof Date
+            ? version.createdAt.toISOString()
+            : version.createdAt,
+      })),
+      comments: (drawing.comments || []).map((comment: any) => ({
+        ...comment,
+        timestamp:
+          comment.timestamp instanceof Date
+            ? comment.timestamp.toISOString()
+            : comment.timestamp,
+        attachments: (comment.attachments || []).map(buildAttachmentResponse),
+      })),
+    }));
+
+    res.json(formatted);
+  } catch (error) {
+    console.error("Error al obtener los planos:", error);
+    res.status(500).json({ error: "No se pudieron obtener los planos." });
+  }
+});
+
+app.get("/api/drawings/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const drawing = await prisma.drawing.findUnique({
+      where: { id },
+      include: {
+        versions: {
+          orderBy: { versionNumber: "desc" },
+          include: { uploader: true },
+        },
+        comments: {
+          include: { author: true, attachments: true },
+          orderBy: { timestamp: "asc" },
+        },
+      },
+    });
+
+    if (!drawing) {
+      return res.status(404).json({ error: "Plano no encontrado." });
+    }
+
+    const formatted = {
+      ...drawing,
+      discipline:
+        Object.keys(drawingDisciplineMap).find(
+          (key) => drawingDisciplineMap[key] === drawing.discipline
+        ) || drawing.discipline,
+      versions: (drawing.versions || []).map((version: any) => ({
+        ...version,
+        createdAt:
+          version.createdAt instanceof Date
+            ? version.createdAt.toISOString()
+            : version.createdAt,
+      })),
+      comments: (drawing.comments || []).map((comment: any) => ({
+        ...comment,
+        timestamp:
+          comment.timestamp instanceof Date
+            ? comment.timestamp.toISOString()
+            : comment.timestamp,
+        attachments: (comment.attachments || []).map(buildAttachmentResponse),
+      })),
+    };
+
+    res.json(formatted);
+  } catch (error) {
+    console.error("Error al obtener el plano:", error);
+    res.status(500).json({ error: "No se pudo obtener el plano solicitado." });
+  }
+});
+
+app.post(
+  "/api/drawings",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { code, title, discipline, version } = req.body ?? {};
+      if (!code || !title || !discipline || !version) {
+        return res
+          .status(400)
+          .json({ error: "Faltan datos para crear el plano." });
+      }
+
+      const prismaDiscipline = drawingDisciplineMap[discipline] || "OTHER";
+
+      const newDrawing = await prisma.drawing.create({
+        data: {
+          code,
+          title,
+          discipline: prismaDiscipline,
+          status: "VIGENTE",
+          versions: {
+            create: [
+              {
+                versionNumber: 1,
+                fileName: version.fileName,
+                url: version.url,
+                size: version.size,
+                uploader: { connect: { id: version.uploaderId } },
+              },
+            ],
+          },
+        },
+        include: {
+          versions: { include: { uploader: true } },
+          comments: { include: { author: true } },
+        },
+      });
+
+      const formatted = {
+        ...newDrawing,
+        discipline:
+          Object.keys(drawingDisciplineMap).find(
+            (key) => drawingDisciplineMap[key] === newDrawing.discipline
+          ) || newDrawing.discipline,
+      };
+
+      res.status(201).json(formatted);
+    } catch (error) {
+      console.error("Error al crear el plano:", error);
+      if ((error as any)?.code === "P2002") {
+        return res
+          .status(409)
+          .json({ error: "Ya existe un plano con este código." });
+      }
+      res.status(500).json({ error: "No se pudo crear el plano." });
+    }
+  }
+);
+
+app.post(
+  "/api/drawings/:id/versions",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { version } = req.body ?? {};
+
+      if (!version) {
+        return res
+          .status(400)
+          .json({ error: "Faltan los datos de la nueva versión." });
+      }
+
+      const existingDrawing = await prisma.drawing.findUnique({
+        where: { id },
+        include: { versions: { orderBy: { versionNumber: "desc" } } },
+      });
+
+      if (!existingDrawing) {
+        return res.status(404).json({ error: "El plano no fue encontrado." });
+      }
+
+      const latestVersionNumber =
+        existingDrawing.versions[0]?.versionNumber || 0;
+
+      const updatedDrawing = await prisma.drawing.update({
+        where: { id },
+        data: {
+          status: "VIGENTE",
+          versions: {
+            create: {
+              versionNumber: latestVersionNumber + 1,
+              fileName: version.fileName,
+              url: version.url,
+              size: version.size,
+              uploader: { connect: { id: version.uploaderId } },
+            },
+          },
+        },
+        include: {
+          versions: {
+            orderBy: { versionNumber: "desc" },
+            include: { uploader: true },
+          },
+          comments: { include: { author: true } },
+        },
+      });
+
+      const formatted = {
+        ...updatedDrawing,
+        discipline:
+          Object.keys(drawingDisciplineMap).find(
+            (key) => drawingDisciplineMap[key] === updatedDrawing.discipline
+          ) || updatedDrawing.discipline,
+      };
+
+      res.status(201).json(formatted);
+    } catch (error) {
+      console.error("Error al añadir nueva versión:", error);
+      res.status(500).json({ error: "No se pudo añadir la nueva versión." });
+    }
+  }
+);
+
+app.post(
+  "/api/drawings/:id/comments",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { content, authorId } = req.body ?? {};
+      const resolvedAuthorId = req.user?.userId || authorId;
+
+      if (!content || !resolvedAuthorId) {
+        return res
+          .status(400)
+          .json({ error: "El contenido y el autor son obligatorios." });
+      }
+
+      const newComment = await prisma.comment.create({
+        data: {
+          content,
+          author: { connect: { id: resolvedAuthorId } },
+          drawing: { connect: { id } },
+        },
+        include: { author: true },
+      });
+
+      res.status(201).json(newComment);
+    } catch (error) {
+      console.error("Error al añadir el comentario al plano:", error);
+      res.status(500).json({ error: "No se pudo añadir el comentario." });
     }
   }
 );
