@@ -3,8 +3,8 @@
 echo "🔧 Iniciando corrección de migraciones..."
 
 # Intentar resolver la migración problemática específica
-echo "Resolviendo migración problemática 20250321510000_add_report_versions..."
-npx prisma migrate resolve --applied 20250321510000_add_report_versions || echo "No se pudo resolver la migración específica"
+echo "Resolviendo migración problemática 20250325100000_add_report_versions..."
+npx prisma migrate resolve --applied 20250325100000_add_report_versions || echo "No se pudo resolver la migración específica"
 
 # Intentar deploy normal
 echo "Aplicando migraciones pendientes..."

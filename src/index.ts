@@ -1805,7 +1805,7 @@ app.post("/api/admin/fix-migrations", authMiddleware, requireAdmin, async (req: 
     try {
       // Primero, marcar la migración fallida como resuelta
       console.log("Marcando migración fallida como resuelta...");
-      await execAsync('npx prisma migrate resolve --applied 20250321510000_add_report_versions');
+      await execAsync('npx prisma migrate resolve --applied 20250325100000_add_report_versions');
       
       // Luego, aplicar las migraciones pendientes
       console.log("Aplicando migraciones pendientes...");

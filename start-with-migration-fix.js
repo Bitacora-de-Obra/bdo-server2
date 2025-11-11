@@ -17,7 +17,7 @@ async function fixMigrations() {
     try {
       await prisma.$executeRawUnsafe(`
         INSERT IGNORE INTO _prisma_migrations (id, checksum, finished_at, migration_name, logs, rolled_back_at, started_at, applied_steps_count)
-        VALUES ('20250321510000_add_report_versions', '', NOW(), '20250321510000_add_report_versions', '', NULL, NOW(), 1)
+        VALUES ('20250325100000_add_report_versions', '', NOW(), '20250325100000_add_report_versions', '', NULL, NOW(), 1)
         ON DUPLICATE KEY UPDATE finished_at = NOW(), rolled_back_at = NULL;
       `);
       console.log('✅ Migración problemática marcada como completada');
@@ -35,7 +35,7 @@ async function fixMigrations() {
     } catch (error) {
       console.log('⚠️ Error en migrate deploy, intentando resolución...');
       try {
-        await execAsync('npx prisma migrate resolve --applied 20250321510000_add_report_versions');
+        await execAsync('npx prisma migrate resolve --applied 20250325100000_add_report_versions');
         await execAsync('npx prisma migrate deploy');
         console.log('✅ Migraciones aplicadas después de resolución');
       } catch (resolveError) {
