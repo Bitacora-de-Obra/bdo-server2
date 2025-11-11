@@ -3587,6 +3587,43 @@ app.post(
   }
 );
 
+// --- RUTAS DE CARGA DE ARCHIVOS ---
+app.post(
+  "/api/upload",
+  authMiddleware,
+  requireEditor,
+  upload.single("file"),
+  async (req: AuthRequest, res) => {
+    try {
+      const file = req.file;
+      if (!file || !file.buffer) {
+        return res
+          .status(400)
+          .json({ error: "No se subió ningún archivo válido." });
+      }
+
+      const stored = await persistUploadedFile(file, "attachments");
+
+      const attachment = await prisma.attachment.create({
+        data: {
+          fileName: file.originalname,
+          url: stored.url,
+          storagePath: stored.key,
+          size: file.size,
+          type: file.mimetype,
+        },
+      });
+
+      res.status(201).json(buildAttachmentResponse(attachment));
+    } catch (error) {
+      console.error("Error en la subida de archivo:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudo procesar el archivo subido." });
+    }
+  }
+);
+
 // --- RUTAS DE CRONOGRAMA Y CONTROL ---
 app.get("/api/project-tasks", async (_req, res) => {
   try {
