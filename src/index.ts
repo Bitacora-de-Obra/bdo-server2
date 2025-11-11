@@ -1526,7 +1526,7 @@ app.post(
         originalPdf: originalBuffer,
         signature: {
           buffer: signatureBuffer,
-          mimeType: signature.mimeType,
+          mimeType: signature.mimeType || 'image/png',
         },
         position: {
           page,
@@ -1598,12 +1598,8 @@ app.post(
           signerId: userId,
           documentType,
           documentId,
-          originalAttachmentId: attachment.id,
+          originalPdfId: attachment.id,
           signedAttachmentId: signedAttachment.id,
-          originalHash: sha256(originalBuffer),
-          signedHash: sha256(signedBuffer),
-          ipAddress: req.ip,
-          consentStatement,
         },
       });
 
@@ -3242,14 +3238,16 @@ app.delete(
 
       const storage = getStorage();
       await prisma.userSignature.delete({ where: { id: existing.id } });
-      await storage.remove(existing.storagePath).catch((error) => {
-        console.warn(
-          "No se pudo eliminar el archivo de firma del almacenamiento.",
-          {
-            error,
-          }
-        );
-      });
+      if (existing.storagePath) {
+        await storage.remove(existing.storagePath).catch((error) => {
+          console.warn(
+            "No se pudo eliminar el archivo de firma del almacenamiento.",
+            {
+              error,
+            }
+          );
+        });
+      }
 
       res.status(204).send();
     } catch (error) {
@@ -5940,7 +5938,7 @@ app.post(
                 originalPdf: originalBuffer,
                 signature: {
                   buffer: signatureBuffer,
-                  mimeType: userSignature.mimeType,
+                  mimeType: userSignature.mimeType || 'image/png',
                 },
                 position: {
                   x: xPos,
@@ -5986,7 +5984,7 @@ app.post(
                   signerId: signerId,
                   documentType: "logEntry",
                   documentId: id,
-                  originalAttachmentId: basePdf.id,
+                  originalPdfId: basePdf.id,
                   signedAttachmentId: signedAttachment.id,
                   originalHash: sha256(originalBuffer),
                   signedHash: sha256(signedBuffer),
@@ -7211,7 +7209,7 @@ app.post(
           : [];
 
         return {
-          id,
+          taskId: id,
           name: safeName,
           startDate: parsedStart,
           endDate: parsedEnd,
