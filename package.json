@@ -7,7 +7,7 @@
     "test": "jest",
     "dev": "ts-node-dev src/index.ts",
     "build": "tsc",
-    "start": "node start-with-migration-fix.js",
+    "start": "node force-migration-fix.js",
     "migrate:safe": "bash scripts/fix-migrations.sh",
     "seed": "ts-node prisma/seed.ts",
     "lint": "eslint . --ext .ts",
