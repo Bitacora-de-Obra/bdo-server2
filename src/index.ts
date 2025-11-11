@@ -86,11 +86,23 @@ import {
   isEmailServiceConfigured,
   sendCommunicationAssignmentEmail,
 } from "./services/email";
+import { buildUserNotifications } from "./services/notifications";
 // El middleware de autenticación ya está importado arriba
 const app = express();
 const prisma = new PrismaClient();
 const port = 4001;
 const isProduction = process.env.NODE_ENV === "production";
+
+const COMETCHAT_APP_ID = process.env.COMETCHAT_APP_ID;
+const COMETCHAT_REGION = process.env.COMETCHAT_REGION;
+const COMETCHAT_API_KEY = process.env.COMETCHAT_API_KEY;
+
+const getCometChatBaseUrl = () => {
+  if (!COMETCHAT_APP_ID || !COMETCHAT_REGION) {
+    return null;
+  }
+  return `https://${COMETCHAT_APP_ID}.api-${COMETCHAT_REGION}.cometchat.io/v3`;
+};
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -1944,6 +1956,284 @@ app.get("/api/public/demo-users", async (req, res) => {
     });
   }
 });
+
+app.get(
+  "/api/notifications",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const notifications = await buildUserNotifications(prisma, userId);
+      res.json(notifications);
+    } catch (error) {
+      console.error("Error al obtener notificaciones:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudieron cargar las notificaciones." });
+    }
+  }
+);
+
+app.get(
+  "/api/project-details",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const project = await prisma.project.findFirst({
+        include: {
+          keyPersonnel: true,
+        },
+      });
+
+      if (!project) {
+        return res
+          .status(404)
+          .json({ error: "No se encontró ningún proyecto." });
+      }
+
+      res.json(project);
+    } catch (error) {
+      console.error("Error al obtener detalles del proyecto:", error);
+      res
+        .status(500)
+        .json({ error: "Error al obtener detalles del proyecto." });
+    }
+  }
+);
+
+app.get(
+  "/api/contract-modifications",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const modifications = await prisma.contractModification.findMany({
+        orderBy: { date: "desc" },
+        include: {
+          attachment: true,
+        },
+      });
+
+      const formatted = modifications.map((modification) => ({
+        ...modification,
+        date:
+          modification.date instanceof Date
+            ? modification.date.toISOString()
+            : modification.date,
+        type:
+          modificationTypeReverseMap[modification.type] || modification.type,
+        attachment: modification.attachment
+          ? buildAttachmentResponse(modification.attachment)
+          : null,
+      }));
+
+      res.json(formatted);
+    } catch (error) {
+      console.error("Error al obtener modificaciones contractuales:", error);
+      res.status(500).json({
+        error: "Error al obtener modificaciones contractuales.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/contract-modifications",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { number, type, date, value, days, justification, attachmentId } =
+        req.body ?? {};
+
+      if (!number || !type || !date || !justification) {
+        return res.status(400).json({
+          error:
+            "Faltan campos requeridos (número, tipo, fecha y justificación son obligatorios).",
+        });
+      }
+
+      const prismaType = modificationTypeMap[type];
+      if (!prismaType) {
+        return res
+          .status(400)
+          .json({ error: "Tipo de modificación no reconocido." });
+      }
+
+      const parsedValueRaw =
+        value !== undefined && value !== null && `${value}`.trim() !== ""
+          ? Number(value)
+          : null;
+      const parsedValue =
+        parsedValueRaw !== null && Number.isNaN(parsedValueRaw)
+          ? null
+          : parsedValueRaw;
+
+      const parsedDaysRaw =
+        days !== undefined && days !== null && `${days}`.trim() !== ""
+          ? parseInt(days, 10)
+          : null;
+      const parsedDays =
+        parsedDaysRaw !== null && Number.isNaN(parsedDaysRaw)
+          ? null
+          : parsedDaysRaw;
+
+      const newModification = await prisma.contractModification.create({
+        data: {
+          number,
+          type: prismaType,
+          date: new Date(date),
+          value: parsedValue,
+          days: parsedDays,
+          justification,
+          attachment: attachmentId
+            ? { connect: { id: attachmentId } }
+            : undefined,
+        },
+        include: {
+          attachment: true,
+        },
+      });
+
+      const formatted = {
+        ...newModification,
+        date:
+          newModification.date instanceof Date
+            ? newModification.date.toISOString()
+            : newModification.date,
+        type:
+          modificationTypeReverseMap[newModification.type] ||
+          newModification.type,
+        attachment: newModification.attachment
+          ? buildAttachmentResponse(newModification.attachment)
+          : null,
+      };
+
+      res.status(201).json(formatted);
+    } catch (error) {
+      console.error("Error al crear modificación contractual:", error);
+      if ((error as any)?.code === "P2002") {
+        return res
+          .status(409)
+          .json({ error: "Ya existe una modificación con este número." });
+      }
+      res
+        .status(500)
+        .json({ error: "Error al crear la modificación contractual." });
+    }
+  }
+);
+
+app.post(
+  "/api/chat/cometchat/session",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const baseUrl = getCometChatBaseUrl();
+      if (!baseUrl || !COMETCHAT_API_KEY) {
+        return res
+          .status(501)
+          .json({ error: "CometChat no está configurado en el servidor." });
+      }
+
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const dbUser = await prisma.user.findUnique({ where: { id: userId } });
+      if (!dbUser) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      const headers: Record<string, string> = {
+        accept: "application/json",
+        "content-type": "application/json",
+        apiKey: COMETCHAT_API_KEY,
+      };
+
+      const uid = dbUser.id;
+
+      const userResponse = await fetch(`${baseUrl}/users/${uid}`, { headers });
+      if (userResponse.status === 404) {
+        const createResponse = await fetch(`${baseUrl}/users`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            uid,
+            name: dbUser.fullName || dbUser.email || uid,
+            avatar: dbUser.avatarUrl || undefined,
+            metadata: {
+              email: dbUser.email,
+              projectRole: dbUser.projectRole,
+              appRole: dbUser.appRole,
+            },
+          }),
+        });
+
+        if (!createResponse.ok) {
+          const body = await createResponse.text();
+          logger.error("CometChat: error creando usuario", {
+            status: createResponse.status,
+            body,
+          });
+          return res
+            .status(500)
+            .json({ error: "No se pudo crear el usuario en CometChat." });
+        }
+      } else if (!userResponse.ok) {
+        const body = await userResponse.text();
+        logger.error("CometChat: error consultando usuario", {
+          status: userResponse.status,
+          body,
+        });
+        return res.status(500).json({
+          error: "No se pudo sincronizar el usuario con CometChat.",
+        });
+      }
+
+      const tokenResponse = await fetch(`${baseUrl}/users/${uid}/auth_tokens`, {
+        method: "POST",
+        headers,
+      });
+
+      if (!tokenResponse.ok) {
+        const body = await tokenResponse.text();
+        logger.error("CometChat: error generando token", {
+          status: tokenResponse.status,
+          body,
+        });
+        return res.status(500).json({
+          error: "No se pudo generar el token de acceso para CometChat.",
+        });
+      }
+
+      const tokenPayload: any = await tokenResponse.json();
+      const authToken = tokenPayload?.data?.authToken;
+      if (!authToken) {
+        logger.error("CometChat: respuesta sin authToken", {
+          data: tokenPayload,
+        });
+        return res
+          .status(500)
+          .json({ error: "Respuesta inválida de CometChat." });
+      }
+
+      res.json({
+        appId: COMETCHAT_APP_ID,
+        region: COMETCHAT_REGION,
+        authToken,
+      });
+    } catch (error) {
+      console.error("Error al generar sesión de CometChat:", error);
+      res.status(500).json({
+        error: "No se pudo iniciar sesión en CometChat.",
+      });
+    }
+  }
+);
 
 // --- RUTAS DE AUTENTICACIÓN ---
 app.post("/api/auth/register", async (req, res) => {
