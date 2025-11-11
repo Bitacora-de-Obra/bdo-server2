@@ -1901,6 +1901,41 @@ app.get("/health", (req, res) => {
   });
 });
 
+// Endpoint público para obtener usuarios de demostración
+app.get("/api/public/demo-users", async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { status: "active" },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        projectRole: true,
+        appRole: true,
+        status: true,
+      },
+      orderBy: { fullName: "asc" },
+    });
+
+    const sanitized = users.map((user) => ({
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      projectRole: user.projectRole,
+      appRole: user.appRole,
+      status: user.status,
+    }));
+
+    res.json(sanitized);
+  } catch (error) {
+    console.error("Error obteniendo usuarios de demo:", error);
+    res.status(500).json({ 
+      error: "Error interno del servidor",
+      message: "No se pudieron obtener los usuarios de demostración"
+    });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Servidor escuchando en http://localhost:${port}`);
 });
