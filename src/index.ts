@@ -602,9 +602,11 @@ const resolveServerPublicUrl = () => {
 const buildAttachmentResponse = (attachment: any) => {
   const relativePath = `/api/attachments/${attachment.id}/download`;
   const publicUrl = resolveServerPublicUrl();
+  const downloadUrl = `${publicUrl}${relativePath}`;
   return {
     ...attachment,
-    downloadUrl: `${publicUrl}${relativePath}`,
+    url: downloadUrl,
+    downloadUrl,
     downloadPath: relativePath,
   };
 };
@@ -2995,14 +2997,40 @@ app.post(
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
-      const myTask = (entry.signatureTasks || []).find(
-        (task) => task.signerId === signerId
-      );
+      let myTask =
+        (entry.signatureTasks || []).find(
+          (task) => task.signerId === signerId
+        ) ?? null;
+
       if (!myTask) {
-        return res.status(403).json({
-          error: "No tienes tarea de firma asignada en esta anotación.",
+        myTask = await prisma.logEntrySignatureTask.findUnique({
+          where: { logEntryId_signerId: { logEntryId: id, signerId } },
+          include: { signer: true },
         });
       }
+
+      if (!myTask) {
+        console.warn("Creando tarea de firma en caliente.", {
+          logEntryId: id,
+          signerId,
+        });
+        myTask = await prisma.logEntrySignatureTask.create({
+          data: {
+            logEntry: { connect: { id } },
+            signer: { connect: { id: signerId } },
+            status: "PENDING",
+          },
+          include: { signer: true },
+        });
+        entry.signatureTasks = [...(entry.signatureTasks || []), myTask];
+      }
+
+      if (!myTask) {
+        return res.status(403).json({
+          error: "No fue posible asignarte la tarea de firma.",
+        });
+      }
+
       if (myTask.status === "SIGNED") {
         return res.status(409).json({
           error: "Ya has firmado esta anotación.",

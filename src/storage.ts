@@ -57,9 +57,11 @@ class LocalStorage implements StorageInterface {
   getPublicUrl(filePath: string): string {
     const baseUrl =
       process.env.STORAGE_PUBLIC_URL ||
+      process.env.SERVER_PUBLIC_URL ||
+      process.env.APP_BASE_URL ||
       process.env.BASE_URL ||
-      "http://localhost:4001";
-    return `${baseUrl}/uploads/${filePath}`;
+      `http://localhost:${process.env.PORT || 4001}`;
+    return `${baseUrl.replace(/\/$/, "")}/uploads/${filePath}`;
   }
 
   async getSignedUrl(
@@ -148,7 +150,7 @@ class CloudflareR2Storage implements StorageInterface {
 
   getPublicUrl(filePath: string): string {
     if (this.publicUrl) {
-      return `${this.publicUrl}/${filePath}`;
+      return `${this.publicUrl.replace(/\/$/, "")}/${filePath}`;
     }
     // URL pública estándar de R2 (si el bucket está configurado como público)
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -194,7 +196,13 @@ let storageInstance: StorageInterface | null = null;
 
 export const getStorage = (): StorageInterface => {
   if (!storageInstance) {
-    const driver = process.env.STORAGE_DRIVER || "local";
+    const defaultDriver =
+      process.env.CLOUDFLARE_ACCOUNT_ID &&
+      process.env.CLOUDFLARE_R2_ACCESS_KEY_ID &&
+      process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY
+        ? "r2"
+        : "local";
+    const driver = (process.env.STORAGE_DRIVER || defaultDriver).toLowerCase();
 
     switch (driver) {
       case "cloudflare":
