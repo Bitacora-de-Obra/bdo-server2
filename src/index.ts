@@ -4,7 +4,7 @@ import express, {
   Request,
   Response,
 } from "express";
-import cors from "cors";
+import cors, { CorsOptions } from "cors";
 import OpenAI from "openai";
 import cookieParser from "cookie-parser";
 import fs from "fs";
@@ -1083,6 +1083,53 @@ interface ReportVersion {
   createdAt: string | null;
 }
 
+const normalizeOrigin = (origin?: string | null) => {
+  if (!origin) return null;
+  const trimmed = origin.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\/+$/, "");
+};
+
+const DEFAULT_ALLOWED_ORIGINS = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:5173",
+];
+
+const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map(normalizeOrigin)
+  .filter((value): value is string => Boolean(value));
+
+const inferredOrigins = [
+  normalizeOrigin(process.env.FRONTEND_URL),
+  normalizeOrigin(process.env.APP_BASE_URL),
+  normalizeOrigin(process.env.SERVER_PUBLIC_URL),
+];
+
+const allowedOrigins = Array.from(
+  new Set([
+    ...DEFAULT_ALLOWED_ORIGINS,
+    ...envAllowedOrigins,
+    ...inferredOrigins.filter((value): value is string => Boolean(value)),
+  ])
+);
+
+const corsOptions: CorsOptions = {
+  origin(origin, callback) {
+    // Permitir requests sin origen (ej. curl) y orígenes registrados
+    if (!origin || allowedOrigins.includes(origin.replace(/\/+$/, ""))) {
+      callback(null, true);
+    } else {
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
+    }
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  exposedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+};
+
 const mapReportVersionSummary = (report: any): ReportVersion => ({
   id: report.id,
   version: report.version || 1,
@@ -1097,19 +1144,7 @@ const mapReportVersionSummary = (report: any): ReportVersion => ({
       : report.createdAt,
 });
 
-app.use(
-  cors({
-    origin: [
-      "http://localhost:3000",
-      "http://localhost:3001",
-      "http://localhost:5173",
-    ], // Permite puertos de React y Vite
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], // Incluye OPTIONS para preflight
-    allowedHeaders: ["Content-Type", "Authorization"], // Headers permitidos
-    credentials: true, // Necesario para cookies/sesiones
-    exposedHeaders: ["Content-Type", "Authorization"], // Headers expuestos al cliente
-  })
-);
+app.use(cors(corsOptions));
 
 app.use(
   helmet({
