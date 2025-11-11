@@ -591,6 +591,46 @@ const persistUploadedFile = async (
   };
 };
 
+const resolveServerPublicUrl = () => {
+  const raw = process.env.SERVER_PUBLIC_URL?.trim();
+  if (raw && raw.length > 0) {
+    return raw.replace(/\/+$/, "");
+  }
+  return `http://localhost:${port}`;
+};
+
+const buildAttachmentResponse = (attachment: any) => {
+  const relativePath = `/api/attachments/${attachment.id}/download`;
+  const publicUrl = resolveServerPublicUrl();
+  return {
+    ...attachment,
+    downloadUrl: `${publicUrl}${relativePath}`,
+    downloadPath: relativePath,
+  };
+};
+
+const parseBooleanInput = (value: any): boolean => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value === 1;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized.length) {
+      return false;
+    }
+    if (["true", "1", "yes", "y", "si", "sí", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["false", "0", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+  return false;
+};
+
 ensureAppSettings().catch((error) => {
   console.error("No se pudo inicializar la configuración principal:", error);
 });
@@ -608,11 +648,6 @@ const resolveProjectRole = (value?: string): UserRole | undefined => {
   }
   return undefined;
 };
-
-const buildAttachmentResponse = (attachment: any) => ({
-  ...attachment,
-  downloadUrl: `http://localhost:${port}/api/attachments/${attachment.id}/download`,
-});
 
 const resolveStorageKeyFromUrl = (fileUrl?: string | null): string | null => {
   if (!fileUrl) return null;
@@ -2709,7 +2744,7 @@ app.post(
           location: typeof location === "string" ? location : "",
           activityStartDate: activityStartValue,
           activityEndDate: activityEndValue,
-          isConfidential: Boolean(isConfidential),
+          isConfidential: parseBooleanInput(isConfidential),
           author: { connect: { id: userId } },
           project: { connect: { id: projectId } },
           assignees: {
@@ -2799,57 +2834,111 @@ app.get(
 app.post(
   "/api/log-entries/:id/comments",
   authMiddleware,
-  async (req: AuthRequest, res) => {
-    try {
-      const { id } = req.params;
-      const { content, authorId } = req.body ?? {};
+  requireEditor,
+  (req: AuthRequest, res) => {
+    const uploadMiddleware = upload.array("attachments", 5);
 
-      if (!content || typeof content !== "string" || !content.trim()) {
-        return res
-          .status(400)
-          .json({ error: "El contenido del comentario es obligatorio." });
+    uploadMiddleware(req, res, async (err) => {
+      if (err instanceof multer.MulterError) {
+        return res.status(400).json({ error: err.message });
+      }
+      if (err) {
+        return res.status(500).json({ error: err.message });
       }
 
-      const logEntry = await prisma.logEntry.findUnique({ where: { id } });
-      if (!logEntry) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
+      try {
+        const { id } = req.params;
+        const { content, authorId } = req.body ?? {};
+
+        if (!content || typeof content !== "string" || !content.trim()) {
+          return res.status(400).json({
+            error: "El contenido del comentario es obligatorio.",
+          });
+        }
+
+        const logEntry = await prisma.logEntry.findUnique({ where: { id } });
+        if (!logEntry) {
+          return res
+            .status(404)
+            .json({ error: "Anotación no encontrada." });
+        }
+
+        const resolvedAuthorId = req.user?.userId || authorId;
+        if (!resolvedAuthorId || typeof resolvedAuthorId !== "string") {
+          return res.status(401).json({
+            error: "No se pudo determinar el autor del comentario.",
+          });
+        }
+
+        const author = await prisma.user.findUnique({
+          where: { id: resolvedAuthorId },
+        });
+        if (!author) {
+          return res.status(404).json({ error: "Autor no encontrado." });
+        }
+
+        const uploadedFiles = Array.isArray(req.files)
+          ? (req.files as Express.Multer.File[])
+          : [];
+        const createdAttachments: { id: string }[] = [];
+
+        for (const file of uploadedFiles) {
+          try {
+            if (!file.buffer) {
+              logger.warn("Archivo sin buffer recibido", {
+                originalName: file.originalname,
+              });
+              continue;
+            }
+            const stored = await persistUploadedFile(
+              file,
+              "log-entry-comments"
+            );
+            const attachment = await prisma.attachment.create({
+              data: {
+                fileName: file.originalname,
+                url: stored.url,
+                storagePath: stored.key,
+                size: file.size,
+                type: file.mimetype,
+              },
+            });
+            createdAttachments.push({ id: attachment.id });
+          } catch (uploadError) {
+            console.error("Error al guardar adjunto del comentario:", uploadError);
+          }
+        }
+
+        const newComment = await prisma.comment.create({
+          data: {
+            content: content.trim(),
+            author: { connect: { id: author.id } },
+            logEntry: { connect: { id } },
+            attachments: createdAttachments.length
+              ? { connect: createdAttachments }
+              : undefined,
+          },
+          include: { author: true, attachments: true },
+        });
+
+        await recordLogEntryChanges(id, req.user?.userId, [
+          {
+            fieldName: "Comentario Añadido",
+            newValue: `${author.fullName}: ${content.trim()}`,
+          },
+        ]);
+
+        res.status(201).json({
+          ...newComment,
+          attachments: (newComment.attachments || []).map(
+            buildAttachmentResponse
+          ),
+        });
+      } catch (error) {
+        console.error("Error al crear comentario de bitácora:", error);
+        res.status(500).json({ error: "No se pudo crear el comentario." });
       }
-
-      const resolvedAuthorId = req.user?.userId || authorId;
-      if (!resolvedAuthorId) {
-        return res
-          .status(401)
-          .json({ error: "No se pudo determinar el autor del comentario." });
-      }
-
-      const author = await prisma.user.findUnique({
-        where: { id: resolvedAuthorId },
-      });
-      if (!author) {
-        return res.status(404).json({ error: "Autor no encontrado." });
-      }
-
-      const newComment = await prisma.comment.create({
-        data: {
-          content: content.trim(),
-          author: { connect: { id: author.id } },
-          logEntry: { connect: { id } },
-        },
-        include: { author: true },
-      });
-
-      await recordLogEntryChanges(id, req.user?.userId, [
-        {
-          fieldName: "Comentario Añadido",
-          newValue: `${author.fullName}: ${content.trim()}`,
-        },
-      ]);
-
-      res.status(201).json(newComment);
-    } catch (error) {
-      console.error("Error al crear comentario de bitácora:", error);
-      res.status(500).json({ error: "No se pudo crear el comentario." });
-    }
+    });
   }
 );
 
