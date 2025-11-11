@@ -1,10 +1,16 @@
-import { Prisma } from '@prisma/client';
+import { Prisma } from "@prisma/client";
 
 export interface JsonObject {
-  [key: string]: JsonValue | undefined;
+  [key: string]: JsonValue;
 }
 
-export type JsonValue = string | number | boolean | null | JsonObject | JsonArray;
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonObject
+  | JsonArray;
 export type JsonArray = JsonValue[];
 
 export interface NormalizedWeatherReport {

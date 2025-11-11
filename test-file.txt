@@ -1,0 +1,3 @@
+Hello World! Este es un archivo de prueba para Cloudflare R2.
+Fecha: 11 de noviembre de 2025
+Prueba de upload desde BDO Server

@@ -109,11 +109,15 @@ export const generateLogEntryPdf = async ({
     where: { id: entry.projectId },
   });
 
-  const contractorPersonnel = normalizePersonnelEntries(entry.contractorPersonnel);
+  const contractorPersonnel = normalizePersonnelEntries(
+    entry.contractorPersonnel
+  );
   const interventoriaPersonnel = normalizePersonnelEntries(
     entry.interventoriaPersonnel
   );
-  const equipmentResources = normalizeEquipmentEntries(entry.equipmentResources);
+  const equipmentResources = normalizeEquipmentEntries(
+    entry.equipmentResources
+  );
   const executedActivities = normalizeListItems(entry.executedActivities);
   const executedQuantities = normalizeListItems(entry.executedQuantities);
   const scheduledActivities = normalizeListItems(entry.scheduledActivities);
@@ -124,9 +128,9 @@ export const generateLogEntryPdf = async ({
   const siteVisits = normalizeListItems(entry.siteVisits);
   const weatherReportNormalized = normalizeWeatherReport(entry.weatherReport);
 
-  const formatPersonnelEntry = (person: ReturnType<
-    typeof normalizePersonnelEntries
-  >[number]) => {
+  const formatPersonnelEntry = (
+    person: ReturnType<typeof normalizePersonnelEntries>[number]
+  ) => {
     const quantity =
       typeof person.quantity === "number" && !Number.isNaN(person.quantity)
         ? `${person.quantity}`
@@ -186,9 +190,7 @@ export const generateLogEntryPdf = async ({
   await fs.mkdir(generatedDir, { recursive: true });
 
   const safeTitle = sanitizeFileName(entry.title || "bitacora");
-  const entryDateObj = entry.entryDate
-    ? new Date(entry.entryDate)
-    : null;
+  const entryDateObj = entry.entryDate ? new Date(entry.entryDate) : null;
   const entryDate =
     entryDateObj && !Number.isNaN(entryDateObj.getTime())
       ? formatDate(entryDateObj)
@@ -245,8 +247,8 @@ export const generateLogEntryPdf = async ({
       ["Confidencial", entry.isConfidential ? "Sí" : "No"],
       [
         "Día del plazo",
-        entry.scheduleDay && entry.scheduleDay !== 0
-          ? String(entry.scheduleDay)
+        entry.scheduleDay && entry.scheduleDay.trim()
+          ? entry.scheduleDay.trim()
           : "—",
       ],
       [
@@ -303,8 +305,7 @@ export const generateLogEntryPdf = async ({
     };
 
     const drawParagraphOrPlaceholder = (text?: string | null) => {
-      const normalized =
-        typeof text === "string" ? text.trim() : "";
+      const normalized = typeof text === "string" ? text.trim() : "";
       drawParagraph(normalized || "Sin registro.");
     };
 
@@ -321,11 +322,9 @@ export const generateLogEntryPdf = async ({
 
     const generalInfoItems = [
       project ? `Identificación del proyecto: ${project.name}` : null,
-      project?.contractId
-        ? `Contrato: ${project.contractId}`
-        : null,
-      entry.scheduleDay && entry.scheduleDay !== 0
-        ? `Día del plazo: ${entry.scheduleDay}`
+      project?.contractId ? `Contrato: ${project.contractId}` : null,
+      entry.scheduleDay && entry.scheduleDay.trim()
+        ? `Día del plazo: ${entry.scheduleDay.trim()}`
         : null,
       entry.locationDetails && entry.locationDetails.trim()
         ? `Localización / Tramo: ${entry.locationDetails.trim()}`
@@ -337,13 +336,9 @@ export const generateLogEntryPdf = async ({
     const rainIntervalLines = (weatherReportNormalized?.rainEvents || [])
       .map((event) => {
         const start =
-          event.start && event.start.trim().length
-            ? event.start.trim()
-            : "—";
+          event.start && event.start.trim().length ? event.start.trim() : "—";
         const end =
-          event.end && event.end.trim().length
-            ? event.end.trim()
-            : "—";
+          event.end && event.end.trim().length ? event.end.trim() : "—";
         return `${start} a ${end}`;
       })
       .filter((value) => Boolean(value));
@@ -367,19 +362,14 @@ export const generateLogEntryPdf = async ({
     }
 
     drawSectionTitle("Condiciones climáticas");
-    if (
-      !weatherReportNormalized &&
-      !weatherConditionsText
-    ) {
+    if (!weatherReportNormalized && !weatherConditionsText) {
       drawParagraph("Sin registro.");
     } else {
       if (weatherReportNormalized?.summary) {
         drawParagraph(`Resumen: ${weatherReportNormalized.summary}`);
       }
       if (weatherReportNormalized?.temperature) {
-        drawParagraph(
-          `Temperatura: ${weatherReportNormalized.temperature}`
-        );
+        drawParagraph(`Temperatura: ${weatherReportNormalized.temperature}`);
       }
       if (normalizedWeatherNotes) {
         drawParagraph(`Notas: ${normalizedWeatherNotes}`);
@@ -457,11 +447,7 @@ export const generateLogEntryPdf = async ({
     }
 
     doc.moveDown();
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(13)
-      .text("Comentarios")
-      .moveDown(0.25);
+    doc.font("Helvetica-Bold").fontSize(13).text("Comentarios").moveDown(0.25);
 
     if (!entry.comments.length) {
       doc.font("Helvetica").fontSize(11).text("Sin comentarios registrados.");
@@ -484,70 +470,71 @@ export const generateLogEntryPdf = async ({
     }
 
     doc.moveDown();
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(13)
-      .text("Adjuntos")
-      .moveDown(0.25);
+    doc.font("Helvetica-Bold").fontSize(13).text("Adjuntos").moveDown(0.25);
 
     if (!entry.attachments.length) {
       doc.font("Helvetica").fontSize(11).text("No hay archivos adjuntos.");
     } else {
       // Separar imágenes de otros archivos
-      const images = entry.attachments.filter(att => 
-        att.type && att.type.startsWith('image/')
+      const images = entry.attachments.filter(
+        (att) => att.type && att.type.startsWith("image/")
       );
-      const otherFiles = entry.attachments.filter(att => 
-        !att.type || !att.type.startsWith('image/')
+      const otherFiles = entry.attachments.filter(
+        (att) => !att.type || !att.type.startsWith("image/")
       );
 
       // Mostrar imágenes con layout mejorado
       if (images.length > 0) {
         doc.font("Helvetica-Bold").fontSize(12).text("Fotos del día:");
         doc.moveDown(0.3);
-        
+
         // Procesar imágenes una por una con mejor control
         for (let i = 0; i < images.length; i++) {
           const image = images[i];
-          
+
           try {
             // Agregar nombre de archivo
-            doc.font("Helvetica-Bold").fontSize(10)
+            doc
+              .font("Helvetica-Bold")
+              .fontSize(10)
               .text(`${i + 1}. ${image.fileName}`);
             doc.moveDown(0.2);
-            
+
             // Intentar cargar la imagen
-            const imagePath = path.join(uploadsDir, image.storagePath || '');
+            const imagePath = path.join(uploadsDir, image.storagePath || "");
             if (fsSync.existsSync(imagePath)) {
               const imageBuffer = await fs.readFile(imagePath);
-              
+
               // Verificar si necesitamos nueva página
               const imageHeight = 150;
               if (doc.y + imageHeight > doc.page.height - 100) {
                 doc.addPage();
               }
-              
+
               // Agregar imagen con posición fija
               const startY = doc.y;
               doc.image(imageBuffer, 50, startY, {
-                fit: [250, imageHeight]
+                fit: [250, imageHeight],
               });
-              
+
               // Mover cursor después de la imagen
               doc.y = startY + imageHeight + 20;
-              
             } else {
-              doc.font("Helvetica").fontSize(10)
+              doc
+                .font("Helvetica")
+                .fontSize(10)
                 .text(`[Imagen no encontrada: ${image.fileName}]`);
               doc.moveDown(0.3);
             }
           } catch (error) {
-            doc.font("Helvetica").fontSize(10)
+            doc
+              .font("Helvetica")
+              .fontSize(10)
               .text(`[Error cargando imagen: ${image.fileName}]`);
             doc.moveDown(0.3);
           }
         }
-        
+
         if (otherFiles.length > 0) {
           doc.moveDown(0.5);
         }
@@ -559,19 +546,21 @@ export const generateLogEntryPdf = async ({
           doc.font("Helvetica-Bold").fontSize(12).text("Otros archivos:");
           doc.moveDown(0.2);
         }
-        
+
         otherFiles.forEach((attachment, index) => {
-        doc
-          .font("Helvetica")
-          .fontSize(11)
-          .text(
-            `${index + 1}. ${attachment.fileName} (${attachment.type || "desconocido"})`,
-            {
-              link: attachment.url,
-              underline: Boolean(attachment.url),
-            }
-          );
-      });
+          doc
+            .font("Helvetica")
+            .fontSize(11)
+            .text(
+              `${index + 1}. ${attachment.fileName} (${
+                attachment.type || "desconocido"
+              })`,
+              {
+                link: attachment.url,
+                underline: Boolean(attachment.url),
+              }
+            );
+        });
       }
     }
 
@@ -587,7 +576,10 @@ export const generateLogEntryPdf = async ({
       status: string;
       signedAt?: Date;
     }> = [];
-    const participantsById = new Map<string, typeof signatureParticipants[number]>();
+    const participantsById = new Map<
+      string,
+      (typeof signatureParticipants)[number]
+    >();
 
     const registerParticipant = (participant: {
       id: string;
@@ -601,10 +593,7 @@ export const generateLogEntryPdf = async ({
       }
       const existing = participantsById.get(participant.id);
       if (existing) {
-        if (
-          participant.status === "SIGNED" &&
-          existing.status !== "SIGNED"
-        ) {
+        if (participant.status === "SIGNED" && existing.status !== "SIGNED") {
           existing.status = "SIGNED";
           existing.signedAt = participant.signedAt;
         } else if (existing.status !== "SIGNED") {
@@ -695,7 +684,8 @@ export const generateLogEntryPdf = async ({
         .stroke();
 
       const nameLabel = participant.fullName || "Firmante";
-      const roleLabel = projectRoleLabels[participant.projectRole || ""] ||
+      const roleLabel =
+        projectRoleLabels[participant.projectRole || ""] ||
         participant.projectRole ||
         "Cargo / Rol";
 
