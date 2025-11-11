@@ -37,7 +37,7 @@ export interface NormalizedEquipmentEntry {
   type: string;
   quantity: number;
   status: string;
-  [key: string]: JsonValue;
+  [key: string]: JsonValueWithUndefined;
 }
 
 export interface NormalizedListItem {
