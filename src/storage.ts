@@ -1,4 +1,9 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import path from "path";
 import fs from "fs/promises";
@@ -23,7 +28,7 @@ class LocalStorage implements StorageInterface {
   async save(params: { path: string; content: Buffer }): Promise<void> {
     const fullPath = path.join(this.uploadsDir, params.path);
     const dir = path.dirname(fullPath);
-    
+
     // Crear directorio si no existe
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(fullPath, params.content);
@@ -50,11 +55,17 @@ class LocalStorage implements StorageInterface {
   }
 
   getPublicUrl(filePath: string): string {
-    const baseUrl = process.env.STORAGE_PUBLIC_URL || process.env.BASE_URL || "http://localhost:4001";
+    const baseUrl =
+      process.env.STORAGE_PUBLIC_URL ||
+      process.env.BASE_URL ||
+      "http://localhost:4001";
     return `${baseUrl}/uploads/${filePath}`;
   }
 
-  async getSignedUrl(filePath: string, expiresIn: number = 3600): Promise<string> {
+  async getSignedUrl(
+    filePath: string,
+    expiresIn: number = 3600
+  ): Promise<string> {
     // Para storage local, retornamos la URL pública
     return this.getPublicUrl(filePath);
   }
@@ -105,7 +116,7 @@ class CloudflareR2Storage implements StorageInterface {
     });
 
     const response = await this.client.send(command);
-    
+
     if (!response.Body) {
       throw new Error(`No se pudo cargar el archivo: ${filePath}`);
     }
@@ -144,7 +155,10 @@ class CloudflareR2Storage implements StorageInterface {
     return `https://${this.bucket}.${accountId}.r2.cloudflarestorage.com/${filePath}`;
   }
 
-  async getSignedUrl(filePath: string, expiresIn: number = 3600): Promise<string> {
+  async getSignedUrl(
+    filePath: string,
+    expiresIn: number = 3600
+  ): Promise<string> {
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: filePath,
@@ -156,20 +170,22 @@ class CloudflareR2Storage implements StorageInterface {
   private getContentType(filePath: string): string {
     const ext = path.extname(filePath).toLowerCase();
     const contentTypes: { [key: string]: string } = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.pdf': 'application/pdf',
-      '.doc': 'application/msword',
-      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      '.xls': 'application/vnd.ms-excel',
-      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      '.txt': 'text/plain',
-      '.zip': 'application/zip',
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".png": "image/png",
+      ".gif": "image/gif",
+      ".pdf": "application/pdf",
+      ".doc": "application/msword",
+      ".docx":
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ".xls": "application/vnd.ms-excel",
+      ".xlsx":
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ".txt": "text/plain",
+      ".zip": "application/zip",
     };
-    
-    return contentTypes[ext] || 'application/octet-stream';
+
+    return contentTypes[ext] || "application/octet-stream";
   }
 }
 
@@ -179,7 +195,7 @@ let storageInstance: StorageInterface | null = null;
 export const getStorage = (): StorageInterface => {
   if (!storageInstance) {
     const driver = process.env.STORAGE_DRIVER || "local";
-    
+
     switch (driver) {
       case "cloudflare":
       case "r2":
@@ -192,7 +208,7 @@ export const getStorage = (): StorageInterface => {
         break;
     }
   }
-  
+
   return storageInstance;
 };
 

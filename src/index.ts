@@ -1348,11 +1348,9 @@ app.post(
         consentRaw === 1 ||
         consentRaw === "1";
       if (!consent) {
-        return res
-          .status(400)
-          .json({
-            error: "Debes aceptar el consentimiento para firmar el documento.",
-          });
+        return res.status(400).json({
+          error: "Debes aceptar el consentimiento para firmar el documento.",
+        });
       }
 
       const consentStatementRaw =
@@ -1470,30 +1468,24 @@ app.post(
             return res.status(404).json({ error: "Anotación no encontrada." });
           }
           if (logEntry.status === "SIGNED") {
-            return res
-              .status(409)
-              .json({
-                error: "El documento ya fue completamente firmado.",
-                code: "DOCUMENT_LOCKED",
-              });
+            return res.status(409).json({
+              error: "El documento ya fue completamente firmado.",
+              code: "DOCUMENT_LOCKED",
+            });
           }
           const task = logEntry.signatureTasks.find(
             (t: any) => t.signerId === userId
           );
           if (!task) {
-            return res
-              .status(403)
-              .json({
-                error: "No tienes tarea de firma asignada en esta anotación.",
-              });
+            return res.status(403).json({
+              error: "No tienes tarea de firma asignada en esta anotación.",
+            });
           }
           if (task.status === "SIGNED") {
-            return res
-              .status(409)
-              .json({
-                error: "Ya has firmado esta anotación.",
-                code: "ALREADY_SIGNED",
-              });
+            return res.status(409).json({
+              error: "Ya has firmado esta anotación.",
+              code: "ALREADY_SIGNED",
+            });
           }
         }
       }
@@ -1562,7 +1554,7 @@ app.post(
         originalPdf: originalBuffer,
         signature: {
           buffer: signatureBuffer,
-          mimeType: signature.mimeType || 'image/png',
+          mimeType: signature.mimeType || "image/png",
         },
         position: {
           page,
@@ -1713,191 +1705,208 @@ app.post(
 );
 
 // Endpoint temporal para migrar URLs de almacenamiento local a Cloudflare R2
-app.post("/api/admin/migrate-urls-to-r2", authMiddleware, requireAdmin, async (req: AuthRequest, res) => {
-  try {
-    const storage = getStorage();
-    
-    // Solo ejecutar si estamos usando Cloudflare R2
-    if (process.env.STORAGE_DRIVER !== 'cloudflare') {
-      return res.status(400).json({ 
-        error: "Esta migración solo funciona cuando STORAGE_DRIVER=cloudflare" 
-      });
-    }
+app.post(
+  "/api/admin/migrate-urls-to-r2",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const storage = getStorage();
 
-    console.log("Iniciando migración de URLs a Cloudflare R2...");
-    
-    // Buscar todos los attachments que tienen URLs locales
-    const localAttachments = await prisma.attachment.findMany({
-      where: {
-        OR: [
-          { url: { startsWith: "http://localhost" } },
-          { url: { startsWith: "https://localhost" } },
-          { url: { startsWith: "/uploads/" } },
-          { url: { contains: "/uploads/" } }
-        ]
+      // Solo ejecutar si estamos usando Cloudflare R2
+      if (process.env.STORAGE_DRIVER !== "cloudflare") {
+        return res.status(400).json({
+          error:
+            "Esta migración solo funciona cuando STORAGE_DRIVER=cloudflare",
+        });
       }
-    });
 
-    console.log(`Encontrados ${localAttachments.length} archivos con URLs locales`);
+      console.log("Iniciando migración de URLs a Cloudflare R2...");
 
-    let migratedCount = 0;
-    let errorCount = 0;
+      // Buscar todos los attachments que tienen URLs locales
+      const localAttachments = await prisma.attachment.findMany({
+        where: {
+          OR: [
+            { url: { startsWith: "http://localhost" } },
+            { url: { startsWith: "https://localhost" } },
+            { url: { startsWith: "/uploads/" } },
+            { url: { contains: "/uploads/" } },
+          ],
+        },
+      });
 
-    for (const attachment of localAttachments) {
-      try {
-        // Extraer el storage path desde la URL local
-        let storagePath = attachment.storagePath;
-        
-        if (!storagePath && attachment.url) {
-          // Intentar extraer el path desde la URL
-          const urlPath = attachment.url.replace(/^.*\/uploads\//, '');
-          storagePath = urlPath;
-        }
+      console.log(
+        `Encontrados ${localAttachments.length} archivos con URLs locales`
+      );
 
-        if (storagePath) {
-          // Generar la nueva URL de Cloudflare R2
-          const newUrl = storage.getPublicUrl(storagePath);
-          
-          // Actualizar el attachment con la nueva URL
-          await prisma.attachment.update({
-            where: { id: attachment.id },
-            data: { 
-              url: newUrl,
-              storagePath: storagePath
-            }
-          });
+      let migratedCount = 0;
+      let errorCount = 0;
 
-          console.log(`✅ Migrado: ${attachment.fileName} -> ${newUrl}`);
-          migratedCount++;
-        } else {
-          console.log(`⚠️  No se pudo determinar storagePath para: ${attachment.fileName}`);
+      for (const attachment of localAttachments) {
+        try {
+          // Extraer el storage path desde la URL local
+          let storagePath = attachment.storagePath;
+
+          if (!storagePath && attachment.url) {
+            // Intentar extraer el path desde la URL
+            const urlPath = attachment.url.replace(/^.*\/uploads\//, "");
+            storagePath = urlPath;
+          }
+
+          if (storagePath) {
+            // Generar la nueva URL de Cloudflare R2
+            const newUrl = storage.getPublicUrl(storagePath);
+
+            // Actualizar el attachment con la nueva URL
+            await prisma.attachment.update({
+              where: { id: attachment.id },
+              data: {
+                url: newUrl,
+                storagePath: storagePath,
+              },
+            });
+
+            console.log(`✅ Migrado: ${attachment.fileName} -> ${newUrl}`);
+            migratedCount++;
+          } else {
+            console.log(
+              `⚠️  No se pudo determinar storagePath para: ${attachment.fileName}`
+            );
+            errorCount++;
+          }
+        } catch (error) {
+          console.error(`❌ Error migrando ${attachment.fileName}:`, error);
           errorCount++;
         }
-      } catch (error) {
-        console.error(`❌ Error migrando ${attachment.fileName}:`, error);
-        errorCount++;
       }
-    }
 
-    // También migrar UserSignatures si existen
-    const localSignatures = await prisma.userSignature.findMany({
-      where: {
-        url: { contains: "localhost" }
-      }
-    });
-
-    for (const signature of localSignatures) {
-      try {
-        if (signature.storagePath) {
-          const newUrl = storage.getPublicUrl(signature.storagePath);
-          await prisma.userSignature.update({
-            where: { id: signature.id },
-            data: { url: newUrl }
-          });
-          console.log(`✅ Firma migrada: ${signature.fileName} -> ${newUrl}`);
-          migratedCount++;
-        }
-      } catch (error) {
-        console.error(`❌ Error migrando firma ${signature.fileName}:`, error);
-        errorCount++;
-      }
-    }
-
-    res.json({
-      success: true,
-      message: `Migración completada. ${migratedCount} archivos migrados, ${errorCount} errores.`,
-      migrated: migratedCount,
-      errors: errorCount,
-      totalProcessed: localAttachments.length + localSignatures.length
-    });
-
-  } catch (error) {
-    console.error("Error durante la migración:", error);
-    res.status(500).json({ 
-      error: "Error durante la migración de URLs",
-      details: error instanceof Error ? error.message : "Error desconocido"
-    });
-  }
-});
-
-// Database migration fix endpoint - SOLO PARA EMERGENCIAS
-app.post("/api/admin/fix-migrations", authMiddleware, requireAdmin, async (req: AuthRequest, res) => {
-  try {
-    console.log("🔧 Iniciando corrección de migraciones...");
-    
-    // Verificar que estemos en producción
-    if (process.env.NODE_ENV !== 'production') {
-      return res.status(400).json({ 
-        error: "Este endpoint solo se debe usar en producción" 
+      // También migrar UserSignatures si existen
+      const localSignatures = await prisma.userSignature.findMany({
+        where: {
+          url: { contains: "localhost" },
+        },
       });
-    }
 
-    // Ejecutar comando para resolver migraciones fallidas
-    const { exec } = require('child_process');
-    const util = require('util');
-    const execAsync = util.promisify(exec);
+      for (const signature of localSignatures) {
+        try {
+          if (signature.storagePath) {
+            const newUrl = storage.getPublicUrl(signature.storagePath);
+            await prisma.userSignature.update({
+              where: { id: signature.id },
+              data: { url: newUrl },
+            });
+            console.log(`✅ Firma migrada: ${signature.fileName} -> ${newUrl}`);
+            migratedCount++;
+          }
+        } catch (error) {
+          console.error(
+            `❌ Error migrando firma ${signature.fileName}:`,
+            error
+          );
+          errorCount++;
+        }
+      }
 
-    try {
-      // Primero, marcar la migración fallida como resuelta
-      console.log("Marcando migración fallida como resuelta...");
-      await execAsync('npx prisma migrate resolve --applied 20250325100000_add_report_versions');
-      
-      // Luego, aplicar las migraciones pendientes
-      console.log("Aplicando migraciones pendientes...");
-      await execAsync('npx prisma migrate deploy');
-      
-      console.log("✅ Migraciones corregidas exitosamente");
-      
       res.json({
         success: true,
-        message: "Migraciones de base de datos corregidas exitosamente",
-        timestamp: new Date().toISOString()
+        message: `Migración completada. ${migratedCount} archivos migrados, ${errorCount} errores.`,
+        migrated: migratedCount,
+        errors: errorCount,
+        totalProcessed: localAttachments.length + localSignatures.length,
       });
+    } catch (error) {
+      console.error("Error durante la migración:", error);
+      res.status(500).json({
+        error: "Error durante la migración de URLs",
+        details: error instanceof Error ? error.message : "Error desconocido",
+      });
+    }
+  }
+);
 
-    } catch (migrationError) {
-      console.error("Error en migración:", migrationError);
-      
-      // Si falla, intentar solo deploy
+// Database migration fix endpoint - SOLO PARA EMERGENCIAS
+app.post(
+  "/api/admin/fix-migrations",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      console.log("🔧 Iniciando corrección de migraciones...");
+
+      // Verificar que estemos en producción
+      if (process.env.NODE_ENV !== "production") {
+        return res.status(400).json({
+          error: "Este endpoint solo se debe usar en producción",
+        });
+      }
+
+      // Ejecutar comando para resolver migraciones fallidas
+      const { exec } = require("child_process");
+      const util = require("util");
+      const execAsync = util.promisify(exec);
+
       try {
-        console.log("Intentando solo deploy...");
-        await execAsync('npx prisma migrate deploy --accept-data-loss');
-        
+        // Primero, marcar la migración fallida como resuelta
+        console.log("Marcando migración fallida como resuelta...");
+        await execAsync(
+          "npx prisma migrate resolve --applied 20250325100000_add_report_versions"
+        );
+
+        // Luego, aplicar las migraciones pendientes
+        console.log("Aplicando migraciones pendientes...");
+        await execAsync("npx prisma migrate deploy");
+
+        console.log("✅ Migraciones corregidas exitosamente");
+
         res.json({
           success: true,
-          message: "Migraciones aplicadas con data loss acceptance",
-          warning: "Se usó --accept-data-loss",
-          timestamp: new Date().toISOString()
+          message: "Migraciones de base de datos corregidas exitosamente",
+          timestamp: new Date().toISOString(),
         });
-      } catch (deployError) {
-        throw deployError;
-      }
-    }
+      } catch (migrationError) {
+        console.error("Error en migración:", migrationError);
 
-  } catch (error) {
-    console.error("Error corrigiendo migraciones:", error);
-    res.status(500).json({ 
-      error: "Error corrigiendo migraciones de base de datos",
-      details: error instanceof Error ? error.message : "Error desconocido"
-    });
+        // Si falla, intentar solo deploy
+        try {
+          console.log("Intentando solo deploy...");
+          await execAsync("npx prisma migrate deploy --accept-data-loss");
+
+          res.json({
+            success: true,
+            message: "Migraciones aplicadas con data loss acceptance",
+            warning: "Se usó --accept-data-loss",
+            timestamp: new Date().toISOString(),
+          });
+        } catch (deployError) {
+          throw deployError;
+        }
+      }
+    } catch (error) {
+      console.error("Error corrigiendo migraciones:", error);
+      res.status(500).json({
+        error: "Error corrigiendo migraciones de base de datos",
+        details: error instanceof Error ? error.message : "Error desconocido",
+      });
+    }
   }
-});
+);
 
 // Health check endpoint
 app.get("/", (req, res) => {
-  res.json({ 
-    status: "OK", 
+  res.json({
+    status: "OK",
     message: "BDO Server API is running",
     timestamp: new Date().toISOString(),
-    version: "1.0.0"
+    version: "1.0.0",
   });
 });
 
 app.get("/health", (req, res) => {
-  res.json({ 
-    status: "healthy", 
+  res.json({
+    status: "healthy",
     uptime: process.uptime(),
     memory: process.memoryUsage(),
-    storage: process.env.STORAGE_DRIVER || 'local'
+    storage: process.env.STORAGE_DRIVER || "local",
   });
 });
 
@@ -1929,10 +1938,262 @@ app.get("/api/public/demo-users", async (req, res) => {
     res.json(sanitized);
   } catch (error) {
     console.error("Error obteniendo usuarios de demo:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Error interno del servidor",
-      message: "No se pudieron obtener los usuarios de demostración"
+      message: "No se pudieron obtener los usuarios de demostración",
     });
+  }
+});
+
+// --- RUTAS DE AUTENTICACIÓN ---
+app.post("/api/auth/register", async (req, res) => {
+  const { email, password, fullName, projectRole, appRole } = req.body;
+
+  if (!email || !password || !fullName || !projectRole || !appRole) {
+    return res.status(400).json({ error: "Todos los campos son requeridos." });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+
+  try {
+    const passwordError = await validatePasswordStrength(password);
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError });
+    }
+
+    const existingUser = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+
+    if (existingUser) {
+      return res.status(409).json({ error: "El email ya está registrado." });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    const resolvedProjectRole =
+      resolveProjectRole(projectRole) ?? UserRole.RESIDENT;
+    const normalizedAppRole =
+      typeof appRole === "string" ? appRole.toLowerCase() : "";
+    const resolvedAppRole = Object.values(AppRole).includes(
+      normalizedAppRole as AppRole
+    )
+      ? (normalizedAppRole as AppRole)
+      : AppRole.viewer;
+
+    const newUser = await prisma.user.create({
+      data: {
+        email: normalizedEmail,
+        password: hashedPassword,
+        fullName,
+        projectRole: resolvedProjectRole,
+        appRole: resolvedAppRole,
+        status: "active",
+        tokenVersion: 0,
+        emailVerifiedAt: isEmailServiceConfigured() ? null : new Date(),
+      },
+    });
+
+    let verificationEmailSent = false;
+
+    if (isEmailServiceConfigured()) {
+      const token = generateTokenValue();
+      const tokenHash = hashToken(token);
+      const expiresAt = new Date(
+        Date.now() + EMAIL_VERIFICATION_TOKEN_TTL_HOURS * 60 * 60 * 1000
+      );
+
+      await prisma.emailVerificationToken.create({
+        data: {
+          userId: newUser.id,
+          tokenHash,
+          expiresAt,
+        },
+      });
+
+      try {
+        await sendEmailVerificationEmail({
+          to: newUser.email,
+          token,
+          fullName: newUser.fullName,
+        });
+        verificationEmailSent = true;
+      } catch (mailError) {
+        console.error(
+          "No se pudo enviar el correo de verificación:",
+          mailError
+        );
+      }
+    }
+
+    const { password: _, ...userWithoutPassword } = newUser;
+    res.status(201).json({
+      ...userWithoutPassword,
+      verificationEmailSent,
+    });
+  } catch (error) {
+    console.error("Error en registro:", error);
+    res.status(500).json({ error: "Error al crear el usuario." });
+  }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    console.log("Login request received:", {
+      email,
+      hasPassword: Boolean(password),
+    });
+
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ error: "Email y contraseña son requeridos." });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    console.log("User found:", user ? "yes" : "no");
+
+    if (!user) {
+      return res.status(401).json({ error: "Credenciales inválidas." });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    console.log("Password valid:", isPasswordValid ? "yes" : "no");
+
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: "Credenciales inválidas." });
+    }
+
+    if (user.status !== "active") {
+      return res
+        .status(403)
+        .json({ error: "La cuenta de usuario está inactiva." });
+    }
+
+    // Crear tokens de acceso y refresh
+    const accessToken = createAccessToken(user.id, user.tokenVersion);
+    const refreshToken = createRefreshToken(user.id, user.tokenVersion);
+
+    console.log("Tokens created successfully");
+
+    // Actualizar último login
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    });
+
+    // Enviar refresh token como cookie httpOnly
+    res.cookie("jid", refreshToken, buildRefreshCookieOptions());
+
+    const { password: _, ...userWithoutPassword } = user;
+
+    console.log("Login successful, sending response");
+
+    return res.json({
+      accessToken,
+      user: userWithoutPassword,
+    });
+  } catch (error) {
+    console.error("Error en login:", error);
+    res.status(500).json({ error: "Error interno del servidor." });
+  }
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  res.clearCookie("jid", buildRefreshCookieOptions({}, false));
+  res.json({ message: "Logged out successfully" });
+});
+
+app.post(
+  "/api/auth/refresh",
+  refreshAuthMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      console.log("Refresh token request received");
+
+      if (!req.user) {
+        console.log("No user found in request");
+        return res.status(401).json({ error: "No user found in request" });
+      }
+
+      console.log("User from token:", req.user);
+
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+      });
+
+      if (!user) {
+        console.log("User not found in database");
+        return res.status(401).json({ error: "User not found" });
+      }
+
+      console.log("User found in database");
+
+      // Verificar token version
+      if (user.tokenVersion !== req.user.tokenVersion) {
+        console.log("Token version mismatch");
+        return res.status(401).json({ error: "Token version mismatch" });
+      }
+
+      // Crear nuevo access token
+      const accessToken = createAccessToken(user.id, user.tokenVersion);
+      const refreshToken = createRefreshToken(user.id, user.tokenVersion);
+
+      console.log("New tokens created");
+
+      // Actualizar cookie de refresh token
+      res.cookie("jid", refreshToken, buildRefreshCookieOptions());
+
+      console.log("Refresh token cookie set");
+
+      return res.json({ accessToken });
+    } catch (error) {
+      console.error("Error en refresh token:", error);
+      res.status(500).json({ error: "Error al refrescar el token" });
+    }
+  }
+);
+
+// Endpoint para verificar el usuario autenticado
+app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!req.user?.userId) {
+      return res.status(401).json({ error: "No authenticated user" });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        projectRole: true,
+        appRole: true,
+        avatarUrl: true,
+        status: true,
+        lastLoginAt: true,
+        emailVerifiedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (user.status !== "active") {
+      return res.status(403).json({ error: "User account is inactive" });
+    }
+
+    res.json(user);
+  } catch (error) {
+    console.error("Error en /api/auth/me:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
