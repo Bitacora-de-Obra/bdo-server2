@@ -3738,6 +3738,1040 @@ app.get("/api/work-actas/:id", async (req, res) => {
   }
 });
 
+app.post(
+  "/api/work-actas",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { number, period, date, status, items, attachments = [] } =
+        req.body ?? {};
+
+      if (!number || !period || !date || !Array.isArray(items) || !items.length) {
+        return res.status(400).json({
+          error: "Faltan datos para crear el acta de avance.",
+        });
+      }
+
+      const prismaStatus = workActaStatusMap[status] || "DRAFT";
+
+      const newActa = await prisma.workActa.create({
+        data: {
+          number,
+          period,
+          date: new Date(date),
+          status: prismaStatus,
+          items: {
+            create: items.map(
+              (item: { contractItemId: string; quantity: number }) => ({
+                quantity: item.quantity,
+                contractItem: { connect: { id: item.contractItemId } },
+              })
+            ),
+          },
+          attachments: {
+            connect: Array.isArray(attachments)
+              ? attachments
+                  .filter((att: { id: string }) => att && att.id)
+                  .map((att: { id: string }) => ({ id: att.id }))
+              : [],
+          },
+        },
+        include: {
+          items: { include: { contractItem: true } },
+          attachments: true,
+        },
+      });
+
+      res.status(201).json(formatWorkActa(newActa));
+    } catch (error) {
+      console.error("Error al crear el acta de avance:", error);
+      if ((error as any)?.code === "P2002") {
+        return res
+          .status(409)
+          .json({ error: "Ya existe un acta de avance con este número." });
+      }
+      res.status(500).json({ error: "No se pudo crear el acta de avance." });
+    }
+  }
+);
+
+app.put(
+  "/api/work-actas/:id",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body ?? {};
+      const prismaStatus = workActaStatusMap[status] || undefined;
+
+      if (
+        !prismaStatus ||
+        !Object.values(WorkActaStatus).includes(prismaStatus)
+      ) {
+        return res.status(400).json({ error: "Estado inválido proporcionado." });
+      }
+
+      const updatedActa = await prisma.workActa.update({
+        where: { id },
+        data: { status: prismaStatus },
+        include: {
+          items: { include: { contractItem: true } },
+          attachments: true,
+        },
+      });
+
+      res.json(formatWorkActa(updatedActa));
+    } catch (error) {
+      console.error("Error al actualizar el acta de avance:", error);
+      if ((error as any)?.code === "P2025") {
+        return res
+          .status(404)
+          .json({ error: "El acta de avance no fue encontrada." });
+      }
+      res.status(500).json({ error: "No se pudo actualizar el acta de avance." });
+    }
+  }
+);
+
+// --- RUTAS PARA INFORMES ---
+app.get("/api/reports", async (req, res) => {
+  try {
+    const { type, scope } = req.query;
+    const where: Prisma.ReportWhereInput = {};
+
+    if (type) where.type = String(type);
+    if (scope && reportScopeMap[String(scope)]) {
+      where.reportScope = reportScopeMap[String(scope)];
+    }
+
+    const reports = await prisma.report.findMany({
+      where,
+      orderBy: [{ number: "asc" }, { version: "desc" }],
+      include: {
+        author: true,
+        attachments: true,
+        signatures: { include: { signer: true } },
+      },
+    });
+
+    const grouped = new Map<string, any>();
+    reports.forEach((report) => {
+      const formatted = formatReportRecord(report);
+      const summary = mapReportVersionSummary(report);
+
+      if (!grouped.has(report.number)) {
+        grouped.set(report.number, {
+          ...formatted,
+          versions: [summary],
+        });
+      } else {
+        grouped.get(report.number).versions.push(summary);
+      }
+    });
+
+    const latest = Array.from(grouped.values()).map((entry) => ({
+      ...entry,
+      versions: entry.versions.sort((a: any, b: any) => b.version - a.version),
+    }));
+
+    latest.sort(
+      (a, b) =>
+        new Date(b.submissionDate ?? 0).getTime() -
+        new Date(a.submissionDate ?? 0).getTime()
+    );
+
+    res.json(latest);
+  } catch (error) {
+    console.error("Error al obtener los informes:", error);
+    res.status(500).json({ error: "No se pudieron obtener los informes." });
+  }
+});
+
+app.get("/api/reports/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const report = await prisma.report.findUnique({
+      where: { id },
+      include: {
+        author: true,
+        attachments: true,
+        signatures: { include: { signer: true } },
+      },
+    });
+
+    if (!report) {
+      return res.status(404).json({ error: "Informe no encontrado." });
+    }
+
+    const formatted = formatReportRecord(report);
+    const versionHistory = await prisma.report.findMany({
+      where: { number: report.number },
+      select: {
+        id: true,
+        version: true,
+        status: true,
+        submissionDate: true,
+        createdAt: true,
+      },
+      orderBy: { version: "desc" },
+    });
+
+    formatted.versions = versionHistory.map(mapReportVersionSummary);
+
+    res.json(formatted);
+  } catch (error) {
+    console.error("Error al obtener el informe:", error);
+    res.status(500).json({ error: "No se pudo obtener el informe solicitado." });
+  }
+});
+
+app.post(
+  "/api/reports",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const {
+        type,
+        reportScope,
+        number,
+        period,
+        submissionDate,
+        summary,
+        authorId,
+        requiredSignatories = [],
+        attachments = [],
+        previousReportId,
+      } = req.body ?? {};
+
+      const resolvedAuthorId = req.user?.userId || authorId;
+
+      if (!period || !submissionDate || !summary || !resolvedAuthorId) {
+        return res
+          .status(400)
+          .json({ error: "Faltan datos obligatorios para crear el informe." });
+      }
+
+      let resolvedType = type as string | undefined;
+      let resolvedScopeDb = reportScope
+        ? reportScopeMap[reportScope as string]
+        : undefined;
+      let resolvedNumber = number as string | undefined;
+      let resolvedVersion = 1;
+      let previousReportConnect:
+        | { connect: { id: string } }
+        | undefined = undefined;
+
+      if (previousReportId) {
+        const previousReport = await prisma.report.findUnique({
+          where: { id: previousReportId },
+        });
+
+        if (!previousReport) {
+          return res
+            .status(404)
+            .json({ error: "El informe anterior no fue encontrado." });
+        }
+
+        resolvedType = previousReport.type;
+        resolvedScopeDb = previousReport.reportScope;
+        resolvedNumber = previousReport.number;
+        resolvedVersion = previousReport.version + 1;
+        previousReportConnect = { connect: { id: previousReport.id } };
+      } else {
+        if (!resolvedType || !reportScope || !resolvedNumber) {
+          return res.status(400).json({
+            error:
+              "Faltan type, reportScope o number para crear la primera versión del informe.",
+          });
+        }
+
+        if (!resolvedScopeDb) {
+          const mapped = reportScopeMap[reportScope as string];
+          if (!mapped) {
+            return res.status(400).json({
+              error: `El valor de reportScope '${reportScope}' no es válido.`,
+            });
+          }
+          resolvedScopeDb = mapped;
+        }
+      }
+
+      if (!Array.isArray(attachments)) {
+        return res.status(400).json({
+          error:
+            "El formato de los adjuntos no es válido. Debe ser un arreglo de objetos { id }.",
+        });
+      }
+
+      const newReport = await prisma.report.create({
+        data: {
+          type: resolvedType!,
+          reportScope: resolvedScopeDb!,
+          number: resolvedNumber!,
+          version: resolvedVersion,
+          previousReport: previousReportConnect,
+          period,
+          submissionDate: new Date(submissionDate),
+          summary,
+          status: "DRAFT",
+          author: { connect: { id: resolvedAuthorId } },
+          requiredSignatoriesJson: JSON.stringify(
+            requiredSignatories.map((u: any) => u.id)
+          ),
+          attachments: {
+            connect: attachments.map((att: { id: string }) => ({ id: att.id })),
+          },
+        },
+        include: {
+          author: true,
+          attachments: true,
+          signatures: { include: { signer: true } },
+        },
+      });
+
+      const formatted = formatReportRecord(newReport);
+      const versionHistory = await prisma.report.findMany({
+        where: { number: newReport.number },
+        select: {
+          id: true,
+          version: true,
+          status: true,
+          submissionDate: true,
+          createdAt: true,
+        },
+        orderBy: { version: "desc" },
+      });
+
+      formatted.versions = versionHistory.map(mapReportVersionSummary);
+
+      res.status(201).json(formatted);
+    } catch (error) {
+      console.error("Error al crear el informe:", error);
+      if ((error as any)?.code === "P2002") {
+        return res
+          .status(409)
+          .json({ error: "Ya existe un informe con este número y versión." });
+      }
+      res.status(500).json({ error: "No se pudo crear el informe." });
+    }
+  }
+);
+
+app.put(
+  "/api/reports/:id",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { status, summary, requiredSignatories = [] } = req.body ?? {};
+
+      const prismaStatus = reportStatusMap[status] || undefined;
+      if (!prismaStatus || !Object.values(ReportStatus).includes(prismaStatus)) {
+        return res.status(400).json({ error: "Estado inválido proporcionado." });
+      }
+
+      const updated = await prisma.report.update({
+        where: { id },
+        data: {
+          status: prismaStatus,
+          summary,
+          requiredSignatoriesJson: JSON.stringify(
+            requiredSignatories.map((u: any) => u.id)
+          ),
+        },
+        include: {
+          author: true,
+          attachments: true,
+          signatures: { include: { signer: true } },
+        },
+      });
+
+      const formatted = formatReportRecord(updated);
+      const versionHistory = await prisma.report.findMany({
+        where: { number: updated.number },
+        select: {
+          id: true,
+          version: true,
+          status: true,
+          submissionDate: true,
+          createdAt: true,
+        },
+        orderBy: { version: "desc" },
+      });
+      formatted.versions = versionHistory.map(mapReportVersionSummary);
+
+      res.json(formatted);
+    } catch (error) {
+      console.error("Error al actualizar el informe:", error);
+      if ((error as any)?.code === "P2025") {
+        return res.status(404).json({ error: "El informe no fue encontrado." });
+      }
+      res.status(500).json({ error: "No se pudo actualizar el informe." });
+    }
+  }
+);
+
+app.post(
+  "/api/reports/:id/signatures",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { signerId, password } = req.body ?? {};
+
+      if (!signerId || !password) {
+        return res
+          .status(400)
+          .json({ error: "Se requiere ID del firmante y contraseña." });
+      }
+
+      const signer = await prisma.user.findUnique({ where: { id: signerId } });
+      if (!signer) {
+        return res.status(404).json({ error: "Usuario firmante no encontrado." });
+      }
+
+      const passwordMatches = await bcrypt.compare(password, signer.password);
+      if (!passwordMatches) {
+        return res.status(401).json({ error: "Contraseña incorrecta." });
+      }
+
+      const report = await prisma.report.findUnique({ where: { id } });
+      if (!report) {
+        return res.status(404).json({ error: "Informe no encontrado." });
+      }
+
+      const existing = await prisma.signature.findFirst({
+        where: { reportId: id, signerId },
+      });
+
+      if (existing) {
+        const current = await prisma.report.findUnique({
+          where: { id },
+          include: {
+            author: true,
+            attachments: true,
+            signatures: { include: { signer: true } },
+          },
+        });
+        if (!current) {
+          return res
+            .status(404)
+            .json({ error: "Informe no encontrado tras validar firma." });
+        }
+        const formatted = formatReportRecord(current);
+        const versionHistory = await prisma.report.findMany({
+          where: { number: current.number },
+          select: {
+            id: true,
+            version: true,
+            status: true,
+            submissionDate: true,
+            createdAt: true,
+          },
+          orderBy: { version: "desc" },
+        });
+        formatted.versions = versionHistory.map(mapReportVersionSummary);
+        return res.json(formatted);
+      }
+
+      await prisma.signature.create({
+        data: {
+          signer: { connect: { id: signerId } },
+          report: { connect: { id } },
+        },
+      });
+
+      const updated = await prisma.report.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          signatures: { include: { signer: true } },
+        },
+      });
+
+      if (!updated) {
+        return res
+          .status(404)
+          .json({ error: "Informe no encontrado tras añadir la firma." });
+      }
+
+      const formatted = formatReportRecord(updated);
+      const versionHistory = await prisma.report.findMany({
+        where: { number: updated.number },
+        select: {
+          id: true,
+          version: true,
+          status: true,
+          submissionDate: true,
+          createdAt: true,
+        },
+        orderBy: { version: "desc" },
+      });
+      formatted.versions = versionHistory.map(mapReportVersionSummary);
+
+      res.status(201).json(formatted);
+    } catch (error) {
+      console.error("Error al añadir la firma al informe:", error);
+      res.status(500).json({ error: "No se pudo añadir la firma." });
+    }
+  }
+);
+
+app.post(
+  "/api/reports/:id/generate-weekly-excel",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const baseUrl =
+        process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+
+      const result = await generateWeeklyReportExcel({
+        prisma,
+        reportId: id,
+        uploadsDir,
+        baseUrl,
+      });
+
+      const updated = await prisma.report.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          signatures: { include: { signer: true } },
+        },
+      });
+
+      if (!updated) {
+        return res
+          .status(404)
+          .json({ error: "Informe no encontrado tras generar el Excel." });
+      }
+
+      const formatted = formatReportRecord(updated);
+      const versionHistory = await prisma.report.findMany({
+        where: { number: updated.number },
+        select: {
+          id: true,
+          version: true,
+          status: true,
+          submissionDate: true,
+          createdAt: true,
+        },
+        orderBy: { version: "desc" },
+      });
+      formatted.versions = versionHistory.map(mapReportVersionSummary);
+
+      res.json({
+        report: formatted,
+        attachment: buildAttachmentResponse(result.attachment),
+      });
+    } catch (error) {
+      console.error("Error al generar el Excel del informe semanal:", error);
+      if (error instanceof Error) {
+        if (error.message === "Informe no encontrado.") {
+          return res.status(404).json({ error: error.message });
+        }
+        if (error.message.includes("semanales")) {
+          return res.status(400).json({ error: error.message });
+        }
+      }
+      res
+        .status(500)
+        .json({ error: "No se pudo generar el Excel del informe semanal." });
+    }
+  }
+);
+
+app.post(
+  "/api/reports/:id/export-pdf",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const baseUrl =
+        process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+
+      const result = await generateReportPdf({
+        prisma,
+        reportId: id,
+        uploadsDir,
+        baseUrl,
+      });
+
+      const updated = await prisma.report.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          signatures: { include: { signer: true } },
+        },
+      });
+
+      if (!updated) {
+        return res
+          .status(404)
+          .json({ error: "Informe no encontrado tras generar el PDF." });
+      }
+
+      const formatted = formatReportRecord(updated);
+      const versionHistory = await prisma.report.findMany({
+        where: { number: updated.number },
+        select: {
+          id: true,
+          version: true,
+          status: true,
+          submissionDate: true,
+          createdAt: true,
+        },
+        orderBy: { version: "desc" },
+      });
+      formatted.versions = versionHistory.map(mapReportVersionSummary);
+
+      res.json({
+        report: formatted,
+        attachment: buildAttachmentResponse(result.attachment),
+      });
+    } catch (error) {
+      console.error("Error al generar PDF del informe:", error);
+      if (error instanceof Error && error.message === "Informe no encontrado.") {
+        return res.status(404).json({ error: error.message });
+      }
+      res.status(500).json({ error: "No se pudo generar el PDF." });
+    }
+  }
+);
+
+// --- RUTAS PARA ACTAS DE COSTO ---
+app.get("/api/cost-actas", async (_req, res) => {
+  try {
+    const actas = await prisma.costActa.findMany({
+      orderBy: { submissionDate: "desc" },
+      include: {
+        observations: { include: { author: true }, orderBy: { timestamp: "asc" } },
+        attachments: true,
+      },
+    });
+
+    res.json(
+      actas.map((acta) => ({
+        ...acta,
+        status:
+          Object.keys(costActaStatusMap).find(
+            (key) => costActaStatusMap[key] === acta.status
+          ) || acta.status,
+      }))
+    );
+  } catch (error) {
+    console.error("Error al obtener las actas de costo:", error);
+    res
+      .status(500)
+      .json({ error: "No se pudieron obtener las actas de costo." });
+  }
+});
+
+app.get("/api/cost-actas/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const acta = await prisma.costActa.findUnique({
+      where: { id },
+      include: {
+        observations: { include: { author: true }, orderBy: { timestamp: "asc" } },
+        attachments: true,
+      },
+    });
+
+    if (!acta) {
+      return res.status(404).json({ error: "Acta de costo no encontrada." });
+    }
+
+    res.json({
+      ...acta,
+      status:
+        Object.keys(costActaStatusMap).find(
+          (key) => costActaStatusMap[key] === acta.status
+        ) || acta.status,
+    });
+  } catch (error) {
+    console.error("Error al obtener el acta de costo:", error);
+    res.status(500).json({ error: "No se pudo obtener el acta solicitada." });
+  }
+});
+
+app.post(
+  "/api/cost-actas",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const {
+        number,
+        period,
+        submissionDate,
+        billedAmount,
+        totalContractValue,
+        relatedProgress,
+        attachments = [],
+      } = req.body ?? {};
+
+      if (
+        !number ||
+        !period ||
+        !submissionDate ||
+        billedAmount === undefined ||
+        totalContractValue === undefined
+      ) {
+        return res.status(400).json({
+          error: "Faltan datos obligatorios para crear el acta de costo.",
+        });
+      }
+
+      const newActa = await prisma.costActa.create({
+        data: {
+          number,
+          period,
+          submissionDate: new Date(submissionDate),
+          billedAmount: Number(billedAmount),
+          totalContractValue: Number(totalContractValue),
+          relatedProgress,
+          status: CostActaStatus.SUBMITTED,
+          attachments: {
+            connect: attachments.map((att: { id: string }) => ({ id: att.id })),
+          },
+        },
+        include: {
+          observations: { include: { author: true } },
+          attachments: true,
+        },
+      });
+
+      res.status(201).json(newActa);
+    } catch (error) {
+      console.error("Error al crear el acta de costo:", error);
+      if ((error as any)?.code === "P2002") {
+        return res
+          .status(409)
+          .json({ error: "Ya existe un acta de costo con este número." });
+      }
+      res.status(500).json({ error: "No se pudo crear el acta de costo." });
+    }
+  }
+);
+
+app.put(
+  "/api/cost-actas/:id",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { status, relatedProgress } = req.body ?? {};
+
+      const prismaStatus = costActaStatusMap[status] || undefined;
+      if (
+        !prismaStatus ||
+        !Object.values(CostActaStatus).includes(prismaStatus)
+      ) {
+        return res.status(400).json({ error: "Estado inválido proporcionado." });
+      }
+
+      const updateData: Prisma.CostActaUpdateInput = {
+        status: prismaStatus,
+        relatedProgress,
+      };
+
+      if (prismaStatus === CostActaStatus.APPROVED) {
+        const approvalDate = new Date();
+        const paymentDueDate = new Date(approvalDate);
+        paymentDueDate.setDate(paymentDueDate.getDate() + 30);
+
+        updateData.approvalDate = approvalDate;
+        updateData.paymentDueDate = paymentDueDate;
+      }
+
+      const updatedActa = await prisma.costActa.update({
+        where: { id },
+        data: updateData,
+        include: {
+          observations: { include: { author: true }, orderBy: { timestamp: "asc" } },
+          attachments: true,
+        },
+      });
+
+      res.json({
+        ...updatedActa,
+        status:
+          Object.keys(costActaStatusMap).find(
+            (key) => costActaStatusMap[key] === updatedActa.status
+          ) || updatedActa.status,
+      });
+    } catch (error) {
+      console.error("Error al actualizar el acta de costo:", error);
+      if ((error as any)?.code === "P2025") {
+        return res
+          .status(404)
+          .json({ error: "El acta de costo no fue encontrada." });
+      }
+      res.status(500).json({ error: "No se pudo actualizar el acta de costo." });
+    }
+  }
+);
+
+app.post(
+  "/api/cost-actas/:id/observations",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { text, authorId } = req.body ?? {};
+      const resolvedAuthorId = req.user?.userId || authorId;
+
+      if (!text || !resolvedAuthorId) {
+        return res.status(400).json({
+          error: "El texto y el autor son obligatorios para la observación.",
+        });
+      }
+
+      const newObservation = await prisma.observation.create({
+        data: {
+          text,
+          author: { connect: { id: resolvedAuthorId } },
+          costActa: { connect: { id } },
+        },
+        include: { author: true },
+      });
+
+      res.status(201).json(newObservation);
+    } catch (error) {
+      console.error("Error al añadir la observación:", error);
+      if ((error as any)?.code === "P2025") {
+        return res.status(404).json({
+          error:
+            "El acta de costo o el usuario autor no fueron encontrados.",
+        });
+      }
+      res.status(500).json({ error: "No se pudo añadir la observación." });
+    }
+  }
+);
+
+// --- RUTAS PARA CONTROL PUNTOS ---
+app.post(
+  "/api/control-points",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { name, description, location } = req.body ?? {};
+
+      if (!name) {
+        return res
+          .status(400)
+          .json({ error: "El nombre del punto de control es obligatorio." });
+      }
+
+      const newPoint = await prisma.controlPoint.create({
+        data: { name, description, location },
+        include: {
+          photos: { include: { author: true }, orderBy: { date: "asc" } },
+        },
+      });
+
+      res.status(201).json(newPoint);
+    } catch (error) {
+      console.error("Error al crear el punto de control:", error);
+      res.status(500).json({ error: "No se pudo crear el punto de control." });
+    }
+  }
+);
+
+app.post(
+  "/api/control-points/:id/photos",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { notes, authorId, attachmentId } = req.body ?? {};
+      const resolvedAuthorId = req.user?.userId || authorId;
+
+      if (!resolvedAuthorId || !attachmentId) {
+        return res
+          .status(400)
+          .json({ error: "Faltan datos del autor o del archivo adjunto." });
+      }
+
+      const pointExists = await prisma.controlPoint.findUnique({
+        where: { id },
+      });
+      if (!pointExists) {
+        return res.status(404).json({ error: "Punto de control no encontrado." });
+      }
+
+      const attachment = await prisma.attachment.findUnique({
+        where: { id: attachmentId },
+      });
+      if (!attachment) {
+        return res.status(404).json({ error: "Archivo adjunto no encontrado." });
+      }
+
+      const newPhoto = await prisma.photoEntry.create({
+        data: {
+          notes,
+          url: attachment.url,
+          author: { connect: { id: resolvedAuthorId } },
+          controlPoint: { connect: { id } },
+          attachment: { connect: { id: attachmentId } },
+        },
+        include: { author: true, attachment: true },
+      });
+
+      res.status(201).json({
+        ...newPhoto,
+        url: newPhoto.attachment?.url || newPhoto.url,
+      });
+    } catch (error) {
+      console.error("Error al añadir la foto:", error);
+      if ((error as any)?.code === "P2025") {
+        return res.status(404).json({
+          error:
+            "El autor, punto de control o archivo adjunto no fueron encontrados.",
+        });
+      }
+      res.status(500).json({ error: "No se pudo añadir la foto." });
+    }
+  }
+);
+
+// --- RUTA PARA IMPORTAR CRONOGRAMA ---
+app.post(
+  "/api/project-tasks/import",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      let incomingTasks: any[] | undefined;
+      if (Array.isArray((req.body as any)?.tasks)) {
+        incomingTasks = (req.body as any).tasks;
+      } else if (typeof (req.body as any)?.xml === "string") {
+        const parsed = await validateCronogramaXml((req.body as any).xml);
+        incomingTasks = parsed;
+      }
+
+      if (!Array.isArray(incomingTasks)) {
+        return res
+          .status(400)
+          .json({ error: "Formato inválido. Envía tareas normalizadas o XML válido." });
+      }
+
+      const MAX_NAME_LENGTH = Number(
+        process.env.CRON_XML_MAX_NAME_LENGTH || 512
+      );
+
+      const sanitizedTasks = incomingTasks.map((task: any, index: number) => {
+        const id =
+          typeof task?.id === "string" && task.id.trim().length > 0
+            ? task.id.trim()
+            : randomUUID();
+        const name =
+          typeof task?.name === "string" && task.name.trim().length > 0
+            ? task.name.trim()
+            : `Tarea ${index + 1}`;
+        const safeName =
+          name.length > MAX_NAME_LENGTH
+            ? name.slice(0, MAX_NAME_LENGTH)
+            : name;
+
+        const parsedStart = new Date(task?.startDate);
+        if (Number.isNaN(parsedStart.getTime())) {
+          throw new Error(`La tarea "${safeName}" no tiene una fecha de inicio válida.`);
+        }
+
+        const parsedEnd = new Date(task?.endDate || task?.startDate);
+        if (Number.isNaN(parsedEnd.getTime())) {
+          throw new Error(`La tarea "${safeName}" no tiene una fecha de fin válida.`);
+        }
+        if (parsedEnd < parsedStart) {
+          parsedEnd.setTime(parsedStart.getTime());
+        }
+
+        const progressValue = Math.max(
+          0,
+          Math.min(100, parseInt(`${task?.progress ?? 0}`, 10) || 0)
+        );
+        const durationValue = Math.max(
+          1,
+          parseInt(`${task?.duration ?? 1}`, 10) || 1
+        );
+        const outlineLevelValue = Math.max(
+          1,
+          parseInt(`${task?.outlineLevel ?? 1}`, 10) || 1
+        );
+        const isSummaryValue =
+          task?.isSummary === true ||
+          task?.isSummary === 1 ||
+          (typeof task?.isSummary === "string" &&
+            task.isSummary.toLowerCase() === "true");
+
+        const dependencyArray = Array.isArray(task?.dependencies)
+          ? task.dependencies
+              .map((dep: any) => `${dep}`.trim())
+              .filter((dep: string) => dep.length > 0)
+          : [];
+
+        return {
+          id,
+          taskId: id,
+          name: safeName,
+          startDate: parsedStart,
+          endDate: parsedEnd,
+          progress: progressValue,
+          duration: durationValue,
+          isSummary: isSummaryValue,
+          outlineLevel: outlineLevelValue,
+          dependencies: dependencyArray.length
+            ? JSON.stringify(dependencyArray)
+            : null,
+        };
+      });
+
+      await prisma.$transaction(async (tx) => {
+        await tx.projectTask.deleteMany();
+        if (sanitizedTasks.length) {
+          await tx.projectTask.createMany({ data: sanitizedTasks });
+        }
+      });
+
+      const updatedTasks = await prisma.projectTask.findMany({
+        orderBy: { outlineLevel: "asc" },
+      });
+
+      const formatted = updatedTasks.map((task) => ({
+        ...task,
+        startDate: task.startDate.toISOString(),
+        endDate: task.endDate.toISOString(),
+        dependencies: task.dependencies ? JSON.parse(task.dependencies) : [],
+        children: [],
+      }));
+
+      res.status(201).json(formatted);
+    } catch (error) {
+      console.error("Error al importar tareas del cronograma:", error);
+      if (error instanceof CronogramaValidationError) {
+        return res.status(400).json({ error: error.message });
+      }
+      res.status(500).json({ error: "No se pudo importar el cronograma." });
+    }
+  }
+);
+
 // --- RUTAS ADMINISTRATIVAS ---
 app.get(
   "/api/admin/users",
