@@ -34,7 +34,7 @@
     "multer": "^2.0.0-rc.4",
     "mysql2": "^3.6.5",
     "node-cron": "^3.0.3",
-    "nodemailer": "^6.9.13",
+    "nodemailer": "^7.0.10",
     "openai": "^6.7.0",
     "pdf-lib": "^1.17.1",
     "pdfkit": "^0.15.0",
