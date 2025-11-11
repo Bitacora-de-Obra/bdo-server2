@@ -3587,6 +3587,204 @@ app.post(
   }
 );
 
+// --- RUTAS DE CRONOGRAMA Y CONTROL ---
+app.get("/api/project-tasks", async (_req, res) => {
+  try {
+    const tasks = await prisma.projectTask.findMany({
+      orderBy: { outlineLevel: "asc" },
+    });
+
+    const formatted = tasks.map((task) => ({
+      ...task,
+      startDate: task.startDate.toISOString(),
+      endDate: task.endDate.toISOString(),
+      dependencies: task.dependencies ? JSON.parse(task.dependencies) : [],
+      children: [],
+    }));
+
+    res.json(formatted);
+  } catch (error) {
+    console.error("Error al obtener tareas del proyecto:", error);
+    res
+      .status(500)
+      .json({ error: "No se pudieron obtener las tareas del proyecto." });
+  }
+});
+
+app.get("/api/control-points", async (_req, res) => {
+  try {
+    const points = await prisma.controlPoint.findMany({
+      orderBy: { createdAt: "asc" },
+      include: {
+        photos: {
+          orderBy: { date: "asc" },
+          include: { author: true, attachment: true },
+        },
+      },
+    });
+
+    const formatted = points.map((point) => ({
+      ...point,
+      photos: (point.photos || []).map((photo: any) => ({
+        ...photo,
+        date:
+          photo.date instanceof Date ? photo.date.toISOString() : photo.date,
+        author: mapUserBasic(photo.author),
+        attachment: photo.attachment
+          ? buildAttachmentResponse(photo.attachment)
+          : null,
+      })),
+    }));
+
+    res.json(formatted);
+  } catch (error) {
+    console.error("Error al obtener puntos de control:", error);
+    res
+      .status(500)
+      .json({ error: "No se pudieron obtener los puntos de control." });
+  }
+});
+
+app.get("/api/contract-items", async (_req, res) => {
+  try {
+    const items = await prisma.contractItem.findMany({
+      orderBy: { itemCode: "asc" },
+    });
+    res.json(items);
+  } catch (error) {
+    console.error("Error al obtener ítems contractuales:", error);
+    res
+      .status(500)
+      .json({ error: "No se pudieron obtener los ítems contractuales." });
+  }
+});
+
+app.get("/api/work-actas", async (_req, res) => {
+  try {
+    const actas = await prisma.workActa.findMany({
+      orderBy: { date: "desc" },
+      include: {
+        items: { include: { contractItem: true } },
+        attachments: true,
+      },
+    });
+    res.json(actas.map((acta) => formatWorkActa(acta)));
+  } catch (error) {
+    console.error("Error al obtener actas de avance:", error);
+    res
+      .status(500)
+      .json({ error: "No se pudieron obtener las actas de avance." });
+  }
+});
+
+app.get("/api/work-actas/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const acta = await prisma.workActa.findUnique({
+      where: { id },
+      include: {
+        items: { include: { contractItem: true } },
+        attachments: true,
+      },
+    });
+
+    if (!acta) {
+      return res.status(404).json({ error: "Acta de avance no encontrada." });
+    }
+
+    res.json(formatWorkActa(acta));
+  } catch (error) {
+    console.error("Error al obtener detalle de acta de avance:", error);
+    res
+      .status(500)
+      .json({ error: "No se pudo obtener el acta de avance solicitada." });
+  }
+});
+
+// --- RUTAS ADMINISTRATIVAS ---
+app.get(
+  "/api/admin/users",
+  authMiddleware,
+  requireAdmin,
+  async (_req: AuthRequest, res) => {
+    try {
+      const users = await prisma.user.findMany({
+        orderBy: { fullName: "asc" },
+      });
+      res.json(users.map(formatAdminUser));
+    } catch (error) {
+      console.error("Error al obtener usuarios admin:", error);
+      res.status(500).json({ error: "No se pudieron cargar los usuarios." });
+    }
+  }
+);
+
+app.get(
+  "/api/admin/audit-logs",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const limitParam = req.query.limit;
+      const limit =
+        typeof limitParam === "string"
+          ? Math.min(parseInt(limitParam, 10) || 100, 500)
+          : 100;
+
+      const logs = await prisma.auditLog.findMany({
+        orderBy: { timestamp: "desc" },
+        take: limit,
+        include: {
+          actor: { select: { email: true } },
+        },
+      });
+
+      res.json(
+        logs.map((log) => ({
+          id: log.id,
+          timestamp:
+            log.timestamp instanceof Date
+              ? log.timestamp.toISOString()
+              : log.timestamp,
+          actorEmail: log.actorEmail || log.actor?.email || null,
+          action: log.action,
+          entityType: log.entityType,
+          entityId: log.entityId,
+          diff: log.diff ?? undefined,
+        }))
+      );
+    } catch (error) {
+      console.error("Error al obtener audit logs:", error);
+      res.status(500).json({
+        error: "No se pudieron cargar los registros de auditoría.",
+      });
+    }
+  }
+);
+
+app.get(
+  "/api/admin/settings",
+  authMiddleware,
+  requireAdmin,
+  async (_req: AuthRequest, res) => {
+    try {
+      const settings = await ensureAppSettings();
+      if (!settings) {
+        return res.status(503).json({
+          error:
+            "Configuración no inicializada. Ejecuta las migraciones del servidor para habilitar este módulo.",
+        });
+      }
+      res.json(formatAppSettings(settings));
+    } catch (error) {
+      console.error("Error al obtener configuración:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudo cargar la configuración de la aplicación." });
+    }
+  }
+);
+
 // --- RUTAS DE AUTENTICACIÓN ---
 app.post("/api/auth/register", async (req, res) => {
   const { email, password, fullName, projectRole, appRole } = req.body;
