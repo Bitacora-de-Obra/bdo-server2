@@ -3393,18 +3393,32 @@ app.post(
 
       if (userSignature) {
         try {
-          // Buscar primero si hay PDFs firmados (para acumular firmas)
-          let basePdf = await prisma.attachment.findFirst({
-            where: {
+          // Regenerar el PDF para que muestre el estado actualizado ("Firmado" con fecha)
+          console.log("Regenerando PDF para reflejar el estado actualizado de las firmas...");
+          let basePdf: any = null;
+          try {
+            const baseUrl =
+              process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+            await generateLogEntryPdf({
+              prisma,
               logEntryId: id,
-              type: "application/pdf",
-              fileName: { contains: "firmado" },
-            },
-            orderBy: { createdAt: "desc" },
-          });
+              uploadsDir: process.env.UPLOADS_DIR || "./uploads",
+              baseUrl,
+            });
+            console.log("PDF regenerado exitosamente con el estado actualizado");
 
-          // Si no hay PDFs firmados, buscar el PDF base original
-          if (!basePdf) {
+            // Buscar el PDF recién regenerado (el más reciente sin "firmado" en el nombre)
+            basePdf = await prisma.attachment.findFirst({
+              where: {
+                logEntryId: id,
+                type: "application/pdf",
+                fileName: { not: { contains: "firmado" } },
+              },
+              orderBy: { createdAt: "desc" },
+            });
+          } catch (regenerateError) {
+            console.warn("No se pudo regenerar el PDF, usando PDF existente:", regenerateError);
+            // Fallback: buscar PDF existente
             basePdf = await prisma.attachment.findFirst({
               where: {
                 logEntryId: id,
@@ -3415,64 +3429,23 @@ app.post(
             });
           }
 
-          // Si aún no hay PDF, generar uno automáticamente
-          if (!basePdf) {
-            console.log("No hay PDF existente, generando uno automáticamente...");
-            try {
-              const baseUrl =
-                process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
-              await generateLogEntryPdf({
-                prisma,
-                logEntryId: id,
-                uploadsDir: process.env.UPLOADS_DIR || "./uploads",
-                baseUrl,
-              });
-
-              // Buscar el PDF recién generado
-              basePdf = await prisma.attachment.findFirst({
-                where: {
-                  logEntryId: id,
-                  type: "application/pdf",
-                },
-                orderBy: { createdAt: "desc" },
-              });
-
-              if (basePdf) {
-                console.log(
-                  `PDF generado automáticamente: ${basePdf.fileName}`
-                );
-              }
-            } catch (pdfError) {
-              console.warn(
-                "No se pudo generar PDF automáticamente:",
-                pdfError
-              );
-            }
-          }
-
           if (basePdf) {
             console.log(
-              `Aplicando firma manuscrita al PDF: ${basePdf.fileName} (ID: ${basePdf.id})`
+              `Aplicando TODAS las firmas manuscritas al PDF regenerado: ${basePdf.fileName} (ID: ${basePdf.id})`
             );
-            console.log(`Firmante: ${signer.fullName} (ID: ${signerId})`);
-            console.log(`UserSignature disponible:`, {
-              hasStoragePath: !!userSignature.storagePath,
-              hasUrl: !!userSignature.url,
-              mimeType: userSignature.mimeType,
-            });
 
-            // Cargar buffers en paralelo
-            const [originalBuffer, signatureBuffer] = await Promise.all([
-              loadAttachmentBuffer(basePdf),
-              loadUserSignatureBuffer(userSignature),
-            ]);
+            // Cargar el PDF base regenerado
+            let currentPdfBuffer = await loadAttachmentBuffer(basePdf);
+            const originalPdfSize = currentPdfBuffer.length;
             
-            console.log(`Buffers cargados:`, {
-              originalPdfSize: originalBuffer.length,
-              signatureSize: signatureBuffer.length,
+            // Obtener todas las firmas que ya están firmadas (incluyendo la nueva)
+            const allSignatures = await prisma.signature.findMany({
+              where: { logEntryId: id },
+              include: { signer: true },
+              orderBy: { signedAt: "asc" },
             });
 
-            // Obtener tareas de firma ordenadas para calcular posición
+            // Obtener tareas de firma ordenadas para calcular posiciones
             const logEntryWithTasks = await prisma.logEntry.findUnique({
               where: { id },
               include: {
@@ -3491,71 +3464,75 @@ app.post(
                     new Date(a.assignedAt || 0).getTime() -
                     new Date(b.assignedAt || 0).getTime()
                 ) || [];
-            let signerIndex = orderedTasks.findIndex(
-              (t: any) => t.signer?.id === signerId
-            );
-            if (signerIndex < 0) signerIndex = 0;
 
             // Valores que coinciden con pdfExport.ts
-            const PAGE_MARGIN = 48; // Margen de la página (PDFKit default)
-            const SIGNATURE_BOX_HEIGHT = 110; // Altura de cada caja de firma
-            const SIGNATURE_BOX_GAP = 16; // Espacio entre cajas
-            const SIGNATURE_LINE_OFFSET = 72; // Offset desde el inicio de la caja hasta la línea de firma
-            
-            // La sección "Firmas requeridas" comienza en una nueva página
-            // Título "Firmas requeridas" (fontSize 13) + moveDown(0.35) ≈ 17.5 puntos
+            const PAGE_MARGIN = 48;
+            const SIGNATURE_BOX_HEIGHT = 110;
+            const SIGNATURE_BOX_GAP = 16;
+            const SIGNATURE_LINE_OFFSET = 72;
             const SIGNATURE_SECTION_START_Y = PAGE_MARGIN + 17.5;
-            
-            // Calcular la posición Y de la línea de firma para este firmante
-            // currentY = SIGNATURE_SECTION_START_Y + signerIndex * (BOX_HEIGHT + GAP)
-            // línea de firma = currentY + SIGNATURE_LINE_OFFSET
-            const currentY = SIGNATURE_SECTION_START_Y + signerIndex * (SIGNATURE_BOX_HEIGHT + SIGNATURE_BOX_GAP);
-            const yPos = currentY + SIGNATURE_LINE_OFFSET;
-            
-            // La línea de firma comienza en PAGE_MARGIN + 70 (según pdfExport.ts línea 739)
             const LINE_X = PAGE_MARGIN + 70;
 
-            // Cargar el PDF para determinar en qué página está la sección de firmas
-            // La sección "Firmas requeridas" siempre está en una nueva página (última página)
-            const { PDFDocument } = await import("pdf-lib");
-            const tempPdfDoc = await PDFDocument.load(originalBuffer);
-            const totalPages = tempPdfDoc.getPageCount();
-            // applySignatureToPdf usa undefined para última página, o un número (pero hay un bug, mejor usar undefined)
-            
-            console.log(`Aplicando firma en posición:`, {
-              page: `última (${totalPages})`,
-              totalPages,
-              x: LINE_X,
-              y: yPos,
-              width: 220,
-              height: 28,
-              signerIndex,
-              totalSigners: orderedTasks.length,
-              currentY,
-              signatureLineY: yPos,
-            });
+            // Aplicar todas las firmas manuscritas en orden
+            console.log(`Aplicando ${allSignatures.length} firma(s) manuscrita(s) al PDF...`);
+            for (const signature of allSignatures) {
+              const signerId = signature.signerId || signature.signer?.id;
+              if (!signerId) continue;
 
-            const signedBuffer = await applySignatureToPdf({
-              originalPdf: originalBuffer,
-              signature: {
-                buffer: signatureBuffer,
-                mimeType: userSignature.mimeType || "image/png",
-              },
-              position: {
-                page: undefined, // undefined = última página
-                x: LINE_X,
+              const userSig = await prisma.userSignature.findUnique({
+                where: { userId: signerId },
+              });
+
+              if (!userSig) {
+                console.warn(`No se encontró firma manuscrita para el usuario ${signerId}`);
+                continue;
+              }
+
+              // Calcular índice del firmante
+              let signerIndex = orderedTasks.findIndex(
+                (t: any) => t.signer?.id === signerId
+              );
+              if (signerIndex < 0) signerIndex = 0;
+
+              const currentY = SIGNATURE_SECTION_START_Y + signerIndex * (SIGNATURE_BOX_HEIGHT + SIGNATURE_BOX_GAP);
+              const yPos = currentY + SIGNATURE_LINE_OFFSET;
+
+              console.log(`Aplicando firma de ${signature.signer?.fullName} en posición:`, {
+                signerIndex,
                 y: yPos,
-                width: 220,
-                height: 28,
-                baseline: true,
-                baselineRatio: 0.25,
-                fromTop: true, // Y se mide desde arriba
-              },
-            });
+                x: LINE_X,
+              });
+
+              try {
+                const signatureBuffer = await loadUserSignatureBuffer(userSig);
+                currentPdfBuffer = await applySignatureToPdf({
+                  originalPdf: currentPdfBuffer,
+                  signature: {
+                    buffer: signatureBuffer,
+                    mimeType: userSig.mimeType || "image/png",
+                  },
+                  position: {
+                    page: undefined, // última página
+                    x: LINE_X,
+                    y: yPos,
+                    width: 220,
+                    height: 28,
+                    baseline: true,
+                    baselineRatio: 0.25,
+                    fromTop: true,
+                  },
+                });
+                console.log(`✅ Firma de ${signature.signer?.fullName} aplicada exitosamente`);
+              } catch (sigError) {
+                console.error(`❌ Error aplicando firma de ${signature.signer?.fullName}:`, sigError);
+              }
+            }
             
-            console.log(`PDF firmado generado:`, {
-              originalSize: originalBuffer.length,
+            const signedBuffer = currentPdfBuffer;
+            console.log(`PDF con todas las firmas generado:`, {
+              originalSize: originalPdfSize,
               signedSize: signedBuffer.length,
+              totalSignatures: allSignatures.length,
             });
 
             // Crear nuevo PDF firmado para acumular firmas
