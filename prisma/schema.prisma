@@ -179,6 +179,7 @@ model User {
   userSignatures          UserSignature[]
   documentSignatureLogs   DocumentSignatureLog[]
   signatureTasks          LogEntrySignatureTask[]
+  reviewTasks             LogEntryReviewTask[]
 }
 
 model Project {
@@ -355,6 +356,7 @@ model LogEntry {
   signatures        Signature[]
   history           LogEntryHistory[]
   signatureTasks    LogEntrySignatureTask[]
+  reviewTasks       LogEntryReviewTask[]
   documentSignatureLogs DocumentSignatureLog[]
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
@@ -467,6 +469,28 @@ model LogEntrySignatureTask {
 enum SignatureTaskStatus {
   PENDING
   SIGNED
+}
+
+model LogEntryReviewTask {
+  id          String            @id @default(uuid())
+  logEntryId  String
+  reviewerId  String
+  status      ReviewTaskStatus  @default(PENDING)
+  assignedAt  DateTime?
+  completedAt DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  logEntry    LogEntry          @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+  reviewer    User              @relation(fields: [reviewerId], references: [id])
+
+  @@unique([logEntryId, reviewerId])
+  @@index([logEntryId])
+  @@index([reviewerId])
+}
+
+enum ReviewTaskStatus {
+  PENDING
+  COMPLETED
 }
 
 model Attachment {

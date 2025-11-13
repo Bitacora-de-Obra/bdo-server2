@@ -1003,6 +1003,13 @@ const formatLogEntry = (entry: any) => {
     interventoriaObservations: entry.interventoriaObservations || "",
     requiredSignatories: requiredSigners,
     signatureTasks: formattedSignatureTasks,
+    reviewTasks: (entry.reviewTasks || []).map((task: any) => ({
+      id: task.id,
+      status: task.status || "PENDING",
+      assignedAt: task.assignedAt ? new Date(task.assignedAt).toISOString() : null,
+      completedAt: task.completedAt ? new Date(task.completedAt).toISOString() : null,
+      reviewer: mapUserBasic(task.reviewer),
+    })),
     signatureSummary: (() => {
       const totalTasks = totalSignatureTasks;
       const signedTasksCount = signedSignatureTasks.length;
@@ -2718,9 +2725,10 @@ app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
         comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
         signatures: { include: { signer: true } },
         signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
+        reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
         assignees: true,
         history: { include: { user: true }, orderBy: { timestamp: "desc" } },
-      },
+      } as any,
     });
 
     const formattedEntries = entries.map((entry) => ({
@@ -2731,7 +2739,14 @@ app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
     res.json(formattedEntries);
   } catch (error) {
     console.error("Error al obtener anotaciones:", error);
-    res.status(500).json({ error: "No se pudieron obtener las anotaciones." });
+    if (error instanceof Error) {
+      console.error("Error details:", error.message);
+      console.error("Error stack:", error.stack);
+    }
+    res.status(500).json({ 
+      error: "No se pudieron obtener las anotaciones.",
+      details: error instanceof Error ? error.message : String(error)
+    });
   }
 });
 
@@ -2955,6 +2970,33 @@ app.post(
         },
       });
       console.log("✅ LogEntry creado exitosamente:", { id: logEntry.id, title: logEntry.title });
+      
+      // Registrar la creación inicial en el historial
+      try {
+        const author = await prisma.user.findUnique({ 
+          where: { id: userId }, 
+          select: { fullName: true } 
+        });
+        const authorName = author?.fullName || "Usuario";
+        
+        await prisma.logEntryHistory.create({
+          data: {
+            logEntryId: logEntry.id,
+            userId: userId,
+            fieldName: "created",
+            oldValue: null,
+            newValue: `Anotación creada por ${authorName}`,
+            timestamp: new Date(),
+          },
+        });
+        console.log("✅ Historial de creación registrado");
+      } catch (historyError) {
+        console.warn("⚠️ No se pudo registrar el historial de creación:", historyError);
+        if (historyError instanceof Error) {
+          console.warn("Historial error message:", historyError.message);
+        }
+        // No fallar la creación si hay error con el historial
+      }
       } catch (prismaError: any) {
         console.error("❌ ERROR al crear LogEntry en Prisma:", prismaError);
         if (prismaError instanceof Prisma.PrismaClientKnownRequestError) {
@@ -2976,6 +3018,32 @@ app.post(
           }
         }
         throw prismaError; // Re-lanzar para que sea capturado por el catch externo
+      }
+
+      // Crear tareas de revisión para los asignados (si hay asignados y el estado es NEEDS_REVIEW)
+      const assigneeArray = Array.isArray(assigneeIds) ? assigneeIds : [];
+      const validAssigneeIds = assigneeArray
+        .filter((id) => typeof id === "string" && id.trim().length > 0);
+      
+      if (validAssigneeIds.length > 0 && prismaStatus === "NEEDS_REVIEW") {
+        console.log("DEBUG: ===== CREACIÓN DE TAREAS DE REVISIÓN =====");
+        console.log("DEBUG: assigneeIds:", validAssigneeIds);
+        
+        try {
+          await (prisma as any).logEntryReviewTask.createMany({
+            data: validAssigneeIds.map((assigneeId) => ({
+              logEntryId: logEntry.id,
+              reviewerId: assigneeId,
+              status: "PENDING",
+              assignedAt: new Date(),
+            })),
+            skipDuplicates: true,
+          });
+          console.log("DEBUG: ✓ Tareas de revisión creadas exitosamente");
+        } catch (error: any) {
+          console.error("DEBUG: ✗ ERROR creando tareas de revisión:", error);
+          // No fallar la creación si hay error con las tareas de revisión
+        }
       }
 
       // Crear tareas de firma para los firmantes requeridos
@@ -3047,6 +3115,7 @@ app.post(
           },
           signatures: { include: { signer: true } },
           signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
+          reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
           assignees: true,
           history: {
             include: { user: true },
@@ -3138,6 +3207,7 @@ app.get(
           },
           signatures: { include: { signer: true } },
           signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
+          reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
           assignees: true,
           history: { include: { user: true }, orderBy: { timestamp: "desc" } },
         },
@@ -3156,6 +3226,860 @@ app.get(
     } catch (error) {
       console.error("Error al obtener anotación:", error);
       res.status(500).json({ error: "No se pudo obtener la anotación." });
+    }
+  }
+);
+
+app.put(
+  "/api/log-entries/:id",
+  authMiddleware,
+  requireEditor,
+  (req, res, next) => {
+    // Solo usar multer si el Content-Type es multipart/form-data
+    const contentType = req.headers["content-type"] || "";
+    if (contentType.includes("multipart/form-data")) {
+      upload.array("attachments", 10)(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({ error: "Error procesando archivos: " + err.message });
+        }
+        next();
+      });
+    } else {
+      // Si es JSON, continuar sin multer
+      next();
+    }
+  },
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.userId;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      // Obtener la anotación actual
+      const existingEntry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          assignees: true,
+        },
+      });
+
+      if (!existingEntry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      // Leer el estado del body primero para validar
+      const { status: statusFromBody } = req.body ?? {};
+      
+      // Determinar el nuevo estado que se quiere establecer
+      const requestedStatus = statusFromBody !== undefined 
+        ? (entryStatusMap[statusFromBody] || entryStatusMap[entryStatusReverseMap[statusFromBody] || "DRAFT"] || existingEntry.status)
+        : existingEntry.status;
+
+      // Debug: Log para ver qué estados tenemos
+      console.log("DEBUG APROBACIÓN:", {
+        entryId: id,
+        existingStatus: existingEntry.status,
+        existingStatusDisplay: entryStatusReverseMap[existingEntry.status] || existingEntry.status,
+        statusFromBody,
+        requestedStatus,
+        isApproved: existingEntry.status === "APPROVED",
+        willBeApproved: requestedStatus === "APPROVED",
+        entryStatusMapKeys: Object.keys(entryStatusMap),
+        entryStatusReverseMapKeys: Object.keys(entryStatusReverseMap),
+      });
+
+      // Si solo se está cambiando el estado a APPROVED y la anotación está en un estado editable,
+      // permitir el cambio sin validar la edición completa
+      const isOnlyApproving = requestedStatus === "APPROVED" && 
+                              existingEntry.status !== "APPROVED" &&
+                              ["DRAFT", "SUBMITTED", "NEEDS_REVIEW"].includes(existingEntry.status);
+
+      // Si ya está aprobada y se intenta aprobar de nuevo, rechazar con mensaje claro
+      // IMPORTANTE: Solo rechazar si realmente está aprobada (no si está en otro estado)
+      if (existingEntry.status === "APPROVED" && requestedStatus === "APPROVED") {
+        console.log("DEBUG: Rechazando aprobación - ya está aprobada", {
+          existingStatus: existingEntry.status,
+          requestedStatus,
+        });
+        return res.status(403).json({
+          error: "Esta anotación ya está aprobada. No se puede aprobar nuevamente.",
+          code: "ALREADY_APPROVED",
+          currentStatus: existingEntry.status,
+          currentStatusDisplay: entryStatusReverseMap[existingEntry.status] || existingEntry.status,
+        });
+      }
+
+      // Si se intenta aprobar pero la anotación no está en un estado editable, rechazar
+      if (requestedStatus === "APPROVED" && !["DRAFT", "SUBMITTED", "NEEDS_REVIEW"].includes(existingEntry.status)) {
+        return res.status(403).json({
+          error: `No se puede aprobar una anotación en estado '${entryStatusReverseMap[existingEntry.status] || existingEntry.status}'. Solo se pueden aprobar anotaciones en estado 'Borrador', 'Radicado' o 'En Revisión'.`,
+          code: "CANNOT_APPROVE",
+          currentStatus: existingEntry.status,
+        });
+      }
+
+      // Si se intenta aprobar, verificar que todas las revisiones estén completadas
+      if (requestedStatus === "APPROVED" && existingEntry.status === "NEEDS_REVIEW") {
+        const reviewTasks = await (prisma as any).logEntryReviewTask.findMany({
+          where: { logEntryId: id },
+        });
+        
+        if (reviewTasks.length > 0) {
+          const pendingReviews = reviewTasks.filter((task: any) => task.status === "PENDING");
+          if (pendingReviews.length > 0) {
+            const pendingReviewers = await prisma.user.findMany({
+              where: { id: { in: pendingReviews.map((t: any) => t.reviewerId) } },
+              select: { fullName: true },
+            });
+            const reviewerNames = pendingReviewers.map((u) => u.fullName).join(", ");
+            
+            return res.status(403).json({
+              error: `No se puede aprobar la anotación. Faltan ${pendingReviews.length} revisión(es) pendiente(s) de: ${reviewerNames}. Todas las revisiones deben estar completadas antes de aprobar.`,
+              code: "PENDING_REVIEWS",
+              pendingReviewers: reviewerNames,
+              pendingCount: pendingReviews.length,
+            });
+          }
+        }
+      }
+
+      // Si no es solo aprobar, validar que el estado actual permita edición
+      if (!isOnlyApproving && !["DRAFT", "SUBMITTED", "NEEDS_REVIEW"].includes(existingEntry.status)) {
+        return res.status(403).json({
+          error: `No se puede editar una anotación en estado '${entryStatusReverseMap[existingEntry.status] || existingEntry.status}'. Solo se pueden editar anotaciones en estado 'Borrador', 'Radicado' o 'En Revisión'.`,
+          code: "ENTRY_NOT_EDITABLE",
+          currentStatus: existingEntry.status,
+        });
+      }
+
+      // Verificar permisos: el autor, los asignados, o los responsables (firmantes) pueden editar
+      const isAuthor = existingEntry.authorId === userId;
+      const isAssignee = existingEntry.assignees?.some((a: any) => a.id === userId) || false;
+      const currentUser = await prisma.user.findUnique({ where: { id: userId } });
+      const isAdmin = currentUser?.appRole === "admin";
+
+      // Verificar si el usuario es un responsable (firmante requerido)
+      // Usar try-catch para no fallar si hay problemas con la query
+      let isRequiredSigner = false;
+      let authorHasSigned = false;
+      
+      try {
+        const entryWithSignatures = await prisma.logEntry.findUnique({
+          where: { id },
+          include: {
+            signatureTasks: { include: { signer: true } },
+          },
+        });
+        
+        if (entryWithSignatures?.signatureTasks) {
+          isRequiredSigner = entryWithSignatures.signatureTasks.some(
+            (task: any) => task.signerId === userId
+          );
+          
+          // Verificar si el autor ya ha firmado
+          authorHasSigned = entryWithSignatures.signatureTasks.some(
+            (task: any) => task.signerId === existingEntry.authorId && task.status === "SIGNED"
+          );
+        }
+      } catch (sigError) {
+        console.warn("Error verificando firmas para permisos:", sigError);
+        // Si hay error, asumir que no es responsable y que el autor no ha firmado
+        // Esto permitirá que el flujo continúe con la validación normal
+      }
+
+      // Si el autor ya firmó, solo el autor puede editar
+      // Si el autor NO ha firmado, los responsables (asignados o firmantes) pueden editar
+      if (authorHasSigned && !isAuthor && !isAdmin) {
+        return res.status(403).json({
+          error: "No tienes permisos para editar esta anotación. El autor ya ha firmado, solo el autor puede hacer modificaciones.",
+          code: "AUTHOR_ALREADY_SIGNED",
+        });
+      }
+
+      // Si no es autor, asignado, responsable (firmante), ni admin, rechazar
+      if (!isAuthor && !isAssignee && !isRequiredSigner && !isAdmin) {
+        return res.status(403).json({
+          error: "No tienes permisos para editar esta anotación. Solo el autor, los asignados, los responsables (firmantes) o un administrador pueden editarla.",
+          code: "INSUFFICIENT_PERMISSIONS",
+        });
+      }
+
+      const {
+        title,
+        description,
+        type,
+        subject,
+        location,
+        entryDate,
+        activityStartDate,
+        activityEndDate,
+        isConfidential,
+        assigneeIds,
+        requiredSignatories,
+      } = req.body ?? {};
+
+      // Preparar datos de actualización
+      const updateData: any = {};
+
+      if (title !== undefined) updateData.title = title;
+      if (description !== undefined) updateData.description = description;
+      if (type !== undefined) updateData.type = entryTypeMap[type] || existingEntry.type;
+      // Usar el requestedStatus que ya calculamos arriba
+      if (statusFromBody !== undefined) {
+        updateData.status = requestedStatus;
+      }
+      if (subject !== undefined) updateData.subject = typeof subject === "string" ? subject : "";
+      if (location !== undefined) updateData.location = typeof location === "string" ? location : "";
+      if (entryDate !== undefined) updateData.entryDate = entryDate ? new Date(entryDate) : existingEntry.entryDate;
+      if (activityStartDate !== undefined) updateData.activityStartDate = activityStartDate ? new Date(activityStartDate) : existingEntry.activityStartDate;
+      if (activityEndDate !== undefined) updateData.activityEndDate = activityEndDate ? new Date(activityEndDate) : existingEntry.activityEndDate;
+      if (isConfidential !== undefined) updateData.isConfidential = parseBooleanInput(isConfidential);
+
+      // Manejar campos JSON
+      const jsonFields = [
+        "contractorPersonnel",
+        "interventoriaPersonnel",
+        "equipmentResources",
+        "executedActivities",
+        "executedQuantities",
+        "scheduledActivities",
+        "qualityControls",
+        "materialsReceived",
+        "safetyNotes",
+        "projectIssues",
+        "siteVisits",
+        "weatherReport",
+      ];
+
+      for (const field of jsonFields) {
+        if (req.body[field] !== undefined) {
+          try {
+            const value = typeof req.body[field] === "string" ? JSON.parse(req.body[field]) : req.body[field];
+            updateData[field] = value;
+          } catch (e) {
+            console.warn(`Error parseando campo JSON ${field}:`, e);
+          }
+        }
+      }
+
+      // Manejar campos de texto
+      const textFields = [
+        "activitiesPerformed",
+        "materialsUsed",
+        "workforce",
+        "weatherConditions",
+        "additionalObservations",
+        "locationDetails",
+        "contractorObservations",
+        "interventoriaObservations",
+      ];
+
+      for (const field of textFields) {
+        if (req.body[field] !== undefined) {
+          updateData[field] = typeof req.body[field] === "string" ? req.body[field] : "";
+        }
+      }
+
+      // Manejar scheduleDay como entero nullable
+      if (req.body.scheduleDay !== undefined) {
+        const scheduleDayValue = req.body.scheduleDay;
+        const currentScheduleDay = existingEntry.scheduleDay;
+        
+        // Si viene como null/vacío y el valor actual es 0 (valor por defecto), no actualizar
+        // Esto evita que se cambie de 0 a null cuando el usuario no modificó el campo
+        if ((scheduleDayValue === "" || scheduleDayValue === null || scheduleDayValue === undefined)) {
+          // Solo actualizar a null si el valor actual no es 0 (valor por defecto)
+          // Si el valor actual es 0, asumimos que no se modificó y no lo actualizamos
+          if (currentScheduleDay !== 0 && currentScheduleDay !== null) {
+            updateData.scheduleDay = null;
+          }
+          // Si currentScheduleDay es 0, no hacemos nada (no actualizamos)
+        } else {
+          const parsed = typeof scheduleDayValue === "string" 
+            ? parseInt(scheduleDayValue, 10) 
+            : scheduleDayValue;
+          const finalValue = isNaN(parsed) ? null : parsed;
+          
+          // Solo actualizar si el valor es diferente al actual
+          if (finalValue !== currentScheduleDay) {
+            updateData.scheduleDay = finalValue;
+          }
+        }
+      }
+
+      // Manejar asignados
+      if (assigneeIds !== undefined) {
+        const assigneeArray = Array.isArray(assigneeIds) ? assigneeIds : [];
+        const validAssigneeIds = assigneeArray
+          .filter((id) => typeof id === "string" && id.trim().length > 0);
+        updateData.assignees = { set: validAssigneeIds.map((id) => ({ id })) };
+        
+        // Si el estado es NEEDS_REVIEW, crear/actualizar tareas de revisión
+        if (requestedStatus === "NEEDS_REVIEW" || existingEntry.status === "NEEDS_REVIEW") {
+          try {
+            // Obtener tareas de revisión existentes
+            const existingReviewTasks = await (prisma as any).logEntryReviewTask.findMany({
+              where: { logEntryId: id },
+            });
+            
+            const existingReviewerIds = new Set(existingReviewTasks.map((t: any) => t.reviewerId));
+            const newReviewerIds = new Set(validAssigneeIds);
+            
+            // Eliminar tareas de revisores que ya no están asignados
+            const toRemove = existingReviewTasks.filter((t: any) => !newReviewerIds.has(t.reviewerId));
+            if (toRemove.length > 0) {
+              await (prisma as any).logEntryReviewTask.deleteMany({
+                where: {
+                  id: { in: toRemove.map((t: any) => t.id) },
+                  status: "PENDING", // Solo eliminar tareas pendientes
+                },
+              });
+            }
+            
+            // Crear tareas para nuevos revisores
+            const toAdd = validAssigneeIds.filter((reviewerId: string) => !existingReviewerIds.has(reviewerId));
+            if (toAdd.length > 0) {
+              await (prisma as any).logEntryReviewTask.createMany({
+                data: toAdd.map((reviewerId) => ({
+                  logEntryId: id,
+                  reviewerId,
+                  status: "PENDING",
+                  assignedAt: new Date(),
+                })),
+                skipDuplicates: true,
+              });
+            }
+          } catch (e: any) {
+            console.warn("Error actualizando tareas de revisión:", e);
+            // No fallar la actualización si hay error con las tareas de revisión
+          }
+        }
+      }
+
+      // Procesar archivos adjuntos nuevos
+      const storage = getStorage();
+      const newAttachments: any[] = [];
+
+      if (req.files && Array.isArray(req.files)) {
+        for (const file of req.files as Express.Multer.File[]) {
+          const key = createStorageKey("log-entries", `${Date.now()}-${file.originalname}`);
+          await storage.save({ path: key, content: file.buffer });
+          newAttachments.push({
+            fileName: file.originalname,
+            url: storage.getPublicUrl(key),
+            size: file.size,
+            type: file.mimetype,
+            storagePath: key,
+          });
+        }
+      }
+
+      if (newAttachments.length > 0) {
+        updateData.attachments = {
+          create: newAttachments,
+        };
+      }
+
+      // Registrar cambios en el historial
+      const changes: Array<{ fieldName: string; oldValue: string | null; newValue: string | null }> = [];
+      
+      // Obtener información del usuario que está haciendo los cambios
+      const modifyingUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { fullName: true },
+      });
+      const modifierName = modifyingUser?.fullName || "Usuario";
+      
+      // Función helper para comparar valores y detectar si realmente cambió
+      const valuesAreEqual = (oldVal: any, newVal: any): boolean => {
+        // Normalizar valores vacíos: null, undefined, string vacío, array vacío se tratan como "vacío"
+        const normalizeEmpty = (val: any): any => {
+          // Si es null o undefined, retornar null
+          if (val === null || val === undefined) {
+            return null;
+          }
+          
+          // Si es string vacío, retornar null
+          if (typeof val === "string" && val.trim() === "") {
+            return null;
+          }
+          
+          // Si es array vacío, retornar null (para campos JSON)
+          if (Array.isArray(val) && val.length === 0) {
+            return null;
+          }
+          
+          // Si es objeto vacío {}, retornar null
+          if (typeof val === "object" && !Array.isArray(val) && Object.keys(val).length === 0) {
+            return null;
+          }
+          
+          return val;
+        };
+        
+        const normalizedOld = normalizeEmpty(oldVal);
+        const normalizedNew = normalizeEmpty(newVal);
+        
+        // Si ambos están vacíos (null/undefined/string vacío/array vacío), son iguales
+        if (normalizedOld === null && normalizedNew === null) {
+          return true;
+        }
+        
+        // Si uno está vacío y el otro no, son diferentes
+        if ((normalizedOld === null) !== (normalizedNew === null)) {
+          return false;
+        }
+        
+        // Si ambos están vacíos, ya retornamos arriba
+        if (normalizedOld === null || normalizedNew === null) {
+          return true;
+        }
+        
+        // Para objetos/arrays (campos JSON), comparar como string JSON
+        if (typeof normalizedOld === "object" && typeof normalizedNew === "object") {
+          // Para arrays, comparar longitudes primero
+          if (Array.isArray(normalizedOld) && Array.isArray(normalizedNew)) {
+            if (normalizedOld.length !== normalizedNew.length) {
+              return false;
+            }
+            if (normalizedOld.length === 0) {
+              return true; // Ambos arrays vacíos ya fueron normalizados a null arriba, pero por si acaso
+            }
+          }
+          
+          try {
+            const oldStr = JSON.stringify(normalizedOld);
+            const newStr = JSON.stringify(normalizedNew);
+            return oldStr === newStr;
+          } catch (e) {
+            return String(normalizedOld) === String(normalizedNew);
+          }
+        }
+        
+        // Para fechas, comparar timestamps
+        if (normalizedOld instanceof Date && normalizedNew instanceof Date) {
+          return normalizedOld.getTime() === normalizedNew.getTime();
+        }
+        
+        // Para strings, comparar sin espacios al inicio/final
+        if (typeof normalizedOld === "string" && typeof normalizedNew === "string") {
+          return normalizedOld.trim() === normalizedNew.trim();
+        }
+        
+        // Para números, comparar directamente (incluyendo 0)
+        if (typeof normalizedOld === "number" && typeof normalizedNew === "number") {
+          return normalizedOld === normalizedNew;
+        }
+        
+        // Comparación normal
+        return normalizedOld === normalizedNew;
+      };
+      
+      // Función helper para formatear valores
+      const formatValue = (value: any, fieldName: string): string | null => {
+        // Si es null o undefined, retornar null
+        if (value === null || value === undefined) {
+          return null;
+        }
+        
+        // Si es string vacío, retornar null
+        if (typeof value === "string" && value.trim() === "") {
+          return null;
+        }
+        
+        // Si es array vacío, retornar null (para campos JSON)
+        if (Array.isArray(value) && value.length === 0) {
+          return null;
+        }
+        
+        // Si es objeto vacío {}, retornar null
+        if (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0) {
+          return null;
+        }
+        
+        // Para campos de fecha
+        if (fieldName.includes("Date") && value instanceof Date) {
+          return value.toLocaleString("es-CO");
+        }
+        
+        // Para arrays con estructura [{text: "..."}] (campos de listas de texto)
+        if (Array.isArray(value) && value.length > 0) {
+          // Verificar si todos los elementos tienen estructura {text: "..."}
+          const hasTextStructure = value.every(
+            (item) => typeof item === "object" && item !== null && "text" in item && typeof item.text === "string"
+          );
+          
+          if (hasTextStructure) {
+            // Extraer solo los textos y unirlos con saltos de línea o comas
+            const texts = value.map((item) => item.text).filter((text) => text && text.trim() !== "");
+            if (texts.length === 0) {
+              return null;
+            }
+            // Si hay solo un elemento, mostrarlo directamente
+            if (texts.length === 1) {
+              return texts[0].substring(0, 200);
+            }
+            // Si hay múltiples elementos, unirlos con comas o mostrar solo los primeros
+            const displayText = texts.join(", ");
+            return displayText.length > 200 ? displayText.substring(0, 200) + "..." : displayText;
+          }
+          
+          // Si no tiene estructura de texto, formatear como JSON
+          try {
+            return JSON.stringify(value).substring(0, 200);
+          } catch (e) {
+            return String(value).substring(0, 200);
+          }
+        }
+        
+        // Para objetos (no arrays) que no están vacíos
+        if (typeof value === "object" && !Array.isArray(value)) {
+          try {
+            return JSON.stringify(value).substring(0, 200);
+          } catch (e) {
+            return String(value).substring(0, 200);
+          }
+        }
+        
+        // Para strings, limitar longitud
+        const strValue = String(value);
+        return strValue.length > 200 ? strValue.substring(0, 200) + "..." : strValue;
+      };
+      
+      // Mapeo de nombres de campos en inglés a español (como aparecen en el formulario)
+      const fieldNameMap: Record<string, string> = {
+        title: "Título",
+        description: "Descripción",
+        type: "Tipo",
+        status: "Estado",
+        subject: "Asunto",
+        location: "Ubicación",
+        entryDate: "Fecha de entrada",
+        activityStartDate: "Fecha de inicio de actividad",
+        activityEndDate: "Fecha de fin de actividad",
+        isConfidential: "Confidencial",
+        activitiesPerformed: "Actividades realizadas",
+        materialsUsed: "Materiales utilizados",
+        workforce: "Personal en obra",
+        weatherConditions: "Condiciones climáticas",
+        additionalObservations: "Observaciones adicionales",
+        scheduleDay: "Día de programación",
+        locationDetails: "Detalles de ubicación",
+        contractorObservations: "Observaciones del contratista",
+        interventoriaObservations: "Observaciones de la interventoría",
+        contractorPersonnel: "Personal del contratista",
+        interventoriaPersonnel: "Personal de la interventoría",
+        equipmentResources: "Equipos y recursos",
+        executedActivities: "Ejecución de actividades",
+        executedQuantities: "Cantidades de obra ejecutadas",
+        scheduledActivities: "Actividades programadas",
+        qualityControls: "Controles de calidad",
+        materialsReceived: "Materiales recibidos",
+        safetyNotes: "Gestión HSEQ / SST",
+        projectIssues: "Control, novedades e incidencias",
+        siteVisits: "Visitas registradas",
+        weatherReport: "Reporte del clima",
+      };
+      
+      // Registrar cambios en campos normales
+      for (const [key, newValue] of Object.entries(updateData)) {
+        if (key === "assignees" || key === "attachments") continue; // Estos se manejan por separado
+        
+        const oldValue = (existingEntry as any)[key];
+        
+        // Comparar valores usando la función helper
+        // Solo registrar si realmente hay un cambio
+        if (!valuesAreEqual(oldValue, newValue)) {
+          const formattedOldValue = formatValue(oldValue, key);
+          const formattedNewValue = formatValue(newValue, key);
+          
+          // Verificación adicional: no registrar si ambos valores formateados representan "vacío"
+          const bothEmpty = (
+            (formattedOldValue === null || formattedOldValue === "" || formattedOldValue === "vacío" || formattedOldValue === "null") &&
+            (formattedNewValue === null || formattedNewValue === "" || formattedNewValue === "vacío" || formattedNewValue === "null" || formattedNewValue === "[]")
+          );
+          
+          // También verificar si ambos representan arrays vacíos
+          const bothEmptyArrays = (
+            (formattedOldValue === null || formattedOldValue === "" || formattedOldValue === "vacío" || formattedOldValue === "[]") &&
+            (formattedNewValue === null || formattedNewValue === "" || formattedNewValue === "vacío" || formattedNewValue === "[]")
+          );
+          
+          // Solo registrar si hay un cambio real y no son ambos "vacío"
+          if (formattedOldValue !== formattedNewValue && !bothEmpty && !bothEmptyArrays) {
+            // Usar el nombre en español si existe en el mapeo, sino usar el nombre original
+            const displayFieldName = fieldNameMap[key] || key;
+            
+            console.log(`DEBUG: Cambio detectado en campo ${displayFieldName} (${key}):`, {
+              oldValue: formattedOldValue,
+              newValue: formattedNewValue,
+            });
+            
+            changes.push({
+              fieldName: displayFieldName,
+              oldValue: formattedOldValue,
+              newValue: formattedNewValue,
+            });
+          } else {
+            console.log(`DEBUG: Campo ${key} sin cambio real (ignorado):`, {
+              oldValue: formattedOldValue,
+              newValue: formattedNewValue,
+              bothEmpty,
+              bothEmptyArrays,
+            });
+          }
+        } else {
+          console.log(`DEBUG: Campo ${key} sin cambio (ignorado - valores iguales)`);
+        }
+      }
+
+      // Registrar cambios en asignados
+      if (assigneeIds !== undefined) {
+        const oldAssigneeNames = existingEntry.assignees.map((a) => a.fullName).join(", ") || "Ninguno";
+        const newAssigneeIds = Array.isArray(assigneeIds) ? assigneeIds : [];
+        const newAssignees = await prisma.user.findMany({
+          where: { id: { in: newAssigneeIds } },
+          select: { fullName: true },
+        });
+        const newAssigneeNames = newAssignees.map((a) => a.fullName).join(", ") || "Ninguno";
+        
+        if (oldAssigneeNames !== newAssigneeNames) {
+          changes.push({
+            fieldName: "assignees",
+            oldValue: oldAssigneeNames,
+            newValue: `${newAssigneeNames} (modificado por ${modifierName})`,
+          });
+        }
+      }
+
+      // Registrar cambios en archivos adjuntos
+      if (newAttachments.length > 0) {
+        const newFileNames = newAttachments.map((a) => a.fileName).join(", ");
+        changes.push({
+          fieldName: "attachments",
+          oldValue: null,
+          newValue: `Archivos agregados por ${modifierName}: ${newFileNames}`,
+        });
+      }
+
+      // Actualizar la anotación
+      console.log("DEBUG: Actualizando anotación con updateData:", {
+        entryId: id,
+        keys: Object.keys(updateData),
+        hasAssignees: !!updateData.assignees,
+        hasAttachments: !!updateData.attachments,
+        updateDataSample: Object.keys(updateData).slice(0, 5).reduce((acc: any, key) => {
+          acc[key] = typeof updateData[key] === 'object' ? '[Object]' : String(updateData[key]).substring(0, 50);
+          return acc;
+        }, {}),
+      });
+      
+      let updatedEntry;
+      try {
+        updatedEntry = await prisma.logEntry.update({
+          where: { id },
+          data: updateData,
+          include: {
+            author: true,
+            attachments: true,
+            comments: {
+              include: { author: true },
+              orderBy: { timestamp: "asc" },
+            },
+            signatures: { include: { signer: true } },
+            signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
+            reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
+            assignees: true,
+            history: { include: { user: true }, orderBy: { timestamp: "desc" } },
+          } as any,
+        });
+        console.log("DEBUG: Anotación actualizada exitosamente");
+      } catch (updateError: any) {
+        console.error("DEBUG: ERROR al actualizar en Prisma:", updateError);
+        if (updateError instanceof Prisma.PrismaClientKnownRequestError) {
+          console.error("DEBUG: Prisma error code:", updateError.code);
+          console.error("DEBUG: Prisma error meta:", updateError.meta);
+        }
+        throw updateError; // Re-lanzar para que sea capturado por el catch externo
+      }
+
+      // Registrar cambios en el historial ANTES de actualizar
+      console.log("DEBUG: Cambios detectados antes de actualizar:", {
+        entryId: id,
+        userId,
+        changesCount: changes.length,
+        changes: changes.map(c => ({ 
+          fieldName: c.fieldName, 
+          oldValue: c.oldValue?.substring(0, 50) || null, 
+          newValue: c.newValue?.substring(0, 50) || null 
+        })),
+      });
+      
+      if (changes.length > 0) {
+        try {
+          console.log("DEBUG: Registrando cambios en historial:", {
+            entryId: id,
+            userId,
+            changesCount: changes.length,
+            changes: changes.map(c => ({ fieldName: c.fieldName, hasOldValue: !!c.oldValue, hasNewValue: !!c.newValue })),
+          });
+          await recordLogEntryChanges(id, userId, changes);
+          console.log("DEBUG: Cambios registrados en historial exitosamente");
+        } catch (historyError: any) {
+          console.error("DEBUG: ERROR al registrar cambios en historial:", historyError);
+          if (historyError instanceof Error) {
+            console.error("Historial error message:", historyError.message);
+            console.error("Historial error stack:", historyError.stack);
+          }
+          // No fallar la actualización si hay error con el historial
+          // Solo loguear el error
+        }
+      } else {
+        console.log("DEBUG: No se detectaron cambios para registrar en historial");
+      }
+
+      // Actualizar tareas de firma si se cambian los firmantes requeridos
+      if (requiredSignatories !== undefined) {
+        try {
+          let requiredSignerIds: string[] = [];
+          
+          if (requiredSignatories) {
+            const parsed = typeof requiredSignatories === "string" 
+              ? JSON.parse(requiredSignatories) 
+              : requiredSignatories;
+            requiredSignerIds = extractUserIds(parsed);
+          }
+
+          // Incluir al autor si no está en la lista
+          const uniqueSignerIds = Array.from(new Set([...requiredSignerIds, existingEntry.authorId]));
+
+          // Verificar que ningún firmante sea viewer
+          const signers = await prisma.user.findMany({
+            where: { id: { in: uniqueSignerIds } },
+            select: { id: true, appRole: true, fullName: true },
+          });
+          
+          const viewerSigners = signers.filter((s) => s.appRole === "viewer");
+          if (viewerSigners.length > 0) {
+            const viewerNames = viewerSigners.map((s) => s.fullName).join(", ");
+            return res.status(400).json({
+              error: `Los usuarios con rol 'viewer' no pueden ser firmantes: ${viewerNames}`,
+              code: "VIEWER_CANNOT_BE_SIGNER",
+            });
+          }
+
+          // Obtener tareas de firma existentes para comparar
+          const existingTasks = await prisma.logEntrySignatureTask.findMany({
+            where: { logEntryId: id },
+            include: { signer: { select: { fullName: true } } },
+          });
+
+          const existingSignerIds = new Set(existingTasks.map((t) => t.signerId));
+          const newSignerIds = new Set(uniqueSignerIds);
+          const oldSignerNames = existingTasks.map((t) => t.signer.fullName).join(", ") || "Ninguno";
+          const newSignerNames = signers.map((s) => s.fullName).join(", ") || "Ninguno";
+
+          // Registrar cambio en el historial si hay diferencia
+          if (oldSignerNames !== newSignerNames) {
+            await recordLogEntryChanges(id, userId, [{
+              fieldName: "requiredSignatories",
+              oldValue: oldSignerNames,
+              newValue: newSignerNames,
+            }]);
+          }
+
+          // Eliminar tareas de firmantes que ya no están en la lista
+          const toRemove = existingTasks.filter((t) => !newSignerIds.has(t.signerId));
+          if (toRemove.length > 0) {
+            await prisma.logEntrySignatureTask.deleteMany({
+              where: {
+                id: { in: toRemove.map((t) => t.id) },
+                status: "PENDING", // Solo eliminar tareas pendientes
+              },
+            });
+          }
+
+          // Crear tareas para nuevos firmantes
+          const toAdd = uniqueSignerIds.filter((id) => !existingSignerIds.has(id));
+          if (toAdd.length > 0) {
+            await prisma.logEntrySignatureTask.createMany({
+              data: toAdd.map((signerId) => ({
+                logEntryId: id,
+                signerId,
+                status: "PENDING",
+                assignedAt: new Date(),
+              })),
+              skipDuplicates: true,
+            });
+          }
+        } catch (e: any) {
+          console.warn("Error actualizando tareas de firma:", e);
+          // No fallar la actualización si hay error con las tareas de firma
+        }
+      }
+
+      // Recargar la entrada con todas las relaciones actualizadas
+      const finalEntry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          comments: {
+            include: { author: true },
+            orderBy: { timestamp: "asc" },
+          },
+          signatures: { include: { signer: true } },
+          signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
+          reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
+          assignees: true,
+          history: { include: { user: true }, orderBy: { timestamp: "desc" } },
+        } as any,
+      });
+
+      if (!finalEntry) {
+        throw new Error("No se pudo recuperar la anotación actualizada.");
+      }
+
+      const formattedEntry = {
+        ...formatLogEntry(finalEntry),
+        attachments: (finalEntry.attachments || []).map(buildAttachmentResponse),
+      };
+
+      res.json(formattedEntry);
+    } catch (error) {
+      console.error("Error al actualizar anotación:", error);
+      if (error instanceof Error) {
+        console.error("Error message:", error.message);
+        console.error("Error stack:", error.stack);
+      }
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        console.error("Prisma error code:", error.code);
+        console.error("Prisma error meta:", error.meta);
+        if (error.code === "P2025") {
+          return res.status(404).json({ error: "Anotación no encontrada." });
+        }
+        if (error.code === "P2002") {
+          const target = (error.meta as any)?.target;
+          const isEntryDateConstraint = 
+            (Array.isArray(target) && target.includes("LogEntry_projectId_entryDate_key")) ||
+            (typeof target === "string" && target === "LogEntry_projectId_entryDate_key");
+          
+          if (isEntryDateConstraint) {
+            return res.status(409).json({
+              error: "Ya existe una bitácora registrada para este proyecto en la fecha seleccionada.",
+            });
+          }
+        }
+      }
+      res.status(500).json({ 
+        error: "No se pudo actualizar la anotación.",
+        details: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
     }
   }
 );
@@ -3272,6 +4196,122 @@ app.post(
 );
 
 app.post(
+  "/api/log-entries/:id/reviews/complete",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.userId;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      // Obtener la anotación
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: {
+          reviewTasks: { include: { reviewer: true } },
+          assignees: true,
+        },
+      });
+
+      if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      // Verificar que el usuario esté asignado como revisor
+      const isAssignee = entry.assignees.some((a: any) => a.id === userId);
+      const currentUser = await prisma.user.findUnique({ where: { id: userId } });
+      const isAdmin = currentUser?.appRole === "admin";
+
+      if (!isAssignee && !isAdmin) {
+        return res.status(403).json({
+          error: "No tienes permisos para completar la revisión. Solo los asignados o un administrador pueden completar revisiones.",
+          code: "INSUFFICIENT_PERMISSIONS",
+        });
+      }
+
+      // Buscar la tarea de revisión del usuario
+      let reviewTask = entry.reviewTasks.find((task: any) => task.reviewerId === userId);
+
+      if (!reviewTask) {
+        // Si no existe, crearla (puede pasar si se asignó después de crear la anotación)
+        reviewTask = await (prisma as any).logEntryReviewTask.create({
+          data: {
+            logEntryId: id,
+            reviewerId: userId,
+            status: "COMPLETED",
+            assignedAt: new Date(),
+            completedAt: new Date(),
+          },
+          include: { reviewer: true },
+        });
+      } else {
+        // Actualizar la tarea existente
+        if (reviewTask.status === "COMPLETED") {
+          return res.status(409).json({
+            error: "Ya has completado tu revisión de esta anotación.",
+            code: "REVIEW_ALREADY_COMPLETED",
+          });
+        }
+
+        reviewTask = await (prisma as any).logEntryReviewTask.update({
+          where: { id: reviewTask.id },
+          data: {
+            status: "COMPLETED",
+            completedAt: new Date(),
+          },
+          include: { reviewer: true },
+        });
+      }
+
+      // Registrar en el historial
+      if (reviewTask) {
+        await recordLogEntryChanges(id, userId, [{
+          fieldName: "reviewCompleted",
+          oldValue: null,
+          newValue: `Revisión completada por ${reviewTask.reviewer?.fullName || "Usuario"}`,
+        }]);
+      }
+
+      // Obtener la anotación actualizada
+      const updatedEntry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: {
+          author: true,
+          attachments: true,
+          comments: {
+            include: { author: true },
+            orderBy: { timestamp: "asc" },
+          },
+          signatures: { include: { signer: true } },
+          signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
+          reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
+          assignees: true,
+          history: { include: { user: true }, orderBy: { timestamp: "desc" } },
+        },
+      });
+
+      if (!updatedEntry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      const formattedEntry = {
+        ...formatLogEntry(updatedEntry),
+        attachments: (updatedEntry.attachments || []).map(buildAttachmentResponse),
+      };
+
+      res.json(formattedEntry);
+    } catch (error) {
+      console.error("Error al completar revisión:", error);
+      res.status(500).json({ error: "No se pudo completar la revisión." });
+    }
+  }
+);
+
+app.post(
   "/api/log-entries/:id/signatures",
   authMiddleware,
   requireEditor,
@@ -3318,6 +4358,9 @@ app.post(
       if (!entry) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
+
+      // Permitir firmar en cualquier estado (ya no se requiere aprobación previa)
+      // No hay restricción de estado para firmar
 
       let myTask =
         (entry.signatureTasks || []).find(
@@ -3618,6 +4661,7 @@ app.post(
           },
           signatures: { include: { signer: true } },
           signatureTasks: { include: { signer: true } },
+          reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
           assignees: true,
           history: { include: { user: true }, orderBy: { timestamp: "desc" } },
         },
@@ -6130,6 +7174,7 @@ app.post(
           },
           signatures: { include: { signer: true } },
           signatureTasks: { include: { signer: true } },
+          reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
           assignees: true,
           history: { include: { user: true }, orderBy: { timestamp: "desc" } },
         },
