@@ -738,6 +738,67 @@ const mapUserBasic = (user: any) => {
   };
 };
 
+const LOG_ENTRY_FIELD_LABELS: Record<string, string> = {
+  title: "Título",
+  description: "Descripción",
+  type: "Tipo",
+  status: "Estado",
+  subject: "Asunto",
+  location: "Ubicación",
+  entryDate: "Fecha de entrada",
+  activityStartDate: "Fecha inicio actividad",
+  activityEndDate: "Fecha fin actividad",
+  isConfidential: "Confidencial",
+  activitiesPerformed: "Actividades realizadas",
+  materialsUsed: "Materiales utilizados",
+  workforce: "Personal en obra",
+  weatherConditions: "Condiciones climáticas",
+  additionalObservations: "Observaciones adicionales",
+  scheduleDay: "Día del plazo",
+  locationDetails: "Detalles de localización",
+  contractorObservations: "Observaciones del contratista",
+  interventoriaObservations: "Observaciones de la interventoría",
+  contractorPersonnel: "Personal del contratista",
+  interventoriaPersonnel: "Personal de la interventoría",
+  equipmentResources: "Equipos y recursos",
+  executedActivities: "Ejecución de actividades",
+  executedQuantities: "Cantidades ejecutadas",
+  scheduledActivities: "Actividades programadas",
+  qualityControls: "Controles de calidad",
+  materialsReceived: "Materiales recibidos",
+  safetyNotes: "HSEQ / SST",
+  projectIssues: "Control, novedades e incidencias",
+  siteVisits: "Visitas de obra",
+  weatherReport: "Reporte climático",
+};
+
+const logEntryResponseInclude = {
+  author: true,
+  attachments: true,
+  comments: {
+    include: { author: true },
+    orderBy: { timestamp: "asc" },
+  },
+  signatures: { include: { signer: true } },
+  signatureTasks: {
+    include: { signer: true },
+    orderBy: { assignedAt: "asc" },
+  },
+  reviewTasks: {
+    include: { reviewer: true },
+    orderBy: { assignedAt: "asc" },
+  } as any,
+  assignees: true,
+  history: { include: { user: true }, orderBy: { timestamp: "desc" } },
+  contractorReviewer: true,
+} as const;
+
+const getStatusDisplayName = (status: string) =>
+  entryStatusReverseMap[status] || status;
+
+const getFieldLabel = (fieldKey: string) =>
+  LOG_ENTRY_FIELD_LABELS[fieldKey] || fieldKey;
+
 const extractUserIds = (input: unknown): string[] => {
   if (!input) return [];
   let rawValue = input;
@@ -1040,6 +1101,13 @@ const formatLogEntry = (entry: any) => {
         (signer): signer is NonNullable<ReturnType<typeof mapUserBasic>> =>
           Boolean(signer)
       ),
+    contractorReviewCompleted: Boolean(entry.contractorReviewCompleted),
+    contractorReviewCompletedAt: entry.contractorReviewCompletedAt
+      ? new Date(entry.contractorReviewCompletedAt).toISOString()
+      : null,
+    contractorReviewer: entry.contractorReviewer
+      ? mapUserBasic(entry.contractorReviewer)
+      : null,
     history: (entry.history || []).map((change: any) => ({
       id: change.id,
       fieldName: change.fieldName,
@@ -2719,16 +2787,7 @@ app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const entries = await prisma.logEntry.findMany({
       orderBy: { createdAt: "desc" },
-      include: {
-        author: true,
-        attachments: true,
-        comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
-        signatures: { include: { signer: true } },
-        signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
-        reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
-        assignees: true,
-        history: { include: { user: true }, orderBy: { timestamp: "desc" } },
-      } as any,
+      include: logEntryResponseInclude as any,
     });
 
     const formattedEntries = entries.map((entry) => ({
@@ -3106,22 +3165,7 @@ app.post(
 
       const entryWithRelations = await prisma.logEntry.findUnique({
         where: { id: logEntry.id },
-        include: {
-          author: true,
-          attachments: true,
-          comments: {
-            include: { author: true },
-            orderBy: { timestamp: "asc" },
-          },
-          signatures: { include: { signer: true } },
-          signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
-          reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
-          assignees: true,
-          history: {
-            include: { user: true },
-            orderBy: { timestamp: "desc" },
-          },
-        },
+        include: logEntryResponseInclude as any,
       });
 
       if (!entryWithRelations) {
@@ -3198,19 +3242,7 @@ app.get(
       const { id } = req.params;
       const entry = await prisma.logEntry.findUnique({
         where: { id },
-        include: {
-          author: true,
-          attachments: true,
-          comments: {
-            include: { author: true },
-            orderBy: { timestamp: "asc" },
-          },
-          signatures: { include: { signer: true } },
-          signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
-          reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
-          assignees: true,
-          history: { include: { user: true }, orderBy: { timestamp: "desc" } },
-        },
+        include: logEntryResponseInclude as any,
       });
 
       if (!entry) {
@@ -3226,6 +3258,397 @@ app.get(
     } catch (error) {
       console.error("Error al obtener anotación:", error);
       res.status(500).json({ error: "No se pudo obtener la anotación." });
+    }
+  }
+);
+
+app.post(
+  "/api/log-entries/:id/send-to-contractor",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.userId;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: { author: true },
+      });
+
+      if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      if (entry.status !== "DRAFT") {
+        return res.status(400).json({
+          error:
+            "Solo puedes enviar al contratista una anotación que esté en borrador.",
+          code: "INVALID_STATUS_FOR_CONTRACTOR_REVIEW",
+        });
+      }
+
+      const currentUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, fullName: true, appRole: true, projectRole: true },
+      });
+
+      if (!currentUser) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      const isAdmin = currentUser.appRole === "admin";
+      const isAuthor = entry.authorId === userId;
+
+      if (!isAuthor && !isAdmin) {
+        return res.status(403).json({
+          error:
+            "Solo la interventoría que creó la anotación (o un administrador) puede enviarla al contratista.",
+          code: "ONLY_AUTHOR_CAN_SEND_CONTRACTOR",
+        });
+      }
+
+      const updatedEntry = await prisma.logEntry.update({
+        where: { id },
+        data: {
+          status: "SUBMITTED",
+          contractorReviewCompleted: false,
+          contractorReviewCompletedAt: null,
+          contractorReviewerId: null,
+        },
+        include: logEntryResponseInclude as any,
+      });
+
+      await recordLogEntryChanges(id, userId, [
+        {
+          fieldName: getFieldLabel("status"),
+          oldValue: getStatusDisplayName(entry.status),
+          newValue: getStatusDisplayName("SUBMITTED"),
+        },
+        {
+          fieldName: "Flujo",
+          oldValue: null,
+          newValue: `${currentUser.fullName || "Usuario"} envió la anotación al contratista para revisión.`,
+        },
+      ]);
+
+      const formattedEntry = {
+        ...formatLogEntry(updatedEntry),
+        attachments: (updatedEntry.attachments || []).map(buildAttachmentResponse),
+      };
+
+      res.json(formattedEntry);
+    } catch (error) {
+      console.error("Error al enviar anotación al contratista:", error);
+      res.status(500).json({
+        error: "No se pudo enviar la anotación al contratista.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/log-entries/:id/contractor-review/complete",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.userId;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: { assignees: true },
+      });
+
+      if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      if (entry.status !== "SUBMITTED") {
+        return res.status(400).json({
+          error:
+            "Solo se puede completar la revisión del contratista cuando la anotación está en estado 'Revisión contratista'.",
+          code: "NOT_IN_CONTRACTOR_REVIEW",
+        });
+      }
+
+      if (entry.contractorReviewCompleted) {
+        return res.status(409).json({
+          error: "La revisión del contratista ya fue registrada.",
+          code: "CONTRACTOR_REVIEW_ALREADY_COMPLETED",
+        });
+      }
+
+      const currentUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, fullName: true, appRole: true, projectRole: true },
+      });
+
+      if (!currentUser) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      const isAdmin = currentUser.appRole === "admin";
+      const isContractor = currentUser.projectRole === "CONTRACTOR_REP";
+      const isAssignee =
+        entry.assignees?.some((assignee: any) => assignee.id === userId) ||
+        false;
+
+      if (!isAdmin && !isContractor && !isAssignee) {
+        return res.status(403).json({
+          error:
+            "Solo un representante del contratista asignado puede cerrar la revisión.",
+          code: "CONTRACTOR_ONLY_ACTION",
+        });
+      }
+
+      const updatedEntry = await prisma.logEntry.update({
+        where: { id },
+        data: {
+          status: "NEEDS_REVIEW",
+          contractorReviewCompleted: true,
+          contractorReviewCompletedAt: new Date(),
+          contractorReviewerId: userId,
+        },
+        include: logEntryResponseInclude as any,
+      });
+
+      await recordLogEntryChanges(id, userId, [
+        {
+          fieldName: getFieldLabel("status"),
+          oldValue: getStatusDisplayName("SUBMITTED"),
+          newValue: getStatusDisplayName("NEEDS_REVIEW"),
+        },
+        {
+          fieldName: "Flujo",
+          oldValue: null,
+          newValue: `${currentUser.fullName || "Usuario"} completó la revisión del contratista.`,
+        },
+      ]);
+
+      const formattedEntry = {
+        ...formatLogEntry(updatedEntry),
+        attachments: (updatedEntry.attachments || []).map(buildAttachmentResponse),
+      };
+
+      res.json(formattedEntry);
+    } catch (error) {
+      console.error("Error al completar revisión del contratista:", error);
+      res.status(500).json({
+        error: "No se pudo completar la revisión del contratista.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/log-entries/:id/return-to-contractor",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.userId;
+      const { reason } = req.body ?? {};
+
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: { author: true },
+      });
+
+      if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      if (entry.status !== "NEEDS_REVIEW") {
+        return res.status(400).json({
+          error:
+            "Solo se puede devolver al contratista una anotación que esté en revisión final.",
+          code: "NOT_IN_FINAL_REVIEW",
+        });
+      }
+
+      const currentUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, fullName: true, appRole: true },
+      });
+
+      if (!currentUser) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      const isAdmin = currentUser.appRole === "admin";
+      const isAuthor = entry.authorId === userId;
+
+      if (!isAuthor && !isAdmin) {
+        return res.status(403).json({
+          error:
+            "Solo la interventoría que elaboró la anotación puede devolverla al contratista.",
+          code: "ONLY_AUTHOR_CAN_RETURN",
+        });
+      }
+
+      const cleanedReason =
+        typeof reason === "string" && reason.trim().length > 0
+          ? reason.trim().slice(0, 500)
+          : null;
+
+      const updatedEntry = await prisma.logEntry.update({
+        where: { id },
+        data: {
+          status: "SUBMITTED",
+          contractorReviewCompleted: false,
+          contractorReviewCompletedAt: null,
+          contractorReviewerId: null,
+        },
+        include: logEntryResponseInclude as any,
+      });
+
+      const changeSet: Array<{
+        fieldName: string;
+        oldValue: string | null;
+        newValue: string | null;
+      }> = [
+        {
+          fieldName: getFieldLabel("status"),
+          oldValue: getStatusDisplayName("NEEDS_REVIEW"),
+          newValue: getStatusDisplayName("SUBMITTED"),
+        },
+        {
+          fieldName: "Flujo",
+          oldValue: null,
+          newValue: `${currentUser.fullName || "Usuario"} devolvió la anotación al contratista para nuevos comentarios.`,
+        },
+      ];
+
+      if (cleanedReason) {
+        changeSet.push({
+          fieldName: "Motivo devolución",
+          oldValue: null,
+          newValue: cleanedReason,
+        });
+      }
+
+      await recordLogEntryChanges(id, userId, changeSet);
+
+      const formattedEntry = {
+        ...formatLogEntry(updatedEntry),
+        attachments: (updatedEntry.attachments || []).map(
+          buildAttachmentResponse
+        ),
+      };
+
+      res.json(formattedEntry);
+    } catch (error) {
+      console.error("Error al devolver anotación al contratista:", error);
+      res.status(500).json({
+        error: "No se pudo devolver la anotación al contratista.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/log-entries/:id/approve-for-signature",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.userId;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: { author: true },
+      });
+
+      if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      if (entry.status !== "NEEDS_REVIEW") {
+        return res.status(400).json({
+          error:
+            "Solo se puede aprobar para firmas una anotación que esté en revisión final de interventoría.",
+          code: "NOT_IN_FINAL_REVIEW",
+        });
+      }
+
+      if (!entry.contractorReviewCompleted) {
+        return res.status(400).json({
+          error:
+            "Debes esperar a que el contratista complete su revisión antes de aprobar para firma.",
+          code: "CONTRACTOR_REVIEW_PENDING",
+        });
+      }
+
+      const currentUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, fullName: true, appRole: true },
+      });
+
+      if (!currentUser) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      const isAdmin = currentUser.appRole === "admin";
+      const isAuthor = entry.authorId === userId;
+
+      if (!isAuthor && !isAdmin) {
+        return res.status(403).json({
+          error:
+            "Solo la interventoría que elaboró la anotación puede aprobarla para firmas.",
+          code: "ONLY_AUTHOR_CAN_APPROVE",
+        });
+      }
+
+      const updatedEntry = await prisma.logEntry.update({
+        where: { id },
+        data: { status: "APPROVED" },
+        include: logEntryResponseInclude as any,
+      });
+
+      await recordLogEntryChanges(id, userId, [
+        {
+          fieldName: getFieldLabel("status"),
+          oldValue: getStatusDisplayName("NEEDS_REVIEW"),
+          newValue: getStatusDisplayName("APPROVED"),
+        },
+        {
+          fieldName: "Flujo",
+          oldValue: null,
+          newValue: `${currentUser.fullName || "Usuario"} aprobó la anotación y la dejó lista para firma.`,
+        },
+      ]);
+
+      const formattedEntry = {
+        ...formatLogEntry(updatedEntry),
+        attachments: (updatedEntry.attachments || []).map(buildAttachmentResponse),
+      };
+
+      res.json(formattedEntry);
+    } catch (error) {
+      console.error("Error al aprobar anotación para firma:", error);
+      res.status(500).json({
+        error: "No se pudo aprobar la anotación para firmas.",
+      });
     }
   }
 );
@@ -3271,140 +3694,83 @@ app.put(
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
-      // Leer el estado del body primero para validar
       const { status: statusFromBody } = req.body ?? {};
-      
-      // Determinar el nuevo estado que se quiere establecer
-      const requestedStatus = statusFromBody !== undefined 
-        ? (entryStatusMap[statusFromBody] || entryStatusMap[entryStatusReverseMap[statusFromBody] || "DRAFT"] || existingEntry.status)
-        : existingEntry.status;
+      if (statusFromBody !== undefined) {
+        const incomingStatus =
+          entryStatusMap[statusFromBody] ||
+          entryStatusMap[entryStatusReverseMap[statusFromBody] || ""] ||
+          statusFromBody;
+        if (incomingStatus && incomingStatus !== existingEntry.status) {
+          return res.status(400).json({
+            error: "El estado de la anotación solo puede cambiar mediante las acciones del flujo (enviar, revisar o aprobar).",
+            code: "STATUS_READ_ONLY",
+          });
+        }
+      }
 
-      // Debug: Log para ver qué estados tenemos
-      console.log("DEBUG APROBACIÓN:", {
-        entryId: id,
-        existingStatus: existingEntry.status,
-        existingStatusDisplay: entryStatusReverseMap[existingEntry.status] || existingEntry.status,
-        statusFromBody,
-        requestedStatus,
-        isApproved: existingEntry.status === "APPROVED",
-        willBeApproved: requestedStatus === "APPROVED",
-        entryStatusMapKeys: Object.keys(entryStatusMap),
-        entryStatusReverseMapKeys: Object.keys(entryStatusReverseMap),
+      const currentUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          fullName: true,
+          appRole: true,
+          projectRole: true,
+        },
       });
 
-      // Si solo se está cambiando el estado a APPROVED y la anotación está en un estado editable,
-      // permitir el cambio sin validar la edición completa
-      const isOnlyApproving = requestedStatus === "APPROVED" && 
-                              existingEntry.status !== "APPROVED" &&
-                              ["DRAFT", "SUBMITTED", "NEEDS_REVIEW"].includes(existingEntry.status);
-
-      // Si ya está aprobada y se intenta aprobar de nuevo, rechazar con mensaje claro
-      // IMPORTANTE: Solo rechazar si realmente está aprobada (no si está en otro estado)
-      if (existingEntry.status === "APPROVED" && requestedStatus === "APPROVED") {
-        console.log("DEBUG: Rechazando aprobación - ya está aprobada", {
-          existingStatus: existingEntry.status,
-          requestedStatus,
-        });
-        return res.status(403).json({
-          error: "Esta anotación ya está aprobada. No se puede aprobar nuevamente.",
-          code: "ALREADY_APPROVED",
-          currentStatus: existingEntry.status,
-          currentStatusDisplay: entryStatusReverseMap[existingEntry.status] || existingEntry.status,
+      if (!currentUser) {
+        return res.status(404).json({
+          error: "Usuario no encontrado.",
         });
       }
 
-      // Si se intenta aprobar pero la anotación no está en un estado editable, rechazar
-      if (requestedStatus === "APPROVED" && !["DRAFT", "SUBMITTED", "NEEDS_REVIEW"].includes(existingEntry.status)) {
-        return res.status(403).json({
-          error: `No se puede aprobar una anotación en estado '${entryStatusReverseMap[existingEntry.status] || existingEntry.status}'. Solo se pueden aprobar anotaciones en estado 'Borrador', 'Radicado' o 'En Revisión'.`,
-          code: "CANNOT_APPROVE",
-          currentStatus: existingEntry.status,
-        });
-      }
-
-      // Si se intenta aprobar, verificar que todas las revisiones estén completadas
-      if (requestedStatus === "APPROVED" && existingEntry.status === "NEEDS_REVIEW") {
-        const reviewTasks = await (prisma as any).logEntryReviewTask.findMany({
-          where: { logEntryId: id },
-        });
-        
-        if (reviewTasks.length > 0) {
-          const pendingReviews = reviewTasks.filter((task: any) => task.status === "PENDING");
-          if (pendingReviews.length > 0) {
-            const pendingReviewers = await prisma.user.findMany({
-              where: { id: { in: pendingReviews.map((t: any) => t.reviewerId) } },
-              select: { fullName: true },
-            });
-            const reviewerNames = pendingReviewers.map((u) => u.fullName).join(", ");
-            
-            return res.status(403).json({
-              error: `No se puede aprobar la anotación. Faltan ${pendingReviews.length} revisión(es) pendiente(s) de: ${reviewerNames}. Todas las revisiones deben estar completadas antes de aprobar.`,
-              code: "PENDING_REVIEWS",
-              pendingReviewers: reviewerNames,
-              pendingCount: pendingReviews.length,
-            });
-          }
-        }
-      }
-
-      // Si no es solo aprobar, validar que el estado actual permita edición
-      if (!isOnlyApproving && !["DRAFT", "SUBMITTED", "NEEDS_REVIEW"].includes(existingEntry.status)) {
-        return res.status(403).json({
-          error: `No se puede editar una anotación en estado '${entryStatusReverseMap[existingEntry.status] || existingEntry.status}'. Solo se pueden editar anotaciones en estado 'Borrador', 'Radicado' o 'En Revisión'.`,
-          code: "ENTRY_NOT_EDITABLE",
-          currentStatus: existingEntry.status,
-        });
-      }
-
-      // Verificar permisos: el autor, los asignados, o los responsables (firmantes) pueden editar
+      const isAdmin = currentUser.appRole === "admin";
       const isAuthor = existingEntry.authorId === userId;
-      const isAssignee = existingEntry.assignees?.some((a: any) => a.id === userId) || false;
-      const currentUser = await prisma.user.findUnique({ where: { id: userId } });
-      const isAdmin = currentUser?.appRole === "admin";
+      const isContractorUser = currentUser.projectRole === "CONTRACTOR_REP";
+      const status = existingEntry.status;
 
-      // Verificar si el usuario es un responsable (firmante requerido)
-      // Usar try-catch para no fallar si hay problemas con la query
-      let isRequiredSigner = false;
-      let authorHasSigned = false;
-      
-      try {
-        const entryWithSignatures = await prisma.logEntry.findUnique({
-          where: { id },
-          include: {
-            signatureTasks: { include: { signer: true } },
-          },
-        });
-        
-        if (entryWithSignatures?.signatureTasks) {
-          isRequiredSigner = entryWithSignatures.signatureTasks.some(
-            (task: any) => task.signerId === userId
-          );
-          
-          // Verificar si el autor ya ha firmado
-          authorHasSigned = entryWithSignatures.signatureTasks.some(
-            (task: any) => task.signerId === existingEntry.authorId && task.status === "SIGNED"
-          );
+      if (status === "DRAFT") {
+        if (!isAuthor && !isAdmin) {
+          return res.status(403).json({
+            error:
+              "Solo la interventoría que creó la anotación (o un administrador) puede modificarla mientras está en borrador.",
+            code: "DRAFT_ONLY_AUTHOR",
+          });
         }
-      } catch (sigError) {
-        console.warn("Error verificando firmas para permisos:", sigError);
-        // Si hay error, asumir que no es responsable y que el autor no ha firmado
-        // Esto permitirá que el flujo continúe con la validación normal
-      }
-
-      // Si el autor ya firmó, solo el autor puede editar
-      // Si el autor NO ha firmado, los responsables (asignados o firmantes) pueden editar
-      if (authorHasSigned && !isAuthor && !isAdmin) {
+      } else if (status === "SUBMITTED") {
+        if (!isContractorUser && !isAdmin) {
+          return res.status(403).json({
+            error:
+              "Solo el contratista asignado puede agregar observaciones durante su fase de revisión.",
+            code: "CONTRACTOR_REVIEW_ONLY",
+          });
+        }
+      } else if (status === "NEEDS_REVIEW") {
+        if (!isAuthor && !isAdmin) {
+          return res.status(403).json({
+            error:
+              "Solo la interventoría puede ajustar la anotación durante la revisión final.",
+            code: "FINAL_REVIEW_ONLY_AUTHOR",
+          });
+        }
+      } else {
         return res.status(403).json({
-          error: "No tienes permisos para editar esta anotación. El autor ya ha firmado, solo el autor puede hacer modificaciones.",
-          code: "AUTHOR_ALREADY_SIGNED",
+          error: `No se puede editar una anotación en estado '${entryStatusReverseMap[status] || status}'.`,
+          code: "ENTRY_NOT_EDITABLE",
+          currentStatus: status,
         });
       }
 
-      // Si no es autor, asignado, responsable (firmante), ni admin, rechazar
-      if (!isAuthor && !isAssignee && !isRequiredSigner && !isAdmin) {
+      if (
+        status === "SUBMITTED" &&
+        req.files &&
+        Array.isArray(req.files) &&
+        (req.files as Express.Multer.File[]).length > 0
+      ) {
         return res.status(403).json({
-          error: "No tienes permisos para editar esta anotación. Solo el autor, los asignados, los responsables (firmantes) o un administrador pueden editarla.",
-          code: "INSUFFICIENT_PERMISSIONS",
+          error:
+            "Durante la revisión del contratista no se pueden adjuntar archivos ni fotografías.",
+          code: "CONTRACTOR_ATTACHMENTS_NOT_ALLOWED",
         });
       }
 
@@ -3428,10 +3794,6 @@ app.put(
       if (title !== undefined) updateData.title = title;
       if (description !== undefined) updateData.description = description;
       if (type !== undefined) updateData.type = entryTypeMap[type] || existingEntry.type;
-      // Usar el requestedStatus que ya calculamos arriba
-      if (statusFromBody !== undefined) {
-        updateData.status = requestedStatus;
-      }
       if (subject !== undefined) updateData.subject = typeof subject === "string" ? subject : "";
       if (location !== undefined) updateData.location = typeof location === "string" ? location : "";
       if (entryDate !== undefined) updateData.entryDate = entryDate ? new Date(entryDate) : existingEntry.entryDate;
@@ -3513,6 +3875,13 @@ app.put(
 
       // Manejar asignados
       if (assigneeIds !== undefined) {
+        if (status === "SUBMITTED") {
+          return res.status(403).json({
+            error:
+              "Durante la revisión del contratista no se pueden reasignar responsables.",
+            code: "CONTRACTOR_CANNOT_ASSIGN",
+          });
+        }
         const assigneeArray = Array.isArray(assigneeIds) ? assigneeIds : [];
         const validAssigneeIds = assigneeArray
           .filter((id) => typeof id === "string" && id.trim().length > 0);
@@ -3584,15 +3953,30 @@ app.put(
         };
       }
 
+      const effectiveUpdateKeys = Object.keys(updateData).filter(
+        (key) => key !== "attachments"
+      );
+
+      if (status === "SUBMITTED") {
+        const contractorAllowedFields = new Set(["contractorObservations"]);
+        const disallowed = effectiveUpdateKeys.filter(
+          (key) => !contractorAllowedFields.has(key)
+        );
+        if (disallowed.length > 0) {
+          return res.status(403).json({
+            error:
+              "Durante la revisión del contratista solo se puede actualizar el campo 'Observaciones del contratista'.",
+            code: "CONTRACTOR_FIELDS_LOCKED",
+            disallowedFields: disallowed,
+          });
+        }
+      }
+
       // Registrar cambios en el historial
       const changes: Array<{ fieldName: string; oldValue: string | null; newValue: string | null }> = [];
       
       // Obtener información del usuario que está haciendo los cambios
-      const modifyingUser = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { fullName: true },
-      });
-      const modifierName = modifyingUser?.fullName || "Usuario";
+      const modifierName = currentUser.fullName || "Usuario";
       
       // Función helper para comparar valores y detectar si realmente cambió
       const valuesAreEqual = (oldVal: any, newVal: any): boolean => {
@@ -3750,41 +4134,6 @@ app.put(
         return strValue.length > 200 ? strValue.substring(0, 200) + "..." : strValue;
       };
       
-      // Mapeo de nombres de campos en inglés a español (como aparecen en el formulario)
-      const fieldNameMap: Record<string, string> = {
-        title: "Título",
-        description: "Descripción",
-        type: "Tipo",
-        status: "Estado",
-        subject: "Asunto",
-        location: "Ubicación",
-        entryDate: "Fecha de entrada",
-        activityStartDate: "Fecha de inicio de actividad",
-        activityEndDate: "Fecha de fin de actividad",
-        isConfidential: "Confidencial",
-        activitiesPerformed: "Actividades realizadas",
-        materialsUsed: "Materiales utilizados",
-        workforce: "Personal en obra",
-        weatherConditions: "Condiciones climáticas",
-        additionalObservations: "Observaciones adicionales",
-        scheduleDay: "Día de programación",
-        locationDetails: "Detalles de ubicación",
-        contractorObservations: "Observaciones del contratista",
-        interventoriaObservations: "Observaciones de la interventoría",
-        contractorPersonnel: "Personal del contratista",
-        interventoriaPersonnel: "Personal de la interventoría",
-        equipmentResources: "Equipos y recursos",
-        executedActivities: "Ejecución de actividades",
-        executedQuantities: "Cantidades de obra ejecutadas",
-        scheduledActivities: "Actividades programadas",
-        qualityControls: "Controles de calidad",
-        materialsReceived: "Materiales recibidos",
-        safetyNotes: "Gestión HSEQ / SST",
-        projectIssues: "Control, novedades e incidencias",
-        siteVisits: "Visitas registradas",
-        weatherReport: "Reporte del clima",
-      };
-      
       // Registrar cambios en campos normales
       for (const [key, newValue] of Object.entries(updateData)) {
         if (key === "assignees" || key === "attachments") continue; // Estos se manejan por separado
@@ -3812,7 +4161,7 @@ app.put(
           // Solo registrar si hay un cambio real y no son ambos "vacío"
           if (formattedOldValue !== formattedNewValue && !bothEmpty && !bothEmptyArrays) {
             // Usar el nombre en español si existe en el mapeo, sino usar el nombre original
-            const displayFieldName = fieldNameMap[key] || key;
+            const displayFieldName = LOG_ENTRY_FIELD_LABELS[key] || key;
             
             console.log(`DEBUG: Cambio detectado en campo ${displayFieldName} (${key}):`, {
               oldValue: formattedOldValue,
@@ -3883,19 +4232,7 @@ app.put(
         updatedEntry = await prisma.logEntry.update({
           where: { id },
           data: updateData,
-          include: {
-            author: true,
-            attachments: true,
-            comments: {
-              include: { author: true },
-              orderBy: { timestamp: "asc" },
-            },
-            signatures: { include: { signer: true } },
-            signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
-            reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
-            assignees: true,
-            history: { include: { user: true }, orderBy: { timestamp: "desc" } },
-          } as any,
+          include: logEntryResponseInclude as any,
         });
         console.log("DEBUG: Anotación actualizada exitosamente");
       } catch (updateError: any) {
@@ -3944,6 +4281,13 @@ app.put(
 
       // Actualizar tareas de firma si se cambian los firmantes requeridos
       if (requiredSignatories !== undefined) {
+        if (status === "SUBMITTED") {
+          return res.status(403).json({
+            error:
+              "Durante la revisión del contratista no se pueden modificar los firmantes requeridos.",
+            code: "CONTRACTOR_CANNOT_EDIT_SIGNERS",
+          });
+        }
         try {
           let requiredSignerIds: string[] = [];
           
@@ -4025,19 +4369,7 @@ app.put(
       // Recargar la entrada con todas las relaciones actualizadas
       const finalEntry = await prisma.logEntry.findUnique({
         where: { id },
-        include: {
-          author: true,
-          attachments: true,
-          comments: {
-            include: { author: true },
-            orderBy: { timestamp: "asc" },
-          },
-          signatures: { include: { signer: true } },
-          signatureTasks: { include: { signer: true }, orderBy: { assignedAt: "asc" } },
-          reviewTasks: { include: { reviewer: true }, orderBy: { assignedAt: "asc" } } as any,
-          assignees: true,
-          history: { include: { user: true }, orderBy: { timestamp: "desc" } },
-        } as any,
+        include: logEntryResponseInclude as any,
       });
 
       if (!finalEntry) {

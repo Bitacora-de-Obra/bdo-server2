@@ -357,11 +357,16 @@ model LogEntry {
   history           LogEntryHistory[]
   signatureTasks    LogEntrySignatureTask[]
   reviewTasks       LogEntryReviewTask[]
+  contractorReviewCompleted   Boolean   @default(false)
+  contractorReviewCompletedAt DateTime?
+  contractorReviewer          User?     @relation(fields: [contractorReviewerId], references: [id])
+  contractorReviewerId        String?
   documentSignatureLogs DocumentSignatureLog[]
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
   @@unique([projectId, entryDate])
+  @@index([contractorReviewerId])
 }
 
 model LogEntryHistory {

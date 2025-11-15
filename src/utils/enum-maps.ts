@@ -47,14 +47,24 @@ export const entryTypeMap: { [key: string]: EntryType } = {
  * Mapea los estados de anotación del frontend a los valores del enum de Prisma.
  */
 export const entryStatusMap: { [key: string]: EntryStatus } = {
+    // Valores base (inglés / internos)
+    APPROVED: 'APPROVED',
+    NEEDS_REVIEW: 'NEEDS_REVIEW',
+    SUBMITTED: 'SUBMITTED',
+    REJECTED: 'REJECTED',
+    DRAFT: 'DRAFT',
+    SIGNED: 'SIGNED',
+    // Etiquetas históricas (español anterior)
     'Aprobado': 'APPROVED',
     'En Revisión': 'NEEDS_REVIEW',
     'Radicado': 'SUBMITTED',
     'Rechazado': 'REJECTED',
     'Borrador': 'DRAFT',
     'Firmado': 'SIGNED',
-    'SIGNED': 'SIGNED',
-    'NEEDS_REVIEW': 'NEEDS_REVIEW', // Añadido para manejar el estado en inglés
+    // Nuevas etiquetas del flujo
+    'Listo para firmas': 'APPROVED',
+    'Revisión final': 'NEEDS_REVIEW',
+    'Revisión contratista': 'SUBMITTED',
 };
 
 export const deliveryMethodMap: { [key: string]: DeliveryMethod } = { // <-- AÑADE ESTE BLOQUE
