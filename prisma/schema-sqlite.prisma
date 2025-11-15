@@ -48,6 +48,14 @@ model LogEntry {
   workforce              String   @default("")
   weatherConditions      String   @default("")
   additionalObservations String   @default("")
+  safetyFindings        String?
+  safetyContractorResponse String?
+  environmentFindings   String?
+  environmentContractorResponse String?
+  socialActivities      Json?
+  socialObservations    String?
+  socialContractorResponse String?
+  socialPhotoSummary    String?
   type        String   // EntryType as String
   status      String   // EntryStatus as String
   authorId    String
