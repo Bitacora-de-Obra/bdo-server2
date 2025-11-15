@@ -29,6 +29,8 @@ enum EntryType {
   SAFETY
   ADMINISTRATIVE
   TECHNICAL
+  ENVIRONMENTAL
+  SOCIAL
 }
 
 enum EntryStatus {
@@ -180,6 +182,7 @@ model User {
   documentSignatureLogs   DocumentSignatureLog[]
   signatureTasks          LogEntrySignatureTask[]
   reviewTasks             LogEntryReviewTask[]
+  contractorReviewedEntries LogEntry[] @relation("ContractorReviewer")
 }
 
 model Project {
@@ -337,6 +340,14 @@ model LogEntry {
   weatherReport           Json?
   contractorObservations  String?
   interventoriaObservations String?
+  safetyFindings          String?
+  safetyContractorResponse String?
+  environmentFindings     String?
+  environmentContractorResponse String?
+  socialActivities        Json?
+  socialObservations      String?
+  socialContractorResponse String?
+  socialPhotoSummary      String?
   locationDetails         String @default("")
   scheduleDay             Int? @default(0)
   type              EntryType
@@ -359,13 +370,13 @@ model LogEntry {
   reviewTasks       LogEntryReviewTask[]
   contractorReviewCompleted   Boolean   @default(false)
   contractorReviewCompletedAt DateTime?
-  contractorReviewer          User?     @relation(fields: [contractorReviewerId], references: [id])
+  contractorReviewer          User?     @relation("ContractorReviewer", fields: [contractorReviewerId], references: [id])
   contractorReviewerId        String?
   documentSignatureLogs DocumentSignatureLog[]
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
-  @@unique([projectId, entryDate])
+  @@unique([projectId, entryDate, type])
   @@index([contractorReviewerId])
 }
 

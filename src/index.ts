@@ -758,6 +758,15 @@ const LOG_ENTRY_FIELD_LABELS: Record<string, string> = {
   locationDetails: "Detalles de localización",
   contractorObservations: "Observaciones del contratista",
   interventoriaObservations: "Observaciones de la interventoría",
+  safetyFindings: "Componente SST - Observaciones de interventoría",
+  safetyContractorResponse: "Componente SST - Respuesta del contratista",
+  environmentFindings: "Componente ambiental - Observaciones de interventoría",
+  environmentContractorResponse:
+    "Componente ambiental - Respuesta del contratista",
+  socialActivities: "Componente social - Registro de actividades",
+  socialObservations: "Componente social - Observaciones de interventoría",
+  socialContractorResponse: "Componente social - Respuesta del contratista",
+  socialPhotoSummary: "Componente social - Registro fotográfico",
   contractorPersonnel: "Personal del contratista",
   interventoriaPersonnel: "Personal de la interventoría",
   equipmentResources: "Equipos y recursos",
@@ -1062,6 +1071,14 @@ const formatLogEntry = (entry: any) => {
     siteVisits: normalizeListItems(entry.siteVisits),
     contractorObservations: entry.contractorObservations || "",
     interventoriaObservations: entry.interventoriaObservations || "",
+    safetyFindings: entry.safetyFindings || "",
+    safetyContractorResponse: entry.safetyContractorResponse || "",
+    environmentFindings: entry.environmentFindings || "",
+    environmentContractorResponse: entry.environmentContractorResponse || "",
+    socialActivities: normalizeListItems(entry.socialActivities),
+    socialObservations: entry.socialObservations || "",
+    socialContractorResponse: entry.socialContractorResponse || "",
+    socialPhotoSummary: entry.socialPhotoSummary || "",
     requiredSignatories: requiredSigners,
     signatureTasks: formattedSignatureTasks,
     reviewTasks: (entry.reviewTasks || []).map((task: any) => ({
@@ -3695,6 +3712,7 @@ app.put(
       }
 
       const { status: statusFromBody } = req.body ?? {};
+      let requestedStatus = existingEntry.status;
       if (statusFromBody !== undefined) {
         const incomingStatus =
           entryStatusMap[statusFromBody] ||
@@ -3706,6 +3724,10 @@ app.put(
             code: "STATUS_READ_ONLY",
           });
         }
+        requestedStatus =
+          typeof incomingStatus === "string"
+            ? incomingStatus
+            : existingEntry.status;
       }
 
       const currentUser = await prisma.user.findUnique({
@@ -3815,6 +3837,7 @@ app.put(
         "projectIssues",
         "siteVisits",
         "weatherReport",
+      "socialActivities",
       ];
 
       for (const field of jsonFields) {
@@ -3838,6 +3861,13 @@ app.put(
         "locationDetails",
         "contractorObservations",
         "interventoriaObservations",
+      "safetyFindings",
+      "safetyContractorResponse",
+      "environmentFindings",
+      "environmentContractorResponse",
+      "socialObservations",
+      "socialContractorResponse",
+      "socialPhotoSummary",
       ];
 
       for (const field of textFields) {
@@ -3958,14 +3988,19 @@ app.put(
       );
 
       if (status === "SUBMITTED") {
-        const contractorAllowedFields = new Set(["contractorObservations"]);
+        const contractorAllowedFields = new Set([
+          "contractorObservations",
+          "safetyContractorResponse",
+          "environmentContractorResponse",
+          "socialContractorResponse",
+        ]);
         const disallowed = effectiveUpdateKeys.filter(
           (key) => !contractorAllowedFields.has(key)
         );
         if (disallowed.length > 0) {
           return res.status(403).json({
             error:
-              "Durante la revisión del contratista solo se puede actualizar el campo 'Observaciones del contratista'.",
+              "Durante la revisión del contratista solo se pueden actualizar las respuestas del contratista.",
             code: "CONTRACTOR_FIELDS_LOCKED",
             disallowedFields: disallowed,
           });
@@ -4691,8 +4726,13 @@ app.post(
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
-      // Permitir firmar en cualquier estado (ya no se requiere aprobación previa)
-      // No hay restricción de estado para firmar
+      if (entry.status !== "APPROVED" && entry.status !== "SIGNED") {
+        return res.status(403).json({
+          error:
+            "La anotación aún no está lista para firmas. Debe estar aprobada por la interventoría.",
+          code: "SIGNATURES_NOT_ALLOWED",
+        });
+      }
 
       let myTask =
         (entry.signatureTasks || []).find(
@@ -7970,6 +8010,98 @@ app.get(
     } catch (error) {
       console.error("Error al obtener usuarios admin:", error);
       res.status(500).json({ error: "No se pudieron cargar los usuarios." });
+    }
+  }
+);
+
+app.patch(
+  "/api/admin/users/:id",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { appRole, projectRole, status } = req.body ?? {};
+
+      if (!id) {
+        return res.status(400).json({ error: "Se requiere el ID del usuario." });
+      }
+
+      const updates: Prisma.UserUpdateInput = {};
+
+      if (appRole !== undefined) {
+        if (!["admin", "editor", "viewer"].includes(appRole)) {
+          return res.status(400).json({
+            error: "Rol de aplicación inválido.",
+            code: "INVALID_APP_ROLE",
+          });
+        }
+        updates.appRole = appRole;
+      }
+
+      if (projectRole !== undefined) {
+        const resolvedRole = resolveProjectRole(projectRole);
+        if (!resolvedRole) {
+          return res.status(400).json({
+            error: "Rol de proyecto inválido.",
+            code: "INVALID_PROJECT_ROLE",
+          });
+        }
+        updates.projectRole = resolvedRole;
+      }
+
+      if (status !== undefined) {
+        if (!["active", "inactive"].includes(status)) {
+          return res.status(400).json({
+            error: "Estado inválido. Usa 'active' o 'inactive'.",
+            code: "INVALID_STATUS",
+          });
+        }
+        updates.status = status;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({
+          error: "No se recibieron cambios para aplicar.",
+          code: "NO_CHANGES_PROVIDED",
+        });
+      }
+
+      const existingUser = await prisma.user.findUnique({
+        where: { id },
+      });
+
+      if (!existingUser) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      const updatedUser = await prisma.user.update({
+        where: { id },
+        data: updates,
+      });
+
+      const diff = createDiff(existingUser, updatedUser, [
+        "appRole",
+        "projectRole",
+        "status",
+      ]);
+      const actorInfo = await resolveActorInfo(req);
+
+      await recordAuditEvent({
+        action: "USER_UPDATED",
+        entityType: "user",
+        entityId: id,
+        diff,
+        actorId: actorInfo.actorId,
+        actorEmail: actorInfo.actorEmail,
+      });
+
+      res.json(formatAdminUser(updatedUser));
+    } catch (error) {
+      console.error("Error al actualizar usuario admin:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudo actualizar el usuario.", details: `${error}` });
     }
   }
 );

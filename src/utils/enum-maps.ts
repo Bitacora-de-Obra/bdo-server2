@@ -35,12 +35,15 @@ export const actaStatusMap: { [key: string]: ActaStatus } = {
 };
 
 export const entryTypeMap: { [key: string]: EntryType } = {
-    'Calidad': 'QUALITY',
-    'Administrativo': 'ADMINISTRATIVE',
-    'HSE': 'SAFETY',
-    'General': 'GENERAL',
-    'TECHNICAL': 'TECHNICAL', // Añadido para manejar el tipo técnico
-    'Técnico': 'TECHNICAL', // Versión en español
+    'Calidad': EntryType.QUALITY,
+    'Administrativo': EntryType.ADMINISTRATIVE,
+    'HSE': EntryType.SAFETY,
+    'General': EntryType.GENERAL,
+    'Técnica': EntryType.GENERAL,
+    'Ambiental': EntryType.ENVIRONMENTAL,
+    'Social': EntryType.SOCIAL,
+    'TECHNICAL': EntryType.TECHNICAL, // Añadido para manejar el tipo técnico
+    'Técnico': EntryType.TECHNICAL, // Versión en español
 };
 
 /**
