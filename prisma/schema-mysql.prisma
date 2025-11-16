@@ -148,6 +148,7 @@ model User {
   cargo           String?   // Cargo o posición del usuario
   avatarUrl       String?
   status          String // "active" | "inactive"
+  canDownload     Boolean   @default(true) // Permiso para descargar archivos
   lastLoginAt     DateTime?
   tokenVersion    Int       @default(0) // Para invalidar tokens
   emailVerifiedAt DateTime?
