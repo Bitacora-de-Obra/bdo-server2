@@ -35,6 +35,21 @@ const projectRoleLabels: Record<string, string> = {
   ADMIN: "Administrador IDU",
 };
 
+// Función para obtener el nombre del rol o cargo a mostrar
+const getDisplayRole = (cargo: string | null | undefined, projectRole: string | null | undefined, entity: string | null | undefined): string => {
+  if (cargo) {
+    return cargo;
+  }
+  
+  if (entity) {
+    if (entity === 'IDU') return 'IDU';
+    if (entity === 'INTERVENTORIA') return 'Interventoría';
+    if (entity === 'CONTRATISTA') return 'Contratista';
+  }
+  
+  return projectRoleLabels[projectRole || ''] || projectRole || 'Cargo / Rol';
+};
+
 const signatureTaskStatusLabels: Record<string, string> = {
   PENDING: "Pendiente de firma",
   SIGNED: "Firmado",
@@ -89,13 +104,52 @@ export const generateLogEntryPdf = async ({
   const entry = await prisma.logEntry.findUnique({
     where: { id: logEntryId },
     include: {
-      author: true,
+      author: {
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          projectRole: true,
+          cargo: true,
+          entity: true,
+        }
+      },
       attachments: true,
       comments: { include: { author: true }, orderBy: { timestamp: "asc" } },
-      signatures: { include: { signer: true } },
-      assignees: true,
+      signatures: { 
+        include: { 
+          signer: {
+            select: {
+              id: true,
+              fullName: true,
+              projectRole: true,
+              cargo: true,
+              entity: true,
+            }
+          }
+        }
+      },
+      assignees: {
+        select: {
+          id: true,
+          fullName: true,
+          projectRole: true,
+          cargo: true,
+          entity: true,
+        }
+      },
       signatureTasks: {
-        include: { signer: true },
+        include: { 
+          signer: {
+            select: {
+              id: true,
+              fullName: true,
+              projectRole: true,
+              cargo: true,
+              entity: true,
+            }
+          }
+        },
         orderBy: { assignedAt: "asc" },
       },
     },
@@ -580,6 +634,8 @@ export const generateLogEntryPdf = async ({
       id: string;
       fullName: string;
       projectRole?: string | null;
+      cargo?: string | null;
+      entity?: string | null;
       status: string;
       signedAt?: Date;
     }> = [];
@@ -592,6 +648,8 @@ export const generateLogEntryPdf = async ({
       id: string;
       fullName: string;
       projectRole?: string | null;
+      cargo?: string | null;
+      entity?: string | null;
       status: string;
       signedAt?: Date;
     }) => {
@@ -622,6 +680,8 @@ export const generateLogEntryPdf = async ({
         id: task.signer.id,
         fullName: task.signer.fullName,
         projectRole: task.signer.projectRole,
+        cargo: task.signer.cargo,
+        entity: task.signer.entity,
         status: task.status,
         signedAt: task.signedAt ? new Date(task.signedAt) : undefined,
       });
@@ -636,6 +696,8 @@ export const generateLogEntryPdf = async ({
         id: signerId,
         fullName: signature.signer?.fullName || "Firmante",
         projectRole: signature.signer?.projectRole,
+        cargo: signature.signer?.cargo,
+        entity: signature.signer?.entity,
         status: "SIGNED",
         signedAt: signature.signedAt ? new Date(signature.signedAt) : undefined,
       });
@@ -650,6 +712,8 @@ export const generateLogEntryPdf = async ({
         id: entry.author.id,
         fullName: entry.author.fullName,
         projectRole: entry.author.projectRole,
+        cargo: entry.author.cargo,
+        entity: entry.author.entity,
         status: authorSignature ? "SIGNED" : "PENDING",
         signedAt: authorSignature?.signedAt
           ? new Date(authorSignature.signedAt)
@@ -663,6 +727,8 @@ export const generateLogEntryPdf = async ({
           id: assignee.id,
           fullName: assignee.fullName,
           projectRole: assignee.projectRole,
+          cargo: assignee.cargo,
+          entity: assignee.entity,
           status: "PENDING",
         });
       });
@@ -691,10 +757,11 @@ export const generateLogEntryPdf = async ({
         .stroke();
 
       const nameLabel = participant.fullName || "Firmante";
-      const roleLabel =
-        projectRoleLabels[participant.projectRole || ""] ||
-        participant.projectRole ||
-        "Cargo / Rol";
+      const roleLabel = getDisplayRole(
+        participant.cargo,
+        participant.projectRole,
+        participant.entity
+      );
 
       const statusLabelBase =
         signatureTaskStatusLabels[participant.status] || participant.status;
