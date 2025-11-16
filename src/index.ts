@@ -8498,6 +8498,116 @@ app.get(
   }
 );
 
+app.post(
+  "/api/admin/users/invite",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { fullName, email, appRole, projectRole, entity } = req.body ?? {};
+
+      if (!fullName || !email) {
+        return res.status(400).json({
+          error: "Se requieren nombre completo y email.",
+          code: "MISSING_REQUIRED_FIELDS",
+        });
+      }
+
+      if (!appRole || !["admin", "editor", "viewer"].includes(appRole)) {
+        return res.status(400).json({
+          error: "Rol de aplicación inválido.",
+          code: "INVALID_APP_ROLE",
+        });
+      }
+
+      // Verificar si el usuario ya existe
+      const existingUser = await prisma.user.findUnique({
+        where: { email: email.toLowerCase().trim() },
+      });
+
+      if (existingUser) {
+        return res.status(409).json({
+          error: "Ya existe un usuario con este email.",
+          code: "USER_ALREADY_EXISTS",
+        });
+      }
+
+      // Resolver el rol de proyecto
+      const resolvedRole = projectRole ? resolveProjectRole(projectRole) : undefined;
+      if (projectRole && !resolvedRole) {
+        return res.status(400).json({
+          error: "Rol de proyecto inválido.",
+          code: "INVALID_PROJECT_ROLE",
+        });
+      }
+
+      // Validar entidad si se proporciona
+      if (entity && !["IDU", "INTERVENTORIA", "CONTRATISTA"].includes(entity.toUpperCase())) {
+        return res.status(400).json({
+          error: "Entidad inválida. Usa 'IDU', 'INTERVENTORIA' o 'CONTRATISTA'.",
+          code: "INVALID_ENTITY",
+        });
+      }
+
+      // Generar contraseña temporal
+      const temporaryPassword = Math.random().toString(36).slice(-12) + Math.random().toString(36).slice(-12);
+      const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+
+      // Crear el usuario
+      const newUser = await prisma.user.create({
+        data: {
+          email: email.toLowerCase().trim(),
+          password: hashedPassword,
+          fullName: fullName.trim(),
+          appRole: appRole as AppRole,
+          projectRole: resolvedRole || "CONTRACTOR_REP", // Valor por defecto
+          entity: entity ? entity.toUpperCase() : null,
+          status: "active",
+        },
+      });
+
+      // Registrar en auditoría
+      const actorInfo = await resolveActorInfo(req);
+      const userDiff = createDiff(
+        {},
+        {
+          email: newUser.email,
+          fullName: newUser.fullName,
+          appRole: newUser.appRole,
+          projectRole: newUser.projectRole,
+          entity: newUser.entity,
+        },
+        ["email", "fullName", "appRole", "projectRole", "entity"]
+      );
+      await recordAuditEvent({
+        action: "USER_CREATED",
+        entityType: "user",
+        entityId: newUser.id,
+        diff: userDiff,
+        actorId: actorInfo.actorId,
+        actorEmail: actorInfo.actorEmail,
+      });
+
+      res.status(201).json({
+        user: formatAdminUser(newUser),
+        temporaryPassword,
+      });
+    } catch (error) {
+      console.error("Error al invitar usuario:", error);
+      if ((error as any)?.code === "P2002") {
+        return res.status(409).json({
+          error: "Ya existe un usuario con este email.",
+          code: "USER_ALREADY_EXISTS",
+        });
+      }
+      res.status(500).json({
+        error: "No se pudo invitar al usuario.",
+        details: `${error}`,
+      });
+    }
+  }
+);
+
 app.patch(
   "/api/admin/users/:id",
   authMiddleware,
@@ -8666,6 +8776,137 @@ app.get(
       res
         .status(500)
         .json({ error: "No se pudo cargar la configuración de la aplicación." });
+    }
+  }
+);
+
+app.put(
+  "/api/admin/settings",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const {
+        companyName,
+        timezone,
+        locale,
+        requireStrongPassword,
+        enable2FA,
+        sessionTimeoutMinutes,
+        photoIntervalDays,
+        defaultProjectVisibility,
+      } = req.body ?? {};
+
+      const settings = await ensureAppSettings();
+      if (!settings) {
+        return res.status(503).json({
+          error:
+            "Configuración no inicializada. Ejecuta las migraciones del servidor para habilitar este módulo.",
+        });
+      }
+
+      const updates: Prisma.AppSettingUpdateInput = {};
+
+      if (companyName !== undefined) {
+        updates.companyName = String(companyName).trim();
+      }
+
+      if (timezone !== undefined) {
+        updates.timezone = String(timezone).trim();
+      }
+
+      if (locale !== undefined) {
+        if (!["es-ES", "en-US"].includes(locale)) {
+          return res.status(400).json({
+            error: "Idioma inválido. Usa 'es-ES' o 'en-US'.",
+            code: "INVALID_LOCALE",
+          });
+        }
+        updates.locale = locale;
+      }
+
+      if (requireStrongPassword !== undefined) {
+        updates.requireStrongPassword = Boolean(requireStrongPassword);
+      }
+
+      if (enable2FA !== undefined) {
+        updates.enable2FA = Boolean(enable2FA);
+      }
+
+      if (sessionTimeoutMinutes !== undefined) {
+        const minutes = Number(sessionTimeoutMinutes);
+        if (isNaN(minutes) || minutes < 5) {
+          return res.status(400).json({
+            error: "El tiempo de cierre de sesión debe ser al menos 5 minutos.",
+            code: "INVALID_SESSION_TIMEOUT",
+          });
+        }
+        updates.sessionTimeoutMinutes = minutes;
+      }
+
+      if (photoIntervalDays !== undefined) {
+        const days = Number(photoIntervalDays);
+        if (isNaN(days) || days < 1) {
+          return res.status(400).json({
+            error: "La frecuencia de reporte fotográfico debe ser al menos 1 día.",
+            code: "INVALID_PHOTO_INTERVAL",
+          });
+        }
+        updates.photoIntervalDays = days;
+      }
+
+      if (defaultProjectVisibility !== undefined) {
+        if (!["private", "organization"].includes(defaultProjectVisibility)) {
+          return res.status(400).json({
+            error: "Visibilidad inválida. Usa 'private' o 'organization'.",
+            code: "INVALID_VISIBILITY",
+          });
+        }
+        updates.defaultProjectVisibility = defaultProjectVisibility;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({
+          error: "No se recibieron cambios para aplicar.",
+          code: "NO_CHANGES_PROVIDED",
+        });
+      }
+
+      const updatedSettings = await prisma.appSetting.update({
+        where: { id: settings.id },
+        data: updates,
+      });
+
+      // Registrar en auditoría
+      const actorInfo = await resolveActorInfo(req);
+      await recordAuditEvent({
+        action: "UPDATE_SETTINGS",
+        entityType: "AppSetting",
+        entityId: updatedSettings.id,
+        diff: createDiff(
+          formatAppSettings(settings),
+          formatAppSettings(updatedSettings),
+          [
+            "companyName",
+            "timezone",
+            "locale",
+            "requireStrongPassword",
+            "enable2FA",
+            "sessionTimeoutMinutes",
+            "photoIntervalDays",
+            "defaultProjectVisibility",
+          ]
+        ),
+        actorId: actorInfo.actorId,
+        actorEmail: actorInfo.actorEmail,
+      });
+
+      res.json(formatAppSettings(updatedSettings));
+    } catch (error) {
+      console.error("Error al actualizar configuración:", error);
+      res
+        .status(500)
+        .json({ error: "No se pudo actualizar la configuración.", details: `${error}` });
     }
   }
 );
@@ -8898,6 +9139,8 @@ app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
         fullName: true,
         projectRole: true,
         appRole: true,
+        entity: true,
+        cargo: true,
         avatarUrl: true,
         status: true,
         lastLoginAt: true,
@@ -8921,6 +9164,92 @@ app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+// Endpoint para cambiar contraseña
+app.post(
+  "/api/auth/change-password",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { oldPassword, newPassword } = req.body ?? {};
+
+      if (!oldPassword || !newPassword) {
+        return res.status(400).json({
+          error: "Se requieren la contraseña actual y la nueva contraseña.",
+        });
+      }
+
+      if (!req.user?.userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      // Verificar que la contraseña actual sea correcta
+      const isOldPasswordValid = await bcrypt.compare(oldPassword, user.password);
+      if (!isOldPasswordValid) {
+        return res.status(401).json({
+          error: "La contraseña actual es incorrecta.",
+        });
+      }
+
+      // Validar la nueva contraseña
+      const passwordError = await validatePasswordStrength(newPassword);
+      if (passwordError) {
+        return res.status(400).json({ error: passwordError });
+      }
+
+      // Verificar que la nueva contraseña sea diferente a la actual
+      const isSamePassword = await bcrypt.compare(newPassword, user.password);
+      if (isSamePassword) {
+        return res.status(400).json({
+          error: "La nueva contraseña debe ser diferente a la actual.",
+        });
+      }
+
+      // Hashear y actualizar la contraseña
+      const hashedNewPassword = await bcrypt.hash(newPassword, 12);
+
+      // Incrementar tokenVersion para invalidar todos los tokens existentes
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          password: hashedNewPassword,
+          tokenVersion: user.tokenVersion + 1,
+        },
+      });
+
+      // Registrar en auditoría
+      const actorInfo = await resolveActorInfo(req);
+      await recordAuditEvent({
+        action: "USER_PASSWORD_CHANGED",
+        entityType: "user",
+        entityId: user.id,
+        diff: createDiff(
+          { passwordChanged: false },
+          { passwordChanged: true },
+          ["passwordChanged"]
+        ),
+        actorId: actorInfo.actorId,
+        actorEmail: actorInfo.actorEmail,
+      });
+
+      res.json({ message: "Contraseña actualizada correctamente." });
+    } catch (error) {
+      console.error("Error al cambiar contraseña:", error);
+      res.status(500).json({
+        error: "No se pudo cambiar la contraseña.",
+        details: `${error}`,
+      });
+    }
+  }
+);
 
 app.listen(port, () => {
   console.log(`Servidor escuchando en http://localhost:${port}`);
