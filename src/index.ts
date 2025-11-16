@@ -6795,13 +6795,18 @@ app.get("/api/drawings", async (_req, res) => {
         Object.keys(drawingDisciplineMap).find(
           (key) => drawingDisciplineMap[key] === drawing.discipline
         ) || drawing.discipline,
-      versions: (drawing.versions || []).map((version: any) => ({
-        ...version,
-        createdAt:
-          version.createdAt instanceof Date
-            ? version.createdAt.toISOString()
-            : version.createdAt,
-      })),
+      versions: (drawing.versions || []).map((version: any) => {
+        const normalizeUrl = (url: string) =>
+          typeof url === "string" ? url.replace("/download", "/view") : url;
+        return {
+          ...version,
+          url: normalizeUrl(version.url),
+          createdAt:
+            version.createdAt instanceof Date
+              ? version.createdAt.toISOString()
+              : version.createdAt,
+        };
+      }),
       comments: (drawing.comments || []).map((comment: any) => ({
         ...comment,
         timestamp:
@@ -6846,13 +6851,18 @@ app.get("/api/drawings/:id", async (req, res) => {
         Object.keys(drawingDisciplineMap).find(
           (key) => drawingDisciplineMap[key] === drawing.discipline
         ) || drawing.discipline,
-      versions: (drawing.versions || []).map((version: any) => ({
-        ...version,
-        createdAt:
-          version.createdAt instanceof Date
-            ? version.createdAt.toISOString()
-            : version.createdAt,
-      })),
+      versions: (drawing.versions || []).map((version: any) => {
+        const normalizeUrl = (url: string) =>
+          typeof url === "string" ? url.replace("/download", "/view") : url;
+        return {
+          ...version,
+          url: normalizeUrl(version.url),
+          createdAt:
+            version.createdAt instanceof Date
+              ? version.createdAt.toISOString()
+              : version.createdAt,
+        };
+      }),
       comments: (drawing.comments || []).map((comment: any) => ({
         ...comment,
         timestamp:
