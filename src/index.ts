@@ -87,6 +87,7 @@ import {
   sendCommitmentReminderEmail,
   isEmailServiceConfigured,
   sendCommunicationAssignmentEmail,
+  sendTestEmail,
 } from "./services/email";
 import { buildUserNotifications } from "./services/notifications";
 import {
@@ -353,6 +354,7 @@ const formatAdminUser = (user: any) => {
     cargo: user.cargo || null,
     avatarUrl: user.avatarUrl,
     status: user.status,
+    canDownload: user.canDownload ?? true,
     lastLoginAt:
       user.lastLoginAt instanceof Date
         ? user.lastLoginAt.toISOString()
@@ -756,6 +758,8 @@ const mapUserBasic = (user: any) => {
     avatarUrl: user.avatarUrl,
     appRole: user.appRole,
     projectRole: user.projectRole,
+    entity: user.entity || null,
+    cargo: user.cargo || null,
   };
 };
 
@@ -979,6 +983,8 @@ interface NormalizedSignature {
     avatarUrl?: string;
     appRole?: string;
     projectRole?: string;
+    entity?: string | null;
+    cargo?: string | null;
   } | null;
   signedAt: Date | string | null;
   signatureTaskId: string | null;
@@ -2355,6 +2361,9 @@ app.get("/api/public/demo-users", async (req, res) => {
         projectRole: true,
         appRole: true,
         status: true,
+        entity: true,
+        cargo: true,
+        avatarUrl: true,
       },
       orderBy: { fullName: "asc" },
     });
@@ -2365,6 +2374,9 @@ app.get("/api/public/demo-users", async (req, res) => {
       email: user.email,
       projectRole: user.projectRole,
       appRole: user.appRole,
+      entity: user.entity || null,
+      cargo: user.cargo || null,
+      avatarUrl: user.avatarUrl || null,
       status: user.status,
     }));
 
@@ -8559,10 +8571,11 @@ app.post(
           email: email.toLowerCase().trim(),
           password: hashedPassword,
           fullName: fullName.trim(),
-          appRole: appRole as AppRole,
-          projectRole: resolvedRole || "CONTRACTOR_REP", // Valor por defecto
-          entity: entity ? entity.toUpperCase() : null,
-          status: "active",
+        appRole: appRole as AppRole,
+        projectRole: resolvedRole || "CONTRACTOR_REP", // Valor por defecto
+        entity: entity ? entity.toUpperCase() : null,
+        status: "active",
+        canDownload: true, // Por defecto todos pueden descargar
         },
       });
 
@@ -8615,7 +8628,7 @@ app.patch(
   async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      const { appRole, projectRole, status, entity, cargo } = req.body ?? {};
+      const { appRole, projectRole, status, entity, cargo, canDownload } = req.body ?? {};
 
       if (!id) {
         return res.status(400).json({ error: "Se requiere el ID del usuario." });
@@ -8668,6 +8681,10 @@ app.patch(
         updates.cargo = cargo ? String(cargo).trim() : null;
       }
 
+      if (canDownload !== undefined) {
+        updates.canDownload = Boolean(canDownload);
+      }
+
       if (Object.keys(updates).length === 0) {
         return res.status(400).json({
           error: "No se recibieron cambios para aplicar.",
@@ -8692,6 +8709,9 @@ app.patch(
         "appRole",
         "projectRole",
         "status",
+        "entity",
+        "cargo",
+        "canDownload",
       ]);
       const actorInfo = await resolveActorInfo(req);
 
@@ -8907,6 +8927,52 @@ app.put(
       res
         .status(500)
         .json({ error: "No se pudo actualizar la configuración.", details: `${error}` });
+    }
+  }
+);
+
+// Endpoint de prueba para enviar correos
+app.post(
+  "/api/admin/test-email",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { to } = req.body ?? {};
+
+      if (!to || typeof to !== "string" || !to.includes("@")) {
+        return res.status(400).json({
+          error: "Se requiere un correo electrónico válido.",
+          code: "INVALID_EMAIL",
+        });
+      }
+
+      // Validar que el correo sea el permitido para pruebas
+      const allowedTestEmail = "mariacamilaarenasd@gmail.com";
+      if (to.toLowerCase() !== allowedTestEmail.toLowerCase()) {
+        return res.status(403).json({
+          error: `Solo se pueden enviar correos de prueba a ${allowedTestEmail}`,
+          code: "EMAIL_NOT_ALLOWED",
+        });
+      }
+
+      const actorInfo = await resolveActorInfo(req);
+      const initiatedBy = actorInfo.actorEmail || "Administrador";
+
+      await sendTestEmail(to, initiatedBy);
+
+      res.json({
+        message: "Correo de prueba enviado correctamente.",
+        to,
+      });
+    } catch (error) {
+      console.error("Error al enviar correo de prueba:", error);
+      const errorMessage =
+        error instanceof Error ? error.message : "Error desconocido";
+      res.status(500).json({
+        error: "No se pudo enviar el correo de prueba.",
+        details: errorMessage,
+      });
     }
   }
 );
@@ -9143,6 +9209,7 @@ app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
         cargo: true,
         avatarUrl: true,
         status: true,
+        canDownload: true,
         lastLoginAt: true,
         emailVerifiedAt: true,
         createdAt: true,
