@@ -2412,6 +2412,42 @@ app.get(
   }
 );
 
+app.patch(
+  "/api/notifications/:id/read",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const { id } = req.params;
+      const notification = await prisma.notification.findUnique({
+        where: { id },
+      });
+
+      if (!notification) {
+        return res.status(404).json({ error: "Notificación no encontrada." });
+      }
+
+      if (notification.recipientId !== userId) {
+        return res.status(403).json({ error: "No autorizado." });
+      }
+
+      await prisma.notification.update({
+        where: { id },
+        data: { isRead: true },
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error al marcar notificación como leída:", error);
+      res.status(500).json({ error: "No se pudo actualizar la notificación." });
+    }
+  }
+);
+
 app.get(
   "/api/project-details",
   authMiddleware,
@@ -4812,6 +4848,43 @@ app.post(
           },
           include: { author: true, attachments: true },
         });
+
+        // Extraer menciones del comentario y crear notificaciones
+        const mentionPattern = /@\[([a-f0-9-]{36})\]/g; // Formato @[userId]
+        const mentionedUserIds = new Set<string>();
+        let match;
+        while ((match = mentionPattern.exec(content)) !== null) {
+          mentionedUserIds.add(match[1]);
+        }
+
+        // Crear notificaciones para cada usuario mencionado (excepto el autor)
+        if (mentionedUserIds.size > 0) {
+          const allUsers = await prisma.user.findMany({
+            where: {
+              id: { in: Array.from(mentionedUserIds) },
+              status: "active",
+            },
+            select: { id: true, fullName: true },
+          });
+
+          const notificationsToCreate = allUsers
+            .filter((user) => user.id !== author.id) // No notificar al autor
+            .map((user) => ({
+              type: "mention",
+              message: `${author.fullName} te mencionó en un comentario`,
+              recipientId: user.id,
+              commentId: newComment.id,
+              relatedItemType: "logEntry",
+              relatedItemId: id,
+              relatedView: "logbook",
+            }));
+
+          if (notificationsToCreate.length > 0) {
+            await prisma.notification.createMany({
+              data: notificationsToCreate,
+            });
+          }
+        }
 
         await recordLogEntryChanges(id, req.user?.userId, [
           {

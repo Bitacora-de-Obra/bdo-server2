@@ -177,6 +177,7 @@ model User {
   documentSignatureLogs   DocumentSignatureLog[]
   signatureTasks          LogEntrySignatureTask[]
   contractorReviewedEntries LogEntry[] @relation("ContractorReviewer")
+  notifications             Notification[] @relation("NotificationRecipient")
 }
 
 model Project {
@@ -414,6 +415,7 @@ model Comment {
   drawing     Drawing?     @relation(fields: [drawingId], references: [id])
   drawingId   String?
   attachments Attachment[]
+  notifications Notification[] @relation("CommentMention")
 }
 
 model Signature {
@@ -768,4 +770,23 @@ model ChatbotUsage {
   @@unique([userId, date])
   @@index([userId])
   @@index([date])
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  type        String   // "mention" | "commitment_due" | "log_entry_assigned" | "communication_assigned"
+  message     String
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  recipient   User     @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  recipientId String
+  comment     Comment? @relation("CommentMention", fields: [commentId], references: [id], onDelete: Cascade)
+  commentId   String?
+  relatedItemType String? // "logEntry" | "drawing" | "acta" | "communication"
+  relatedItemId   String?
+  relatedView    String? // "logbook" | "drawings" | "minutes" | "communications"
+
+  @@index([recipientId])
+  @@index([isRead])
+  @@index([createdAt])
 }

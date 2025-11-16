@@ -13,12 +13,12 @@ type NotificationUrgency = "overdue" | "due_soon" | "info";
 
 export type UserNotification = {
   id: string;
-  type: "commitment_due" | "log_entry_assigned" | "communication_assigned";
+  type: "commitment_due" | "log_entry_assigned" | "communication_assigned" | "mention";
   urgency: NotificationUrgency;
   message: string;
   sourceDescription: string;
-  relatedView: "minutes" | "logbook" | "communications";
-  relatedItemType: "acta" | "logEntry" | "communication";
+  relatedView: "minutes" | "logbook" | "communications" | "drawings";
+  relatedItemType: "acta" | "logEntry" | "communication" | "drawing";
   relatedItemId: string;
   createdAt: string;
   isRead: boolean;
@@ -226,6 +226,69 @@ export const buildUserNotifications = async (
       isRead: false,
     });
   });
+
+  // Obtener notificaciones de menciones desde la base de datos
+  try {
+    const mentionNotifications = await prisma.notification.findMany({
+      where: {
+        recipientId: userId,
+        type: "mention",
+      },
+      include: {
+        comment: {
+          include: {
+            author: {
+              select: {
+                id: true,
+                fullName: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      take: 50, // Limitar a las últimas 50 notificaciones de menciones
+    });
+
+    mentionNotifications.forEach((notification) => {
+      const comment = notification.comment;
+      if (comment) {
+        notifications.push({
+          id: notification.id,
+          type: "mention",
+          urgency: "info",
+          message: notification.message,
+          sourceDescription: comment.content && comment.content.length > 50 
+            ? `${comment.content.substring(0, 50)}...` 
+            : (comment.content || "Comentario"),
+          relatedView: (notification.relatedView as any) || "logbook",
+          relatedItemType: (notification.relatedItemType as any) || "logEntry",
+          relatedItemId: notification.relatedItemId || "",
+          createdAt: notification.createdAt.toISOString(),
+          isRead: notification.isRead,
+        });
+      } else {
+        // Si el comentario fue eliminado, aún mostrar la notificación
+        notifications.push({
+          id: notification.id,
+          type: "mention",
+          urgency: "info",
+          message: notification.message,
+          sourceDescription: "Comentario eliminado",
+          relatedView: (notification.relatedView as any) || "logbook",
+          relatedItemType: (notification.relatedItemType as any) || "logEntry",
+          relatedItemId: notification.relatedItemId || "",
+          createdAt: notification.createdAt.toISOString(),
+          isRead: notification.isRead,
+        });
+      }
+    });
+  } catch (error) {
+    // Si hay un error al obtener notificaciones de menciones, continuar sin ellas
+    console.error("Error al obtener notificaciones de menciones:", error);
+  }
 
   return notifications.sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
