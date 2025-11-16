@@ -601,14 +601,18 @@ const resolveServerPublicUrl = () => {
 };
 
 const buildAttachmentResponse = (attachment: any) => {
-  const relativePath = `/api/attachments/${attachment.id}/download`;
   const publicUrl = resolveServerPublicUrl();
-  const downloadUrl = `${publicUrl}${relativePath}`;
+  const downloadPath = `/api/attachments/${attachment.id}/download`;
+  const viewPath = `/api/attachments/${attachment.id}/view`;
+  const downloadUrl = `${publicUrl}${downloadPath}`;
+  const viewUrl = `${publicUrl}${viewPath}`;
   return {
     ...attachment,
-    url: downloadUrl,
+    // url is used for previews in iframes/img; point to inline view
+    url: viewUrl,
     downloadUrl,
-    downloadPath: relativePath,
+    downloadPath,
+    previewUrl: viewUrl,
   };
 };
 
@@ -1674,6 +1678,73 @@ app.get("/api/attachments/:id/download", async (req, res) => {
   } catch (error) {
     console.error("Error al descargar adjunto:", error);
     res.status(500).json({ error: "No se pudo descargar el adjunto." });
+  }
+});
+
+// Vista previa/inline de adjuntos (no fuerza descarga)
+app.get("/api/attachments/:id/view", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const attachment = await prisma.attachment.findUnique({ where: { id } });
+
+    if (!attachment) {
+      return res.status(404).json({ error: "Adjunto no encontrado." });
+    }
+
+    const storageDriver = process.env.STORAGE_DRIVER || "local";
+    if (
+      storageDriver === "s3" &&
+      attachment.url &&
+      attachment.url.startsWith("http")
+    ) {
+      // Si usamos S3, redirigimos a la URL pública. Idealmente firmada con Content-Disposition=inline.
+      return res.redirect(attachment.url);
+    }
+
+    let filePath: string | null = null;
+    if (attachment.url) {
+      try {
+        const parsedUrl = new URL(attachment.url);
+        let candidatePath = parsedUrl.pathname || "";
+        if (candidatePath.startsWith("/uploads/")) {
+          candidatePath = candidatePath.replace("/uploads/", "");
+        } else {
+          candidatePath = candidatePath.replace(/^\/+/, "");
+        }
+        const resolvedPath = path.resolve(uploadsDir, candidatePath);
+        if (resolvedPath.startsWith(uploadsDir)) {
+          filePath = resolvedPath;
+        }
+      } catch {
+        const relativePath = attachment.url.startsWith("/uploads/")
+          ? attachment.url.replace("/uploads/", "")
+          : attachment.url.replace(/^\/+/, "");
+        const resolvedPath = path.resolve(uploadsDir, relativePath);
+        if (resolvedPath.startsWith(uploadsDir)) {
+          filePath = resolvedPath;
+        }
+      }
+    }
+
+    if (!filePath || !fs.existsSync(filePath)) {
+      return res
+        .status(404)
+        .json({ error: "Archivo no disponible en el servidor." });
+    }
+
+    const mimeType =
+      attachment.type || mime.lookup(filePath) || "application/octet-stream";
+
+    res.setHeader("Content-Type", mimeType as string);
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${attachment.fileName}"`
+    );
+
+    res.sendFile(filePath);
+  } catch (error) {
+    console.error("Error al mostrar adjunto:", error);
+    res.status(500).json({ error: "No se pudo mostrar el adjunto." });
   }
 });
 
