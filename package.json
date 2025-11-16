@@ -10,6 +10,7 @@
     "start": "node force-migration-fix.js",
     "users:import": "node scripts/bulkAddUsers.js",
     "users:import:csv": "node scripts/importUsersFromCsv.js \"uploads/usuarios bitacora digital.csv\"",
+    "users:update:csv": "node scripts/updateUsersFromCsv.js",
     "users:create-admin": "node scripts/createAdmin.js",
     "project:set-object": "node scripts/setProjectObject.js",
     "project:update-from-extract": "node scripts/updateProjectFromExtract.js",
