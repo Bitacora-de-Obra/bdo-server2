@@ -186,6 +186,8 @@ model Project {
   initialValue              Float
   startDate                 DateTime
   initialEndDate            DateTime
+  civs                      String?        @db.Text // CIVs del corredor vial (JSON array) - DEPRECATED: usar CorredorVialElement
+  corredorVialElements      CorredorVialElement[]
   keyPersonnel              KeyPersonnel[]
   logEntries                LogEntry[]
   interventoriaContractId   String
@@ -193,6 +195,22 @@ model Project {
   technicalSupervisorName   String
   createdAt                 DateTime       @default(now())
   updatedAt                 DateTime       @updatedAt
+}
+
+model CorredorVialElement {
+  id            String   @id @default(uuid())
+  civ           String   // CIV
+  ubicacion     String   @db.Text // UBICACIÓN
+  pkId          String   // PK_ID
+  tipoElemento  String   // TIPO DE ELEMENTO
+  costado       String   // COSTADO
+  sortOrder     Int      @default(0) // Orden de visualización
+  project       Project  @relation(fields: [projectId], references: [id])
+  projectId     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([projectId, sortOrder])
 }
 
 model KeyPersonnel {
@@ -536,20 +554,22 @@ model Commitment {
 }
 
 model CostActa {
-  id                 String         @id @default(uuid())
-  number             String         @unique
-  period             String
-  submissionDate     DateTime
-  approvalDate       DateTime?
-  paymentDueDate     DateTime?
-  billedAmount       Float
-  totalContractValue Float
-  status             CostActaStatus
-  relatedProgress    String?
-  observations       Observation[]
-  attachments        Attachment[]
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  id                      String         @id @default(uuid())
+  number                  String         @unique
+  period                  String
+  submissionDate          DateTime
+  approvalDate            DateTime?
+  paymentDueDate          DateTime?
+  billedAmount            Float
+  totalContractValue      Float
+  periodValue             Float?         // Valor del periodo
+  advancePaymentPercentage Float?        // % de anticipo amortizado
+  status                  CostActaStatus
+  relatedProgress         String?
+  observations            Observation[]
+  attachments             Attachment[]
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
 }
 
 model Observation {
@@ -651,13 +671,29 @@ model ProjectTask {
 model ContractItem {
   id               String         @id @default(uuid())
   itemCode         String         @unique
-  description      String
+  description      String         @db.Text
   unit             String
   unitPrice        Float
   contractQuantity Float
+  executedQuantity Float          @default(0) // Cantidad ejecutada total (suma de todas las ejecuciones por PK_ID)
+  executions       ContractItemExecution[] // Ejecuciones por PK_ID
   workActaItems    WorkActaItem[]
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
+}
+
+model ContractItemExecution {
+  id             String       @id @default(uuid())
+  contractItemId String
+  contractItem   ContractItem @relation(fields: [contractItemId], references: [id])
+  pkId           String       // PK_ID del corredor vial
+  quantity       Float        // Cantidad ejecutada para este PK_ID
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([contractItemId, pkId])
+  @@index([contractItemId])
+  @@index([pkId])
 }
 
 model WorkActa {

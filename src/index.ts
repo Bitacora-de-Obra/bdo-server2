@@ -2395,6 +2395,11 @@ app.get(
               sortOrder: 'asc',
             },
           },
+          corredorVialElements: {
+            orderBy: {
+              sortOrder: 'asc',
+            },
+          },
         },
       });
 
@@ -7141,6 +7146,11 @@ app.get("/api/control-points", async (_req, res) => {
 app.get("/api/contract-items", async (_req, res) => {
   try {
     const items = await prisma.contractItem.findMany({
+      include: {
+        executions: {
+          orderBy: { createdAt: "asc" },
+        },
+      },
       orderBy: { itemCode: "asc" },
     });
     res.json(items);
@@ -7151,6 +7161,84 @@ app.get("/api/contract-items", async (_req, res) => {
       .json({ error: "No se pudieron obtener los ítems contractuales." });
   }
 });
+
+app.patch(
+  "/api/contract-items/:id/executed-quantity",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { executedQuantity, pkId } = req.body;
+
+      if (executedQuantity === undefined || executedQuantity === null) {
+        return res.status(400).json({
+          error: "La cantidad ejecutada es obligatoria.",
+        });
+      }
+
+      if (!pkId) {
+        return res.status(400).json({
+          error: "El PK_ID es obligatorio.",
+        });
+      }
+
+      const numQuantity = parseFloat(executedQuantity);
+      if (isNaN(numQuantity) || numQuantity < 0) {
+        return res.status(400).json({
+          error: "La cantidad ejecutada debe ser un número válido mayor o igual a 0.",
+        });
+      }
+
+      // Crear o actualizar la ejecución para este PK_ID
+      const execution = await prisma.contractItemExecution.upsert({
+        where: {
+          contractItemId_pkId: {
+            contractItemId: id,
+            pkId: pkId,
+          },
+        },
+        update: {
+          quantity: numQuantity,
+        },
+        create: {
+          contractItemId: id,
+          pkId: pkId,
+          quantity: numQuantity,
+        },
+      });
+
+      // Calcular la suma total de todas las ejecuciones
+      const allExecutions = await prisma.contractItemExecution.findMany({
+        where: { contractItemId: id },
+      });
+      const totalExecuted = allExecutions.reduce((sum: number, exec: { quantity: number }) => sum + exec.quantity, 0);
+
+      // Actualizar el executedQuantity total del item
+      const updatedItem = await prisma.contractItem.update({
+        where: { id },
+        data: { executedQuantity: totalExecuted },
+        include: {
+          executions: {
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      });
+
+      res.json(updatedItem);
+    } catch (error) {
+      console.error("Error al actualizar cantidad ejecutada:", error);
+      if ((error as any)?.code === "P2025") {
+        return res.status(404).json({
+          error: "El ítem contractual no fue encontrado.",
+        });
+      }
+      res.status(500).json({
+        error: "No se pudo actualizar la cantidad ejecutada.",
+      });
+    }
+  }
+);
 
 app.get("/api/work-actas", async (_req, res) => {
   try {
@@ -7935,6 +8023,8 @@ app.post(
         submissionDate,
         billedAmount,
         totalContractValue,
+        periodValue,
+        advancePaymentPercentage,
         relatedProgress,
         attachments = [],
       } = req.body ?? {};
@@ -7958,6 +8048,8 @@ app.post(
           submissionDate: new Date(submissionDate),
           billedAmount: Number(billedAmount),
           totalContractValue: Number(totalContractValue),
+          periodValue: periodValue !== null && periodValue !== undefined ? Number(periodValue) : null,
+          advancePaymentPercentage: advancePaymentPercentage !== null && advancePaymentPercentage !== undefined ? Number(advancePaymentPercentage) : null,
           relatedProgress,
           status: CostActaStatus.SUBMITTED,
           attachments: {
@@ -7990,7 +8082,7 @@ app.put(
   async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      const { status, relatedProgress } = req.body ?? {};
+      const { status, relatedProgress, periodValue, advancePaymentPercentage } = req.body ?? {};
 
       const prismaStatus = costActaStatusMap[status] || undefined;
       if (
@@ -8004,6 +8096,13 @@ app.put(
         status: prismaStatus,
         relatedProgress,
       };
+
+      if (periodValue !== undefined) {
+        updateData.periodValue = periodValue !== null ? Number(periodValue) : null;
+      }
+      if (advancePaymentPercentage !== undefined) {
+        updateData.advancePaymentPercentage = advancePaymentPercentage !== null ? Number(advancePaymentPercentage) : null;
+      }
 
       if (prismaStatus === CostActaStatus.APPROVED) {
         const approvalDate = new Date();
