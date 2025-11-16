@@ -15,6 +15,8 @@
     "project:update-from-extract": "node scripts/updateProjectFromExtract.js",
     "project:set-from-tables": "node scripts/setProjectFromTables.js",
     "project:add-personnel": "node scripts/addKeyPersonnel.js",
+    "actas:import-history": "node scripts/importActasHistory.js",
+    "cost-actas:import-history": "node scripts/importCostActasHistory.js",
     "pdf:extract": "node scripts/extractProjectFromPdf.js",
     "migrate:safe": "bash scripts/fix-migrations.sh",
     "seed": "ts-node prisma/seed.ts",

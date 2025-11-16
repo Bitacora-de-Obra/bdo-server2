@@ -718,6 +718,8 @@ model WorkActa {
   period      String
   date        DateTime
   status      WorkActaStatus
+  grossValue  Float?         // Valor bruto del acta
+  description String?        // Objeto/descripción del acta
   items       WorkActaItem[]
   attachments Attachment[]
   createdAt   DateTime       @default(now())
