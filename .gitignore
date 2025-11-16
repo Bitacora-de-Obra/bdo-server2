@@ -140,4 +140,7 @@ db.sqlite
 local-*
 *.local
 
+# Documentation (opcional - descomentar si no quieres versionar docs)
+# *.md
+# docs/*.md
 

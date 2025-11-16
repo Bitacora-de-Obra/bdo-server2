@@ -53,6 +53,8 @@ import { logger } from "./logger";
 import fsPromises from "fs/promises";
 import { sha256 } from "./utils/hash";
 import { JsonValue } from "./types/json";
+import { validate } from "./middleware/validation";
+import { changePasswordSchema } from "./validators/userSchemas";
 
 type JsonObject = { [Key in string]: JsonValue };
 
@@ -9399,15 +9401,10 @@ app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
 app.post(
   "/api/auth/change-password",
   authMiddleware,
+  validate(changePasswordSchema),
   async (req: AuthRequest, res) => {
     try {
-      const { oldPassword, newPassword } = req.body ?? {};
-
-      if (!oldPassword || !newPassword) {
-        return res.status(400).json({
-          error: "Se requieren la contraseña actual y la nueva contraseña.",
-        });
-      }
+      const { oldPassword, newPassword } = req.body;
 
       if (!req.user?.userId) {
         return res.status(401).json({ error: "Usuario no autenticado." });
