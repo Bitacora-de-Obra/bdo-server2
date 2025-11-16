@@ -6,8 +6,11 @@ import { UserRole, ActaArea, ActaStatus, EntryType, EntryStatus, DeliveryMethod,
 export const roleMap: { [key: string]: UserRole } = {
     'Residente de Obra': 'RESIDENT',
     'Supervisor': 'SUPERVISOR',
-    'Representante Contratista': 'CONTRACTOR_REP',
-    'Administrador IDU': 'ADMIN',
+    'Contratista': 'CONTRACTOR_REP',
+    'IDU': 'ADMIN',
+    'Interventoría': 'SUPERVISOR',
+    'Representante Contratista': 'CONTRACTOR_REP', // Mantener compatibilidad
+    'Administrador IDU': 'ADMIN', // Mantener compatibilidad
     'Invitado': 'CONTRACTOR_REP', // Usamos CONTRACTOR_REP como valor por defecto
 };
 

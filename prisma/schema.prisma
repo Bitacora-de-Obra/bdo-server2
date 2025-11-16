@@ -151,6 +151,8 @@ model User {
   fullName        String
   projectRole     UserRole
   appRole         AppRole
+  entity          String?   // IDU, INTERVENTORIA, CONTRATISTA
+  cargo           String?   // Cargo o posición del usuario
   avatarUrl       String?
   status          String // "active" | "inactive"
   lastLoginAt     DateTime?
