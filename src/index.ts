@@ -2390,7 +2390,11 @@ app.get(
     try {
       const project = await prisma.project.findFirst({
         include: {
-          keyPersonnel: true,
+          keyPersonnel: {
+            orderBy: {
+              sortOrder: 'asc',
+            },
+          },
         },
       });
 
