@@ -7891,7 +7891,10 @@ app.get("/api/cost-actas/:id", async (req, res) => {
     const acta = await prisma.costActa.findUnique({
       where: { id },
       include: {
-        observations: { include: { author: true }, orderBy: { timestamp: "asc" } },
+        observations: { 
+          include: { author: true }, 
+          orderBy: { timestamp: "asc" } 
+        },
         attachments: true,
       },
     });
@@ -7906,6 +7909,13 @@ app.get("/api/cost-actas/:id", async (req, res) => {
         Object.keys(costActaStatusMap).find(
           (key) => costActaStatusMap[key] === acta.status
         ) || acta.status,
+      observations: (acta.observations || []).map((obs) => ({
+        ...obs,
+        timestamp: obs.timestamp instanceof Date 
+          ? obs.timestamp.toISOString() 
+          : obs.timestamp,
+      })),
+      attachments: (acta.attachments || []).map(buildAttachmentResponse),
     });
   } catch (error) {
     console.error("Error al obtener el acta de costo:", error);
@@ -8057,7 +8067,12 @@ app.post(
         include: { author: true },
       });
 
-      res.status(201).json(newObservation);
+      res.status(201).json({
+        ...newObservation,
+        timestamp: newObservation.timestamp instanceof Date 
+          ? newObservation.timestamp.toISOString() 
+          : newObservation.timestamp,
+      });
     } catch (error) {
       console.error("Error al añadir la observación:", error);
       if ((error as any)?.code === "P2025") {
@@ -8067,6 +8082,75 @@ app.post(
         });
       }
       res.status(500).json({ error: "No se pudo añadir la observación." });
+    }
+  }
+);
+
+// Endpoint para agregar attachments a cost actas
+app.post(
+  "/api/cost-actas/:id/attachments",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { attachmentId } = req.body ?? {};
+
+      if (!attachmentId) {
+        return res.status(400).json({
+          error: "El ID del adjunto es obligatorio.",
+        });
+      }
+
+      // Verificar que el acta existe
+      const costActa = await prisma.costActa.findUnique({
+        where: { id },
+      });
+
+      if (!costActa) {
+        return res.status(404).json({
+          error: "Acta de cobro no encontrada.",
+        });
+      }
+
+      // Verificar que el attachment existe y no esté ya vinculado a otro documento
+      const attachment = await prisma.attachment.findUnique({
+        where: { id: attachmentId },
+      });
+
+      if (!attachment) {
+        return res.status(404).json({
+          error: "Adjunto no encontrado.",
+        });
+      }
+
+      // Si el attachment ya está vinculado a este acta, retornar éxito
+      if (attachment.costActaId === id) {
+        return res.status(200).json(buildAttachmentResponse(attachment));
+      }
+
+      // Vincular el attachment al acta
+      const updatedAttachment = await prisma.attachment.update({
+        where: { id: attachmentId },
+        data: {
+          costActa: { connect: { id } },
+        },
+      });
+
+      res.status(200).json(buildAttachmentResponse(updatedAttachment));
+    } catch (error) {
+      console.error("Error al vincular el adjunto al acta de cobro:", error);
+      if ((error as any)?.code === "P2025") {
+        return res.status(404).json({
+          error: "El acta de cobro o el adjunto no fueron encontrados.",
+        });
+      }
+      if ((error as any)?.code === "P2002") {
+        return res.status(409).json({
+          error: "El adjunto ya está vinculado a otro documento.",
+        });
+      }
+      res.status(500).json({ error: "No se pudo vincular el adjunto." });
     }
   }
 );
