@@ -33,6 +33,7 @@ import rateLimit from "express-rate-limit";
 import cron from "node-cron";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
+import * as zlib from "zlib";
 import {
   authMiddleware,
   refreshAuthMiddleware,
@@ -837,6 +838,103 @@ const extractUserIds = (input: unknown): string[] => {
   });
 
   return Array.from(ids);
+};
+
+// Simple ZIP builder without external deps (no compression - STORED method)
+const buildSimpleZip = (files: Array<{ name: string; data: Buffer }>): Buffer => {
+  type ZipRecord = {
+    localHeader: Buffer;
+    data: Buffer;
+    centralHeader: Buffer;
+    offset: number;
+  };
+  const records: ZipRecord[] = [];
+  let offset = 0;
+  const crcTable = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+  const crc32 = (buf: Buffer): number => {
+    let c = 0 ^ -1;
+    for (let i = 0; i < buf.length; i++) {
+      c = (c >>> 8) ^ crcTable[(c ^ buf[i]) & 0xFF];
+    }
+    return (c ^ -1) >>> 0;
+  };
+  const fileToMsDosTime = (date: Date) => {
+    const dosTime =
+      (date.getHours() << 11) |
+      (date.getMinutes() << 5) |
+      Math.floor(date.getSeconds() / 2);
+    const dosDate =
+      ((date.getFullYear() - 1980) << 9) |
+      ((date.getMonth() + 1) << 5) |
+      date.getDate();
+    return { dosTime, dosDate };
+  };
+  for (const f of files) {
+    const nameBuf = Buffer.from(f.name.replace(/\\/g, "/"));
+    const crc = crc32(f.data) >>> 0;
+    const size = f.data.length;
+    const now = new Date();
+    const { dosTime, dosDate } = fileToMsDosTime(now);
+    const local = Buffer.alloc(30 + nameBuf.length);
+    let o = 0;
+    local.writeUInt32LE(0x04034b50, o); o += 4; // local file header signature
+    local.writeUInt16LE(20, o); o += 2; // version needed
+    local.writeUInt16LE(0, o); o += 2; // general purpose
+    local.writeUInt16LE(0, o); o += 2; // compression (0 = stored)
+    local.writeUInt16LE(dosTime, o); o += 2;
+    local.writeUInt16LE(dosDate, o); o += 2;
+    local.writeUInt32LE(crc >>> 0, o); o += 4;
+    local.writeUInt32LE(size, o); o += 4; // compressed size
+    local.writeUInt32LE(size, o); o += 4; // uncompressed size
+    local.writeUInt16LE(nameBuf.length, o); o += 2; // file name length
+    local.writeUInt16LE(0, o); o += 2; // extra length
+    nameBuf.copy(local, o);
+    const central = Buffer.alloc(46 + nameBuf.length);
+    o = 0;
+    central.writeUInt32LE(0x02014b50, o); o += 4; // central header signature
+    central.writeUInt16LE(20, o); o += 2; // version made by
+    central.writeUInt16LE(20, o); o += 2; // version needed
+    central.writeUInt16LE(0, o); o += 2; // general purpose
+    central.writeUInt16LE(0, o); o += 2; // compression
+    central.writeUInt16LE(dosTime, o); o += 2;
+    central.writeUInt16LE(dosDate, o); o += 2;
+    central.writeUInt32LE(crc >>> 0, o); o += 4;
+    central.writeUInt32LE(size, o); o += 4;
+    central.writeUInt32LE(size, o); o += 4;
+    central.writeUInt16LE(nameBuf.length, o); o += 2;
+    central.writeUInt16LE(0, o); o += 2; // extra
+    central.writeUInt16LE(0, o); o += 2; // comment
+    central.writeUInt16LE(0, o); o += 2; // disk number
+    central.writeUInt16LE(0, o); o += 2; // internal attr
+    central.writeUInt32LE(0, o); o += 4; // external attr
+    central.writeUInt32LE(offset, o); o += 4; // relative offset
+    nameBuf.copy(central, o);
+    records.push({ localHeader: local, data: f.data, centralHeader: central, offset });
+    offset += local.length + f.data.length;
+  }
+  const centralDir = Buffer.concat(records.map(r => r.centralHeader));
+  const eocd = Buffer.alloc(22);
+  let p = 0;
+  eocd.writeUInt32LE(0x06054b50, p); p += 4;
+  eocd.writeUInt16LE(0, p); p += 2; // disk
+  eocd.writeUInt16LE(0, p); p += 2; // start
+  eocd.writeUInt16LE(records.length, p); p += 2;
+  eocd.writeUInt16LE(records.length, p); p += 2;
+  eocd.writeUInt32LE(centralDir.length, p); p += 4;
+  eocd.writeUInt32LE(offset, p); p += 4;
+  eocd.writeUInt16LE(0, p); p += 2; // comment len
+  const body = Buffer.concat(records.flatMap(r => [r.localHeader, r.data]));
+  return Buffer.concat([body, centralDir, eocd]);
 };
 
 interface SignatureRecord {
@@ -5070,6 +5168,108 @@ app.post(
     } catch (error) {
       console.error("Error al firmar anotación:", error);
       res.status(500).json({ error: "No se pudo firmar la anotación." });
+    }
+  }
+);
+
+// Export ZIP of PDFs
+app.post(
+  "/api/log-entries/export-zip",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const { startDate, endDate, type, status, authorId } = req.body || {};
+      const where: any = {};
+      if (startDate || endDate) {
+        where.entryDate = {};
+        if (startDate) where.entryDate.gte = new Date(startDate);
+        if (endDate) where.entryDate.lte = new Date(endDate);
+      }
+      if (type && type !== "all") where.type = entryTypeMap[type] || type;
+      if (status && status !== "all") where.status = entryStatusMap[status] || status;
+      if (authorId && authorId !== "all") where.authorId = authorId;
+
+      const entries = await prisma.logEntry.findMany({
+        where,
+        orderBy: { entryDate: "asc" },
+        include: {
+          attachments: true,
+        },
+      });
+
+      const storage = getStorage();
+      const files: Array<{ name: string; data: Buffer }> = [];
+
+      for (const entry of entries) {
+        // intentar encontrar un PDF existente no firmado (último generado)
+        let pdfAttachment =
+          (entry.attachments || [])
+            .filter((a: any) => (a.type || "").includes("pdf"))
+            .sort(
+              (a: any, b: any) =>
+                new Date(b.createdAt || 0).getTime() -
+                new Date(a.createdAt || 0).getTime()
+            )[0] || null;
+
+        // si no hay, generar
+        if (!pdfAttachment) {
+          try {
+            await generateLogEntryPdf({
+              prisma,
+              logEntryId: entry.id,
+              uploadsDir: process.env.UPLOADS_DIR || "./uploads",
+              baseUrl:
+                process.env.SERVER_PUBLIC_URL ||
+                `http://localhost:${port}`,
+            });
+            // buscar de nuevo
+            const refreshed = await prisma.logEntry.findUnique({
+              where: { id: entry.id },
+              include: { attachments: true },
+            });
+            pdfAttachment =
+              (refreshed?.attachments || [])
+                .filter((a: any) => (a.type || "").includes("pdf"))
+                .sort(
+                  (a: any, b: any) =>
+                    new Date(b.createdAt || 0).getTime() -
+                    new Date(a.createdAt || 0).getTime()
+                )[0] || null;
+          } catch (e) {
+            console.warn("No se pudo generar PDF para", entry.id, e);
+          }
+        }
+
+        if (!pdfAttachment?.storagePath) {
+          continue;
+        }
+
+        try {
+          const buffer = await storage.load(pdfAttachment.storagePath);
+          const safeTitle = (entry.title || "Anotacion")
+            .replace(/[^a-zA-Z0-9 _.-]/g, "")
+            .substring(0, 80)
+            .trim()
+            .replace(/\s+/g, "_");
+          const name = `Folio_${entry.folioNumber}_${safeTitle || "Anotacion"}.pdf`;
+          files.push({ name, data: buffer });
+        } catch (e) {
+          console.warn("No se pudo cargar PDF para", entry.id, e);
+        }
+      }
+
+      if (files.length === 0) {
+        return res.status(404).json({ error: "No se encontraron PDFs para exportar." });
+      }
+
+      const zipBuffer = buildSimpleZip(files);
+      const fileName = `bitacoras_${new Date().toISOString().slice(0,10)}.zip`;
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+      res.send(zipBuffer);
+    } catch (error) {
+      console.error("Error al exportar ZIP de bitácoras:", error);
+      res.status(500).json({ error: "No se pudo generar el archivo ZIP." });
     }
   }
 );
