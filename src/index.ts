@@ -87,6 +87,7 @@ import {
   sendCommitmentReminderEmail,
   isEmailServiceConfigured,
   sendCommunicationAssignmentEmail,
+  sendSignatureAssignmentEmail,
   sendTestEmail,
 } from "./services/email";
 import { buildUserNotifications } from "./services/notifications";
@@ -3370,6 +3371,40 @@ app.post(
               signerId: signerId,
               logEntryId: logEntry.id,
             });
+
+            // Enviar correo de notificación al firmante
+            try {
+              const signer = await prisma.user.findUnique({
+                where: { id: signerId },
+                select: { email: true, fullName: true },
+              });
+
+              if (signer && signer.email) {
+                const author = await prisma.user.findUnique({
+                  where: { id: userId },
+                  select: { fullName: true },
+                });
+
+                await sendSignatureAssignmentEmail({
+                  to: signer.email,
+                  recipientName: signer.fullName,
+                  assignerName: author?.fullName || "Un usuario",
+                  logEntry: {
+                    id: logEntry.id,
+                    folioNumber: logEntry.folioNumber,
+                    title: logEntry.title,
+                    entryDate: logEntry.entryDate,
+                  },
+                });
+                console.log("DEBUG: ✓ Correo de notificación enviado a:", signer.email);
+              }
+            } catch (emailError: any) {
+              console.error("DEBUG: ✗ ERROR enviando correo de notificación:", {
+                signerId: signerId,
+                error: emailError.message,
+              });
+              // No fallar la creación de la bitácora si el correo falla
+            }
           } catch (error: any) {
             console.error("DEBUG: ✗ ERROR creando tarea de firma:", {
               signerId: signerId,
@@ -4600,6 +4635,37 @@ app.put(
               })),
               skipDuplicates: true,
             });
+
+            // Enviar correos de notificación a los nuevos firmantes
+            for (const signerId of toAdd) {
+              try {
+                const signer = await prisma.user.findUnique({
+                  where: { id: signerId },
+                  select: { email: true, fullName: true },
+                });
+
+                if (signer && signer.email) {
+                  await sendSignatureAssignmentEmail({
+                    to: signer.email,
+                    recipientName: signer.fullName,
+                    assignerName: currentUser.fullName || "Un usuario",
+                    logEntry: {
+                      id: id,
+                      folioNumber: existingEntry.folioNumber,
+                      title: existingEntry.title,
+                      entryDate: existingEntry.entryDate,
+                    },
+                  });
+                  console.log("DEBUG: ✓ Correo de notificación enviado a:", signer.email);
+                }
+              } catch (emailError: any) {
+                console.error("DEBUG: ✗ ERROR enviando correo de notificación:", {
+                  signerId: signerId,
+                  error: emailError.message,
+                });
+                // No fallar la actualización si el correo falla
+              }
+            }
           }
         } catch (e: any) {
           console.warn("Error actualizando tareas de firma:", e);

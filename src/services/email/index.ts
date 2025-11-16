@@ -50,6 +50,18 @@ interface SendCommunicationAssignmentParams {
   };
 }
 
+interface SendSignatureAssignmentParams {
+  to: string;
+  recipientName?: string | null;
+  assignerName?: string | null;
+  logEntry: {
+    id: string;
+    folioNumber: number;
+    title: string;
+    entryDate?: Date | string | null;
+  };
+}
+
 const smtpHost = process.env.SMTP_HOST;
 const smtpPort = Number(process.env.SMTP_PORT || 587);
 const smtpSecure = process.env.SMTP_SECURE === "true";
@@ -502,6 +514,66 @@ export const sendCommunicationAssignmentEmail = async ({
     </ul>
     <p>Ingresa a la Bitácora Digital para gestionar la comunicación:</p>
     <p><a href="${communicationsLink}" target="_blank" rel="noopener noreferrer">${communicationsLink}</a></p>
+    <p>Gracias.</p>
+  `;
+
+  await sendEmail({
+    to,
+    subject,
+    html,
+    text: textLines.join("\n"),
+  });
+};
+
+export const sendSignatureAssignmentEmail = async ({
+  to,
+  recipientName,
+  assignerName,
+  logEntry,
+}: SendSignatureAssignmentParams) => {
+  const displayRecipient = recipientName || "equipo";
+  const assignerDisplay = assignerName || "un miembro del equipo";
+  const entryDateLabel = formatDateLabel(logEntry.entryDate);
+  const baseUrl = getAppBaseUrl();
+  const logEntryLink = `${baseUrl}#/log-entries/${logEntry.id}`;
+
+  const subject = `Nueva bitácora asignada para firma · Folio #${logEntry.folioNumber}`;
+
+  const textLines = [
+    `Hola ${displayRecipient},`,
+    "",
+    `${assignerDisplay} te asignó una bitácora para su revisión y firma.`,
+    "",
+    `Folio: #${logEntry.folioNumber}`,
+    `Título: ${logEntry.title}`,
+  ];
+
+  if (entryDateLabel) {
+    textLines.push(`Fecha de la bitácora: ${entryDateLabel}`);
+  }
+
+  textLines.push(
+    "",
+    `Ingresa a la Bitácora Digital para revisar y firmar la bitácora:`,
+    logEntryLink,
+    "",
+    "Gracias."
+  );
+
+  const html = `
+    <p>Hola ${displayRecipient},</p>
+    <p>${assignerDisplay} te asignó una bitácora para su revisión y firma.</p>
+    <ul>
+      <li><strong>Folio:</strong> #${logEntry.folioNumber}</li>
+      <li><strong>Título:</strong> ${logEntry.title}</li>
+      ${
+        entryDateLabel
+          ? `<li><strong>Fecha de la bitácora:</strong> ${entryDateLabel}</li>`
+          : ""
+      }
+    </ul>
+    <p>Ingresa a la Bitácora Digital para revisar y firmar la bitácora:</p>
+    <p><a href="${logEntryLink}" target="_blank" rel="noopener noreferrer">${logEntryLink}</a></p>
     <p>Gracias.</p>
   `;
 
