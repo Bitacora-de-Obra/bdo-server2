@@ -189,7 +189,7 @@ model Project {
   id                        String         @id @default(uuid())
   name                      String
   contractId                String         @unique
-  object                    String
+  object                    String         @db.Text
   contractorName            String
   supervisorName            String
   initialValue              Float
@@ -206,14 +206,18 @@ model Project {
 }
 
 model KeyPersonnel {
-  id        String  @id @default(uuid())
-  name      String
-  role      String
-  company   String
-  email     String
-  phone     String
-  project   Project @relation(fields: [projectId], references: [id])
-  projectId String
+  id         String  @id @default(uuid())
+  name       String
+  role       String
+  company    String
+  email      String
+  phone      String
+  dedication String? // Porcentaje de dedicación (ej: "100%", "50%")
+  sortOrder  Int     @default(0) // Orden de visualización
+  project    Project @relation(fields: [projectId], references: [id])
+  projectId  String
+
+  @@index([projectId, sortOrder])
 }
 
 model Communication {
