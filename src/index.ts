@@ -330,19 +330,35 @@ const formatAppSettings = (settings: any) => ({
   defaultProjectVisibility: settings.defaultProjectVisibility,
 });
 
-const formatAdminUser = (user: any) => ({
-  id: user.id,
-  fullName: user.fullName,
-  email: user.email,
-  projectRole: roleReverseMap[user.projectRole] || user.projectRole,
-  appRole: user.appRole,
-  avatarUrl: user.avatarUrl,
-  status: user.status,
-  lastLoginAt:
-    user.lastLoginAt instanceof Date
-      ? user.lastLoginAt.toISOString()
-      : user.lastLoginAt,
-});
+const formatAdminUser = (user: any) => {
+  // Determinar el rol basado en la entidad: IDU, Interventoría, Contratista
+  let displayRole = roleReverseMap[user.projectRole] || user.projectRole;
+  if (user.entity) {
+    if (user.entity === 'IDU') {
+      displayRole = 'IDU';
+    } else if (user.entity === 'INTERVENTORIA') {
+      displayRole = 'Interventoría';
+    } else if (user.entity === 'CONTRATISTA') {
+      displayRole = 'Contratista';
+    }
+  }
+  
+  return {
+    id: user.id,
+    fullName: user.fullName,
+    email: user.email,
+    projectRole: displayRole,
+    appRole: user.appRole,
+    entity: user.entity || null,
+    cargo: user.cargo || null,
+    avatarUrl: user.avatarUrl,
+    status: user.status,
+    lastLoginAt:
+      user.lastLoginAt instanceof Date
+        ? user.lastLoginAt.toISOString()
+        : user.lastLoginAt,
+  };
+};
 
 const createDiff = (
   before: Record<string, any>,
@@ -8489,7 +8505,7 @@ app.patch(
   async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      const { appRole, projectRole, status } = req.body ?? {};
+      const { appRole, projectRole, status, entity, cargo } = req.body ?? {};
 
       if (!id) {
         return res.status(400).json({ error: "Se requiere el ID del usuario." });
@@ -8526,6 +8542,20 @@ app.patch(
           });
         }
         updates.status = status;
+      }
+
+      if (entity !== undefined) {
+        if (entity && !["IDU", "INTERVENTORIA", "CONTRATISTA"].includes(entity.toUpperCase())) {
+          return res.status(400).json({
+            error: "Entidad inválida. Usa 'IDU', 'INTERVENTORIA' o 'CONTRATISTA'.",
+            code: "INVALID_ENTITY",
+          });
+        }
+        updates.entity = entity ? entity.toUpperCase() : null;
+      }
+
+      if (cargo !== undefined) {
+        updates.cargo = cargo ? String(cargo).trim() : null;
       }
 
       if (Object.keys(updates).length === 0) {

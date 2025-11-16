@@ -140,22 +140,31 @@ async function updateUsersFromCsv() {
         }
 
         const newProjectRole = determineProjectRole(entidad, cargo);
+        const normalizedEntity = entidad.toUpperCase().trim();
 
-        // Solo actualizar si el projectRole es diferente
-        if (existingUser.projectRole !== newProjectRole) {
+        // Actualizar siempre para asegurar que entity esté correcto
+        const updateData = {
+          projectRole: newProjectRole,
+          entity: normalizedEntity,
+          fullName: fullName || existingUser.fullName,
+        };
+
+        const needsUpdate = 
+          existingUser.projectRole !== newProjectRole ||
+          existingUser.entity !== normalizedEntity ||
+          (fullName && existingUser.fullName !== fullName);
+
+        if (needsUpdate) {
           await prisma.user.update({
             where: { email },
-            data: {
-              projectRole: newProjectRole,
-              fullName: fullName || existingUser.fullName, // Actualizar nombre si está vacío
-            },
+            data: updateData,
           });
 
           console.log(`✅ Actualizado: ${fullName} (${email})`);
-          console.log(`   ENTIDAD: ${entidad} | CARGO: ${cargo} | projectRole: ${existingUser.projectRole} → ${newProjectRole}\n`);
+          console.log(`   ENTIDAD: ${entidad} → ${normalizedEntity} | CARGO: ${cargo} | projectRole: ${existingUser.projectRole} → ${newProjectRole}\n`);
           updated++;
         } else {
-          console.log(`ℹ️  Sin cambios: ${fullName} (${email}) - projectRole ya es ${newProjectRole}\n`);
+          console.log(`ℹ️  Sin cambios: ${fullName} (${email}) - Ya está actualizado correctamente\n`);
         }
       } catch (error) {
         console.error(`❌ Error actualizando ${email}:`, error.message);
