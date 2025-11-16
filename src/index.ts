@@ -228,6 +228,26 @@ const refreshRateLimiter = rateLimit({
   },
 });
 
+// Rate limiter global para todas las rutas API
+const apiRateLimiter = rateLimit({
+  windowMs: Number(process.env.API_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000), // 15 minutos
+  max: Number(process.env.API_RATE_LIMIT_MAX || 100), // 100 requests por ventana
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req: Request) => {
+    // No aplicar rate limiting a rutas de autenticación (ya tienen su propio limiter)
+    return req.path.startsWith('/api/auth/login') || 
+           req.path.startsWith('/api/auth/refresh') ||
+           req.path.startsWith('/api/docs');
+  },
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({
+      error: "Demasiadas solicitudes. Inténtalo nuevamente en unos minutos.",
+      code: "RATE_LIMIT",
+    });
+  },
+});
+
 const generateTemporaryPassword = () => {
   const randomPart = randomBytes(4).toString("hex").toUpperCase();
   return `Temp-${randomPart}`;
@@ -1511,6 +1531,8 @@ app.use(
 
 app.use("/api/auth/login", loginRateLimiter);
 app.use("/api/auth/refresh", refreshRateLimiter);
+// Rate limiting global para todas las rutas API (excepto las que tienen su propio limiter)
+app.use("/api/", apiRateLimiter);
 
 const openApiDocumentPath = path.join(__dirname, "../openapi/openapi.json");
 app.use(
@@ -1557,21 +1579,23 @@ app.use(cookieParser()); // Permite que Express maneje cookies
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Middleware global para debug - captura TODAS las peticiones
-app.use((req, res, next) => {
-  if (req.method === "POST") {
-    console.log("🌐 GLOBAL MIDDLEWARE: Petición POST detectada");
-    console.log("🌐 GLOBAL MIDDLEWARE: Path:", req.path);
-    console.log("🌐 GLOBAL MIDDLEWARE: URL:", req.url);
-    console.log("🌐 GLOBAL MIDDLEWARE: Method:", req.method);
-    console.log("🌐 GLOBAL MIDDLEWARE: Content-Type:", req.headers["content-type"]);
-    console.log("🌐 GLOBAL MIDDLEWARE: Origin:", req.headers.origin);
-    if (req.path.includes("log-entries") || req.url.includes("log-entries")) {
-      console.log("🌐 GLOBAL MIDDLEWARE: ⚠️ ESTA ES UNA PETICIÓN A LOG-ENTRIES ⚠️");
+// Middleware global para debug - solo en desarrollo
+if (!isProduction) {
+  app.use((req, res, next) => {
+    if (req.method === "POST") {
+      console.log("🌐 GLOBAL MIDDLEWARE: Petición POST detectada");
+      console.log("🌐 GLOBAL MIDDLEWARE: Path:", req.path);
+      console.log("🌐 GLOBAL MIDDLEWARE: URL:", req.url);
+      console.log("🌐 GLOBAL MIDDLEWARE: Method:", req.method);
+      console.log("🌐 GLOBAL MIDDLEWARE: Content-Type:", req.headers["content-type"]);
+      console.log("🌐 GLOBAL MIDDLEWARE: Origin:", req.headers.origin);
+      if (req.path.includes("log-entries") || req.url.includes("log-entries")) {
+        console.log("🌐 GLOBAL MIDDLEWARE: ⚠️ ESTA ES UNA PETICIÓN A LOG-ENTRIES ⚠️");
+      }
     }
-  }
-  next();
-});
+    next();
+  });
+}
 
 // Configuración de multer
 const multerConfig = {
@@ -2255,10 +2279,11 @@ app.post(
         totalProcessed: localAttachments.length + localSignatures.length,
       });
     } catch (error) {
-      console.error("Error durante la migración:", error);
+      logger.error("Error durante la migración", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       res.status(500).json({
         error: "Error durante la migración de URLs",
-        details: error instanceof Error ? error.message : "Error desconocido",
       });
     }
   }
@@ -2322,10 +2347,11 @@ app.post(
         }
       }
     } catch (error) {
-      console.error("Error corrigiendo migraciones:", error);
+      logger.error("Error corrigiendo migraciones", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       res.status(500).json({
         error: "Error corrigiendo migraciones de base de datos",
-        details: error instanceof Error ? error.message : "Error desconocido",
       });
     }
   }
@@ -3057,14 +3083,12 @@ app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
 
     res.json(formattedEntries);
   } catch (error) {
-    console.error("Error al obtener anotaciones:", error);
-    if (error instanceof Error) {
-      console.error("Error details:", error.message);
-      console.error("Error stack:", error.stack);
-    }
+    logger.error("Error al obtener anotaciones", {
+      error: error instanceof Error ? error.message : String(error),
+      stack: isProduction ? undefined : (error instanceof Error ? error.stack : undefined),
+    });
     res.status(500).json({ 
       error: "No se pudieron obtener las anotaciones.",
-      details: error instanceof Error ? error.message : String(error)
     });
   }
 });
@@ -9448,14 +9472,43 @@ app.post(
 
       res.json({ message: "Contraseña actualizada correctamente." });
     } catch (error) {
-      console.error("Error al cambiar contraseña:", error);
+      logger.error("Error al cambiar contraseña", {
+        error: error instanceof Error ? error.message : String(error),
+        userId: req.user?.userId,
+      });
       res.status(500).json({
         error: "No se pudo cambiar la contraseña.",
-        details: `${error}`,
       });
     }
   }
 );
+
+// Middleware global de manejo de errores (debe ir al final, antes de app.listen)
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  // Log del error completo en el servidor
+  logger.error('Error no manejado', {
+    error: err.message,
+    stack: isProduction ? undefined : err.stack, // Solo stack en desarrollo
+    path: req.path,
+    method: req.method,
+    userId: (req as AuthRequest).user?.userId,
+  });
+
+  // Respuesta al cliente - ocultar detalles en producción
+  if (isProduction) {
+    res.status(err.status || 500).json({
+      error: 'Error interno del servidor',
+      code: 'INTERNAL_ERROR',
+    });
+  } else {
+    // En desarrollo, mostrar más detalles
+    res.status(err.status || 500).json({
+      error: err.message || 'Error interno del servidor',
+      code: err.code || 'INTERNAL_ERROR',
+      ...(err.stack && { stack: err.stack }),
+    });
+  }
+});
 
 app.listen(port, () => {
   console.log(`Servidor escuchando en http://localhost:${port}`);
