@@ -96,6 +96,7 @@ async function restoreAllData() {
 
     console.log('🎉 ¡Todos los datos originales han sido restaurados!');
     console.log('\n📊 Resumen:');
+    console.log('   ✅ Usuario admin: admin@admin.com (password: admin123)');
     console.log('   ✅ Usuarios: ~34 usuarios (IDU, CONTRATISTA, INTERVENTORIA)');
     console.log('   ✅ Proyecto: Mutis (José Celestino Mutis - IDU-2412-2024)');
     console.log('   ✅ Personal clave: Agregado');
