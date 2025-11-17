@@ -1,5 +1,9 @@
 import nodemailer from "nodemailer";
 import { logger } from "../../logger";
+import {
+  isResendConfigured,
+  sendEmailWithResend,
+} from "./resendClient";
 
 interface SendEmailOptions {
   to: string;
@@ -69,6 +73,7 @@ const smtpUser = process.env.SMTP_USER;
 const smtpPass = process.env.SMTP_PASS;
 const defaultFrom =
   process.env.EMAIL_FROM || smtpUser || "no-reply@bitacora-digital.local";
+const useResend = isResendConfigured();
 
 let transporterRef: nodemailer.Transporter | null = null;
 
@@ -148,6 +153,28 @@ const sendEmail = async ({
   cc,
   bcc,
 }: SendEmailOptions): Promise<boolean> => {
+  if (useResend) {
+    try {
+      await sendEmailWithResend({
+        to,
+        subject,
+        html,
+        text,
+        cc,
+        bcc,
+      });
+      logger.debug("Correo enviado vía Resend", { to, subject });
+      return true;
+    } catch (error) {
+      logger.error("Fallo envío con Resend. Se intentará SMTP.", {
+        error: error instanceof Error ? error.message : String(error),
+        to,
+        subject,
+      });
+      // Continua a SMTP fallback
+    }
+  }
+
   const transporter = getTransporter();
 
   if (!transporter) {
