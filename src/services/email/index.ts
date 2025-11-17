@@ -584,3 +584,76 @@ export const sendSignatureAssignmentEmail = async ({
     text: textLines.join("\n"),
   });
 };
+
+interface SendSecurityAlertEmailParams {
+  to: string[];
+  event: {
+    type: string;
+    severity: string;
+    timestamp: Date;
+    ipAddress?: string;
+    userId?: string;
+    email?: string;
+    path?: string;
+    method?: string;
+    details?: Record<string, any>;
+  };
+}
+
+export const sendSecurityAlertEmail = async ({
+  to,
+  event,
+}: SendSecurityAlertEmailParams) => {
+  if (!to.length) {
+    return;
+  }
+
+  const eventDate = new Date(event.timestamp);
+  const timezone = process.env.REMINDER_TIMEZONE || "America/Bogota";
+  const formattedDate = eventDate.toLocaleString("es-CO", { timeZone: timezone });
+
+  const subject = `[Alerta de Seguridad · ${event.severity.toUpperCase()}] ${event.type}`;
+
+  const detailLines = [
+    `Tipo: ${event.type}`,
+    `Severidad: ${event.severity}`,
+    `Fecha/Hora: ${formattedDate}`,
+    `IP: ${event.ipAddress || "desconocida"}`,
+    `Usuario: ${event.userId || "N/A"}`,
+    `Correo asociado: ${event.email || "N/A"}`,
+    `Ruta: ${event.path || "N/A"}`,
+    `Método: ${event.method || "N/A"}`,
+  ];
+
+  if (event.details && Object.keys(event.details).length > 0) {
+    detailLines.push("", "Detalles adicionales:", JSON.stringify(event.details, null, 2));
+  }
+
+  const html = `
+    <h2>Bitácora Digital · Alerta de Seguridad</h2>
+    <p><strong>Tipo:</strong> ${event.type}</p>
+    <p><strong>Severidad:</strong> ${event.severity}</p>
+    <p><strong>Fecha/Hora:</strong> ${formattedDate} (${timezone})</p>
+    <p><strong>IP:</strong> ${event.ipAddress || "desconocida"}</p>
+    <p><strong>Usuario:</strong> ${event.userId || "N/A"}</p>
+    <p><strong>Correo asociado:</strong> ${event.email || "N/A"}</p>
+    <p><strong>Ruta:</strong> ${event.path || "N/A"} (${event.method || "N/A"})</p>
+    ${
+      event.details && Object.keys(event.details).length
+        ? `<pre style="background:#f5f5f5;padding:12px;border-radius:4px;">${JSON.stringify(
+            event.details,
+            null,
+            2
+          )}</pre>`
+        : ""
+    }
+    <p>Este mensaje se generó automáticamente. Revisa el panel de monitoreo para obtener más contexto.</p>
+  `;
+
+  await sendEmail({
+    to: to.join(","),
+    subject,
+    html,
+    text: detailLines.join("\n"),
+  });
+};

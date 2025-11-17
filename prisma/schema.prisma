@@ -151,8 +151,8 @@ model User {
   fullName        String
   projectRole     UserRole
   appRole         AppRole
-  entity          String?   // IDU, INTERVENTORIA, CONTRATISTA
-  cargo           String?   // Cargo o posición del usuario
+  entity          String? // IDU, INTERVENTORIA, CONTRATISTA
+  cargo           String? // Cargo o posición del usuario
   avatarUrl       String?
   status          String // "active" | "inactive"
   canDownload     Boolean   @default(true) // Permiso para descargar archivos
@@ -186,7 +186,7 @@ model User {
   signatureTasks            LogEntrySignatureTask[]
   reviewTasks               LogEntryReviewTask[]
   contractorReviewedEntries LogEntry[]                   @relation("ContractorReviewer")
-  notifications             Notification[]              @relation("NotificationRecipient")
+  notifications             Notification[]               @relation("NotificationRecipient")
 }
 
 model Project {
@@ -300,6 +300,27 @@ model AuditLog {
   entityType String
   entityId   String?
   diff       Json?
+}
+
+model SecurityEventLog {
+  id        String   @id @default(uuid())
+  type      String   @db.VarChar(64)
+  severity  String   @db.VarChar(32)
+  ipAddress String?  @db.VarChar(128)
+  userAgent String?  @db.VarChar(512)
+  userId    String?  @db.VarChar(191)
+  email     String?  @db.VarChar(255)
+  path      String?  @db.VarChar(255)
+  method    String?  @db.VarChar(16)
+  details   Json?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([type])
+  @@index([severity])
+  @@index([createdAt])
+  @@index([userId])
+  @@index([ipAddress])
 }
 
 model CommunicationStatusHistory {
@@ -419,16 +440,16 @@ model LogEntryHistory {
 }
 
 model Comment {
-  id          String       @id @default(uuid())
-  content     String
-  timestamp   DateTime     @default(now())
-  author      User         @relation(fields: [authorId], references: [id])
-  authorId    String
-  logEntry    LogEntry?    @relation(fields: [logEntryId], references: [id])
-  logEntryId  String?
-  drawing     Drawing?     @relation(fields: [drawingId], references: [id])
-  drawingId   String?
-  attachments Attachment[]
+  id            String         @id @default(uuid())
+  content       String
+  timestamp     DateTime       @default(now())
+  author        User           @relation(fields: [authorId], references: [id])
+  authorId      String
+  logEntry      LogEntry?      @relation(fields: [logEntryId], references: [id])
+  logEntryId    String?
+  drawing       Drawing?       @relation(fields: [drawingId], references: [id])
+  drawingId     String?
+  attachments   Attachment[]
   notifications Notification[] @relation("CommentMention")
 }
 
@@ -852,18 +873,18 @@ model ChatbotFeedback {
 }
 
 model Notification {
-  id          String   @id @default(uuid())
-  type        String   // "mention" | "commitment_due" | "log_entry_assigned" | "communication_assigned"
-  message     String
-  isRead      Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  recipient   User     @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
-  recipientId String
-  comment     Comment? @relation("CommentMention", fields: [commentId], references: [id], onDelete: Cascade)
-  commentId   String?
+  id              String   @id @default(uuid())
+  type            String // "mention" | "commitment_due" | "log_entry_assigned" | "communication_assigned"
+  message         String
+  isRead          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  recipient       User     @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  recipientId     String
+  comment         Comment? @relation("CommentMention", fields: [commentId], references: [id], onDelete: Cascade)
+  commentId       String?
   relatedItemType String? // "logEntry" | "drawing" | "acta" | "communication"
   relatedItemId   String?
-  relatedView    String? // "logbook" | "drawings" | "minutes" | "communications"
+  relatedView     String? // "logbook" | "drawings" | "minutes" | "communications"
 
   @@index([recipientId])
   @@index([isRead])

@@ -55,6 +55,9 @@ SECURITY_EVENTS_MAX_AGE_DAYS=30  # Días a mantener eventos (default: 30)
 
 # Request Timeout
 REQUEST_TIMEOUT_MS=30000  # Timeout en milisegundos (default: 30000 = 30 segundos)
+
+# Alertas de Seguridad (opcional)
+SECURITY_ALERT_EMAILS=seguridad@empresa.com,devops@empresa.com
 ```
 
 ### 6. ✅ Protección CSRF
@@ -140,6 +143,12 @@ REQUEST_TIMEOUT_MS=30000  # Timeout en milisegundos (default: 30000 = 30 segundo
 - **Script de rotación**: `npm run secrets:generate` produce cadenas Base64/Hex aleatorias listas para actualizar en el gestor de secretos.
 - **Tip de operación**: los archivos apuntados por las variables `_FILE` se leen solo al arrancar la app; basta con reemplazarlos y reiniciar el proceso para completar una rotación.
 
+### 14. ✅ Monitoreo Persistente y Alertas
+- **Persistencia en base de datos**: Los eventos se guardan en la tabla `SecurityEventLog`, lo que permite auditoría histórica, visualización en dashboards y análisis post-mortem.
+- **Endpoints consolidados**: `GET /api/admin/security/events` y `GET /api/admin/security/stats` ahora consultan la información persistida para que los datos sobrevivan reinicios.
+- **Retención automática**: El cron configurado con `SECURITY_CLEANUP_CRON` elimina tanto la caché en memoria como los registros antiguos en la base de datos.
+- **Alertas inmediatas**: Si defines `SECURITY_ALERT_EMAILS` y hay SMTP configurado, los eventos `high`/`critical` disparan un correo con los detalles clave.
+
 ## Próximos Pasos Recomendados
 
 1. ✅ **Validación de Entrada Centralizada**: Implementado con Zod
@@ -153,7 +162,8 @@ REQUEST_TIMEOUT_MS=30000  # Timeout en milisegundos (default: 30000 = 30 segundo
 9. ✅ **Request Timeout**: Timeout global para prevenir requests colgados
 10. ✅ **Límites de Body**: Límites más estrictos para prevenir DoS
 11. ✅ **Gestión de Secretos**: Validación, archivos seguros y script de rotación
-12. **Integración con sistemas externos**: Considerar integración con:
+12. ✅ **Monitoreo Persistente**: Eventos guardados en DB y alertas opcionales por correo
+13. **Integración con sistemas externos**: Considerar integración con:
     - Sistemas de SIEM (Security Information and Event Management)
     - Notificaciones por email a administradores
     - Integración con Slack/Discord para alertas en tiempo real
