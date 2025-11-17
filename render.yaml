@@ -3,7 +3,7 @@ services:
     name: bdo-server
     env: node
     plan: starter
-    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
+    buildCommand: bash scripts/render-build.sh
     startCommand: npm start
     envVars:
       - key: NODE_ENV
