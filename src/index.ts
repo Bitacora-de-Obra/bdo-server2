@@ -59,6 +59,8 @@ import { requireLogEntryAccess, verifyLogEntryAccess } from "./middleware/resour
 import { validateUploadedFiles } from "./middleware/fileValidationMiddleware";
 import { csrfTokenMiddleware, csrfProtection } from "./middleware/csrf";
 import { recordSecurityEvent, getSecurityEvents, getSecurityStats, cleanupOldEvents } from "./services/securityMonitoring";
+import { isAccountLocked, recordFailedAttempt, clearFailedAttempts, getRemainingAttempts } from "./services/accountLockout";
+import { validatePasswordStrength as validatePasswordStrengthUtil, PasswordValidationResult } from "./utils/passwordValidation";
 
 type JsonObject = { [Key in string]: JsonValue };
 
@@ -274,28 +276,27 @@ const generateTokenValue = () => randomBytes(32).toString("hex");
 const hashToken = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 
-const validatePasswordStrength = async (password: string) => {
+// Función mejorada de validación de contraseñas con soporte para configuración de app
+const validatePasswordStrength = async (password: string): Promise<string | null> => {
   const settings = await prisma.appSetting.findFirst();
   const requireStrong =
     settings?.requireStrongPassword ??
     DEFAULT_APP_SETTINGS.requireStrongPassword;
 
-  const minimumLength = requireStrong ? 8 : 6;
-
-  if (!password || password.length < minimumLength) {
-    return `La contraseña debe tener al menos ${minimumLength} caracteres.`;
-  }
-
+  // Si no se requiere contraseña fuerte, solo validar longitud mínima
   if (!requireStrong) {
+    const minimumLength = 6;
+    if (!password || password.length < minimumLength) {
+      return `La contraseña debe tener al menos ${minimumLength} caracteres.`;
+    }
     return null;
   }
 
-  const hasUppercase = /[A-ZÁÉÍÓÚÑ]/u.test(password);
-  const hasLowercase = /[a-záéíóúñ]/u.test(password);
-  const hasNumber = /[0-9]/.test(password);
-
-  if (!hasUppercase || !hasLowercase || !hasNumber) {
-    return "La contraseña debe incluir mayúsculas, minúsculas y números.";
+  // Si se requiere contraseña fuerte, usar validación completa
+  const validation = validatePasswordStrengthUtil(password);
+  if (!validation.isValid) {
+    // Retornar el primer error para compatibilidad con código existente
+    return validation.errors[0] || "La contraseña no cumple con los requisitos de seguridad.";
   }
 
   return null;
@@ -1578,9 +1579,38 @@ const mapReportVersionSummary = (report: any): ReportVersion => ({
 
 app.use(cors(corsOptions));
 
+// Configuración mejorada de Helmet para seguridad
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"], // Permitir inline styles para compatibilidad
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", "data:", "https:"], // Permitir imágenes de cualquier origen HTTPS
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'", "data:"],
+        objectSrc: ["'none'"],
+        mediaSrc: ["'self'"],
+        frameSrc: ["'none'"],
+        upgradeInsecureRequests: [],
+      },
+    },
+    hsts: {
+      maxAge: 31536000, // 1 año
+      includeSubDomains: true,
+      preload: true,
+    },
+    frameguard: {
+      action: "deny", // Prevenir clickjacking
+    },
+    noSniff: true, // Prevenir MIME type sniffing
+    xssFilter: true, // Habilitar filtro XSS del navegador
+    referrerPolicy: {
+      policy: "strict-origin-when-cross-origin",
+    },
+    permittedCrossDomainPolicies: false,
   })
 );
 
@@ -1631,7 +1661,30 @@ if (!fs.existsSync(uploadsDir)) {
 
 // Configuración de middlewares
 app.use(cookieParser()); // Permite que Express maneje cookies
-app.use(express.json({ limit: "10mb" }));
+
+// Middleware de timeout para prevenir requests colgados (30 segundos por defecto)
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30000); // 30 segundos
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const timeout = setTimeout(() => {
+    if (!res.headersSent) {
+      res.status(408).json({
+        error: "Request timeout",
+        message: "La solicitud tardó demasiado tiempo en procesarse.",
+        code: "REQUEST_TIMEOUT",
+      });
+    }
+  }, REQUEST_TIMEOUT_MS);
+
+  // Limpiar timeout cuando la respuesta se envía
+  res.on('finish', () => {
+    clearTimeout(timeout);
+  });
+
+  next();
+});
+
+// Límite más estricto para JSON (2MB global, endpoints específicos pueden tener más)
+app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // CSRF Protection: Generar token CSRF para requests GET
@@ -9424,12 +9477,56 @@ app.post("/api/auth/login", async (req, res) => {
       return res.status(401).json({ error: "Credenciales inválidas." });
     }
 
+    // Verificar si la cuenta está bloqueada
+    const lockStatus = isAccountLocked(user.id);
+    if (lockStatus.locked) {
+      const minutesRemaining = Math.ceil((lockStatus.lockedUntil!.getTime() - Date.now()) / (60 * 1000));
+      recordSecurityEvent('LOGIN_BLOCKED', 'high', req, { 
+        email, 
+        userId: user.id,
+        lockedUntil: lockStatus.lockedUntil 
+      });
+      return res.status(423).json({ 
+        error: `Cuenta bloqueada temporalmente debido a múltiples intentos fallidos. Intenta nuevamente en ${minutesRemaining} minuto(s).`,
+        code: "ACCOUNT_LOCKED",
+        lockedUntil: lockStatus.lockedUntil?.toISOString(),
+      });
+    }
+
     const isPasswordValid = await bcrypt.compare(password, user.password);
     console.log("Password valid:", isPasswordValid ? "yes" : "no");
 
     if (!isPasswordValid) {
-      recordSecurityEvent('LOGIN_FAILED', 'medium', req, { email, userId: user.id });
-      return res.status(401).json({ error: "Credenciales inválidas." });
+      // Registrar intento fallido
+      const lockResult = recordFailedAttempt(user.id);
+      const remainingAttempts = getRemainingAttempts(user.id);
+      
+      recordSecurityEvent('LOGIN_FAILED', 'medium', req, { 
+        email, 
+        userId: user.id,
+        attemptsRemaining: remainingAttempts 
+      });
+
+      // Si la cuenta fue bloqueada después de este intento
+      if (lockResult.locked) {
+        const minutesRemaining = Math.ceil((lockResult.lockedUntil!.getTime() - Date.now()) / (60 * 1000));
+        recordSecurityEvent('LOGIN_BLOCKED', 'high', req, { 
+          email, 
+          userId: user.id,
+          lockedUntil: lockResult.lockedUntil 
+        });
+        return res.status(423).json({ 
+          error: `Cuenta bloqueada temporalmente debido a múltiples intentos fallidos. Intenta nuevamente en ${minutesRemaining} minuto(s).`,
+          code: "ACCOUNT_LOCKED",
+          lockedUntil: lockResult.lockedUntil?.toISOString(),
+        });
+      }
+
+      return res.status(401).json({ 
+        error: "Credenciales inválidas.",
+        attemptsRemaining: remainingAttempts,
+        code: "INVALID_CREDENTIALS"
+      });
     }
 
     if (user.status !== "active") {
@@ -9444,6 +9541,9 @@ app.post("/api/auth/login", async (req, res) => {
     const refreshToken = createRefreshToken(user.id, user.tokenVersion);
 
     console.log("Tokens created successfully");
+
+    // Limpiar intentos fallidos después de login exitoso
+    clearFailedAttempts(user.id);
 
     // Actualizar último login
     await prisma.user.update({
@@ -9597,10 +9697,16 @@ app.post(
         });
       }
 
-      // Validar la nueva contraseña
+      // Validar la fortaleza de la nueva contraseña
       const passwordError = await validatePasswordStrength(newPassword);
       if (passwordError) {
-        return res.status(400).json({ error: passwordError });
+        // Validación adicional con la utilidad para obtener más detalles
+        const passwordValidation = validatePasswordStrengthUtil(newPassword);
+        return res.status(400).json({ 
+          error: passwordError,
+          details: passwordValidation.errors,
+          strength: passwordValidation.strength,
+        });
       }
 
       // Verificar que la nueva contraseña sea diferente a la actual
