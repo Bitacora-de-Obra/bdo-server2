@@ -1,3 +1,9 @@
+#!/bin/bash
+
+# Script para crear archivo .env.production desde template
+# Uso: ./scripts/create-env-production.sh
+
+cat > .env.production.example << 'EOF'
 # ============================================
 # CONFIGURACIÓN DE PRODUCCIÓN
 # Bitácora Digital de Obra
@@ -76,3 +82,10 @@ LOG_LEVEL=info
 COMMITMENT_REMINDER_CRON=0 6 * * *
 REMINDER_TIMEZONE=America/Bogota
 COMMITMENT_REMINDER_DAYS_AHEAD=2
+EOF
+
+echo "✅ Archivo .env.production.example creado"
+echo "📝 Ahora puedes copiarlo y configurarlo:"
+echo "   cp .env.production.example .env"
+echo "   nano .env  # Editar con tus valores reales"
+
