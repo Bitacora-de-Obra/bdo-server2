@@ -2705,6 +2705,7 @@ app.get("/health", (req, res) => {
     uptime: process.uptime(),
     memory: process.memoryUsage(),
     storage: process.env.STORAGE_DRIVER || "local",
+    lastUpdate: "2025-11-17 22:50",
   });
 });
 
