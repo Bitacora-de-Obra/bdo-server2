@@ -14,6 +14,7 @@
     "users:create-idu": "node scripts/createIDUUsers.js",
     "users:create-interventoria": "node scripts/createInterventoriaUsers.js",
     "users:create-contratista": "node scripts/createContratistaUsers.js",
+    "users:restore-all": "node scripts/restore-all-users.js",
     "users:create-admin": "node scripts/createAdmin.js",
     "project:set-object": "node scripts/setProjectObject.js",
     "project:update-from-extract": "node scripts/updateProjectFromExtract.js",
