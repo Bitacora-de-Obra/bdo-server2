@@ -4,8 +4,8 @@ import express, {
   Request,
   Response,
 } from "express";
-const cors = require("cors");
-import { CorsOptions } from "cors";
+import cors from "cors";
+import type { CorsOptions } from "cors";
 import OpenAI from "openai";
 import cookieParser from "cookie-parser";
 import fs from "fs";
@@ -1554,7 +1554,7 @@ const allowedOrigins = Array.from(
 );
 
 const corsOptions: CorsOptions = {
-  origin(origin, callback) {
+  origin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
     // Permitir requests sin origen (ej. curl) y orígenes registrados
     if (!origin) {
       callback(null, true);
