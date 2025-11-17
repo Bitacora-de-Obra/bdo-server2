@@ -1550,8 +1550,15 @@ const corsOptions: CorsOptions = {
     }
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  exposedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-XSRF-TOKEN",
+    "x-xsrf-token",
+    "X-CSRF-Token",
+    "x-csrf-token",
+  ],
+  exposedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
   credentials: true,
 };
 
