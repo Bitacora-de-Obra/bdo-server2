@@ -12,16 +12,17 @@ async function restoreAllData() {
     console.log('   1. Usuarios (IDU, CONTRATISTA, INTERVENTORIA)');
     console.log('   2. Proyecto Mutis (José Celestino Mutis)');
     console.log('   3. Personal clave del proyecto');
-  console.log('   4. Ítems contractuales');
-  console.log('   5. Actas de obra');
-  console.log('   6. Actas de costo');
-  console.log('   7. Otros datos del proyecto\n');
+    console.log('   4. Ítems contractuales');
+    console.log('   5. Actas de obra');
+    console.log('   6. Actas de costo');
+    console.log('   7. Elementos del corredor vial (CIVs)');
+    console.log('   8. CIVs del proyecto\n');
 
   const scriptsDir = path.join(__dirname);
   
   try {
     // 1. Restaurar usuarios
-    console.log('👥 1/7 Restaurando usuarios...');
+    console.log('👥 1/8 Restaurando usuarios...');
     execSync(`node ${path.join(scriptsDir, 'restore-all-users.js')}`, {
       stdio: 'inherit',
       cwd: path.join(__dirname, '..'),
@@ -29,7 +30,7 @@ async function restoreAllData() {
     console.log('✅ Usuarios restaurados\n');
 
     // 2. Crear/actualizar proyecto Mutis
-    console.log('📋 2/7 Creando/actualizando Proyecto Mutis...');
+    console.log('📋 2/8 Creando/actualizando Proyecto Mutis...');
     execSync(`node ${path.join(scriptsDir, 'createMutisProject.js')}`, {
       stdio: 'inherit',
       cwd: path.join(__dirname, '..'),
@@ -37,7 +38,7 @@ async function restoreAllData() {
     console.log('✅ Proyecto Mutis configurado\n');
 
     // 3. Agregar personal clave
-    console.log('👤 3/7 Agregando personal clave...');
+    console.log('👤 3/8 Agregando personal clave...');
     execSync(`node ${path.join(scriptsDir, 'addKeyPersonnel.js')}`, {
       stdio: 'inherit',
       cwd: path.join(__dirname, '..'),
@@ -45,7 +46,7 @@ async function restoreAllData() {
     console.log('✅ Personal clave agregado\n');
 
     // 4. Importar ítems contractuales
-    console.log('📊 4/7 Importando ítems contractuales...');
+    console.log('📊 4/8 Importando ítems contractuales...');
     execSync(`node ${path.join(scriptsDir, 'importContractItems.js')}`, {
       stdio: 'inherit',
       cwd: path.join(__dirname, '..'),
@@ -53,7 +54,7 @@ async function restoreAllData() {
     console.log('✅ Ítems contractuales importados\n');
 
     // 5. Importar actas de obra
-    console.log('📄 5/7 Importando actas de obra...');
+    console.log('📄 5/8 Importando actas de obra...');
     execSync(`node ${path.join(scriptsDir, 'importActasHistory.js')}`, {
       stdio: 'inherit',
       cwd: path.join(__dirname, '..'),
@@ -61,15 +62,23 @@ async function restoreAllData() {
     console.log('✅ Actas de obra importadas\n');
 
     // 6. Importar actas de costo
-    console.log('💰 6/7 Importando actas de costo...');
+    console.log('💰 6/8 Importando actas de costo...');
     execSync(`node ${path.join(scriptsDir, 'importCostActasHistory.js')}`, {
       stdio: 'inherit',
       cwd: path.join(__dirname, '..'),
     });
     console.log('✅ Actas de costo importadas\n');
 
-    // 7. Actualizar CIVs del proyecto
-    console.log('📈 7/7 Actualizando CIVs del proyecto...');
+    // 7. Importar elementos del corredor vial
+    console.log('🛣️  7/8 Importando elementos del corredor vial...');
+    execSync(`node ${path.join(scriptsDir, 'importCorredorVialElements.js')}`, {
+      stdio: 'inherit',
+      cwd: path.join(__dirname, '..'),
+    });
+    console.log('✅ Elementos del corredor vial importados\n');
+
+    // 8. Actualizar CIVs del proyecto
+    console.log('📈 8/8 Actualizando CIVs del proyecto...');
     execSync(`node ${path.join(scriptsDir, 'updateProjectCIVs.js')}`, {
       stdio: 'inherit',
       cwd: path.join(__dirname, '..'),
@@ -84,6 +93,7 @@ async function restoreAllData() {
     console.log('   ✅ Ítems contractuales: Importados');
     console.log('   ✅ Actas de obra: Importadas');
     console.log('   ✅ Actas de costo: Importadas');
+    console.log('   ✅ Elementos del corredor vial: Importados');
     console.log('   ✅ CIVs: Actualizados');
     console.log('\n🔑 Todos los usuarios tienen password: password123');
   } catch (error) {
