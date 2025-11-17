@@ -7,11 +7,77 @@ const fs = require('fs');
 const path = require('path');
 const { PrismaClient } = require('@prisma/client');
 const { randomUUID } = require('crypto');
+const { parseStringPromise } = require('xml2js');
 
 const prisma = new PrismaClient();
 
-// Import the XML validator
-const { validateCronogramaXml } = require('../src/utils/xmlValidator');
+// XML validator function (copied from src/utils/xmlValidator.ts)
+async function validateCronogramaXml(xmlContent) {
+  if (!xmlContent?.trim()) {
+    throw new Error('El archivo XML está vacío.');
+  }
+
+  let parsed;
+  try {
+    parsed = await parseStringPromise(xmlContent, {
+      explicitArray: false,
+      mergeAttrs: true,
+      trim: true,
+    });
+  } catch (error) {
+    throw new Error('No se pudo interpretar el XML del cronograma.');
+  }
+
+  let rows =
+    parsed?.Workbook?.Worksheet?.Table?.Row ||
+    parsed?.Project?.Tasks?.Task ||
+    [];
+
+  if (!Array.isArray(rows)) {
+    rows = rows ? [rows] : [];
+  }
+
+  if (!rows.length) {
+    throw new Error('El XML no contiene tareas reconocibles.');
+  }
+
+  const tasks = [];
+  rows.forEach((row) => {
+    const extract = (key) => {
+      const value = row[key] || row[`_${key}`];
+      if (typeof value === 'object' && value?._) {
+        return String(value._);
+      }
+      return value ? String(value) : '';
+    };
+
+    const name = extract('Name') || extract('name') || extract('TaskName');
+    const start = extract('Start') || extract('startDate') || extract('StartDate');
+
+    if (!name) {
+      return;
+    }
+    if (!start) {
+      throw new Error(`La tarea "${name}" no tiene fecha de inicio.`);
+    }
+
+    tasks.push({
+      id: extract('UID') || extract('Id') || undefined,
+      name,
+      startDate: start,
+      endDate: extract('Finish') || extract('endDate') || undefined,
+      progress: Number(extract('PercentComplete')) || undefined,
+      duration: Number(extract('Duration')) || undefined,
+      outlineLevel: Number(extract('OutlineLevel')) || undefined,
+    });
+  });
+
+  if (!tasks.length) {
+    throw new Error('No se encontraron tareas válidas en el XML. Verifica el formato de exportación.');
+  }
+
+  return tasks;
+}
 
 async function importCronograma(xmlFilePath) {
   try {
