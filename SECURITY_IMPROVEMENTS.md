@@ -58,6 +58,11 @@ REQUEST_TIMEOUT_MS=30000  # Timeout en milisegundos (default: 30000 = 30 segundo
 
 # Alertas de Seguridad (opcional)
 SECURITY_ALERT_EMAILS=seguridad@empresa.com,devops@empresa.com
+
+# Proveedor de Correo (Resend opcional)
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxx
+RESEND_FROM="Bitácora Digital <no-reply@tu-dominio.com>"
+RESEND_MODE=test   # o 'live'
 ```
 
 ### 6. ✅ Protección CSRF
@@ -149,6 +154,11 @@ SECURITY_ALERT_EMAILS=seguridad@empresa.com,devops@empresa.com
 - **Retención automática**: El cron configurado con `SECURITY_CLEANUP_CRON` elimina tanto la caché en memoria como los registros antiguos en la base de datos.
 - **Alertas inmediatas**: Si defines `SECURITY_ALERT_EMAILS` y hay SMTP configurado, los eventos `high`/`critical` disparan un correo con los detalles clave.
 
+### 15. ✅ Proveedor de Correo Moderno (Resend opcional)
+- **Resend como transporte primario**: Si defines `RESEND_API_KEY` y `RESEND_FROM`, todos los correos se envían mediante la API de Resend (con `SMTP_HOST` como fallback automático si falla o no está configurado).
+- **Modo de pruebas**: Con `RESEND_MODE=test` puedes validar en ambientes de QA sin enviar correos reales (aprovechamos el “Test Mode” descrito por Resend).
+- **Configuración sencilla**: Solo requiere la API key (`re_xxx`) y la dirección `from`. Se mantiene compatibilidad con Gmail/SMTP para entornos que aún no estén migrados.
+
 ## Próximos Pasos Recomendados
 
 1. ✅ **Validación de Entrada Centralizada**: Implementado con Zod
@@ -163,7 +173,8 @@ SECURITY_ALERT_EMAILS=seguridad@empresa.com,devops@empresa.com
 10. ✅ **Límites de Body**: Límites más estrictos para prevenir DoS
 11. ✅ **Gestión de Secretos**: Validación, archivos seguros y script de rotación
 12. ✅ **Monitoreo Persistente**: Eventos guardados en DB y alertas opcionales por correo
-13. **Integración con sistemas externos**: Considerar integración con:
+13. ✅ **Proveedor de Correo Moderno**: Resend como opción para mejorar la entregabilidad
+14. **Integración con sistemas externos**: Considerar integración con:
     - Sistemas de SIEM (Security Information and Event Management)
     - Notificaciones por email a administradores
     - Integración con Slack/Discord para alertas en tiempo real

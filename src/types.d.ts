@@ -43,6 +43,9 @@ declare global {
       JWT_SECRET_FILE?: string;
       JWT_ACCESS_SECRET_FILE?: string;
       JWT_REFRESH_SECRET_FILE?: string;
+      RESEND_API_KEY?: string;
+      RESEND_FROM?: string;
+      RESEND_MODE?: 'test' | 'live';
     }
   }
 }
