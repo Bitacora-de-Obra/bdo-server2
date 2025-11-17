@@ -68,6 +68,7 @@ export const csrfProtection = (
     '/api/auth/login',
     '/api/auth/register',
     '/api/auth/refresh',
+    '/api/auth/forgot-password', // Endpoint público para recuperación de contraseña
     '/api/public/',
     '/api/docs',
     '/api/swagger',

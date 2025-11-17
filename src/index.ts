@@ -9576,6 +9576,84 @@ app.post("/api/auth/logout", (req, res) => {
   res.json({ message: "Logged out successfully" });
 });
 
+app.post("/api/auth/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res
+        .status(400)
+        .json({ error: "Debes proporcionar el correo electrónico." });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+
+    try {
+      const user = await prisma.user.findUnique({
+        where: { email: normalizedEmail },
+      });
+
+      if (user) {
+        const token = generateTokenValue();
+        const tokenHash = hashToken(token);
+        const expiresAt = new Date(
+          Date.now() + PASSWORD_RESET_TOKEN_TTL_MINUTES * 60 * 1000
+        );
+
+        await prisma.$transaction([
+          prisma.passwordResetToken.deleteMany({
+            where: { userId: user.id },
+          }),
+          prisma.passwordResetToken.create({
+            data: {
+              userId: user.id,
+              tokenHash,
+              expiresAt,
+            },
+          }),
+        ]);
+
+        if (isEmailServiceConfigured()) {
+          try {
+            await sendPasswordResetEmail({
+              to: user.email,
+              token,
+              fullName: user.fullName,
+            });
+          } catch (mailError) {
+            logger.error("No se pudo enviar el correo de restablecimiento", {
+              error: mailError instanceof Error ? mailError.message : String(mailError),
+              userId: user.id,
+            });
+          }
+        } else {
+          logger.warn("Servicio de correo no configurado", {
+            email: user.email,
+            token,
+          });
+        }
+      }
+
+      // Siempre retornar el mismo mensaje por seguridad (no revelar si el email existe)
+      res.json({
+        message:
+          "Si el correo existe en nuestra base de datos, enviaremos instrucciones para restablecer la contraseña.",
+      });
+    } catch (error) {
+      logger.error("Error al solicitar restablecimiento de contraseña", {
+        error: error instanceof Error ? error.message : String(error),
+        email: normalizedEmail,
+      });
+      res.status(500).json({ error: "No fue posible procesar la solicitud." });
+    }
+  } catch (error) {
+    logger.error("Error en forgot-password endpoint", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({ error: "Error interno del servidor." });
+  }
+});
+
 app.post(
   "/api/auth/refresh",
   refreshAuthMiddleware,
