@@ -45,12 +45,20 @@ API_RATE_LIMIT_WINDOW_MS=900000  # 15 minutos en milisegundos
 API_RATE_LIMIT_MAX=100           # Máximo de requests por ventana
 ```
 
+### 6. ✅ Protección CSRF
+- Implementado patrón "Double Submit Cookie" para protección CSRF
+- Tokens CSRF generados automáticamente en requests GET
+- Verificación de tokens en requests modificadores (POST, PUT, PATCH, DELETE)
+- Compatible con APIs REST que usan JWT (no bloquea si no hay cookie CSRF)
+- Rutas públicas excluidas de verificación CSRF
+- Timing-safe comparison para prevenir timing attacks
+
 ## Próximos Pasos Recomendados
 
-1. **Validación de Entrada Centralizada**: Implementar Zod o Joi para validar todos los inputs
-2. **Permisos Granulares**: Verificar que usuarios solo puedan acceder a recursos de sus proyectos
-3. **Validación de Archivos Mejorada**: Validar magic bytes además de MIME types
-4. **CSRF Protection**: Implementar tokens CSRF para operaciones críticas
+1. ✅ **Validación de Entrada Centralizada**: Implementado con Zod
+2. ✅ **Permisos Granulares**: Implementado para log entries
+3. ✅ **Validación de Archivos Mejorada**: Implementado con magic bytes
+4. ✅ **CSRF Protection**: Implementado con Double Submit Cookie pattern
 5. **Monitoreo**: Configurar alertas de seguridad y monitoreo de intentos de acceso fallidos
 
 ## Testing
