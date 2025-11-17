@@ -1,8 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { User } from '@prisma/client';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key';
+import { secrets } from '../config/secrets';
 
 interface JWTPayload {
   userId: string;
@@ -20,7 +18,7 @@ export function generateTokens(user: User) {
       appRole: user.appRole,
       projectRole: user.projectRole,
     },
-    JWT_SECRET,
+    secrets.jwt.access,
     { expiresIn: '15m' }
   );
 
@@ -30,7 +28,7 @@ export function generateTokens(user: User) {
       userId: user.id,
       tokenVersion: user.tokenVersion, // Para invalidar todos los tokens si es necesario
     },
-    JWT_REFRESH_SECRET,
+    secrets.jwt.refresh,
     { expiresIn: '7d' }
   );
 
@@ -39,10 +37,7 @@ export function generateTokens(user: User) {
 
 export function verifyAccessToken(token: string): JWTPayload {
   try {
-    console.log('Verificando token:', token);
-    console.log('JWT_SECRET:', JWT_SECRET);
-    const payload = jwt.verify(token, JWT_SECRET) as JWTPayload;
-    console.log('Payload:', payload);
+    const payload = jwt.verify(token, secrets.jwt.access) as JWTPayload;
     return payload;
   } catch (error) {
     console.error('Error al verificar token:', error);
@@ -52,7 +47,10 @@ export function verifyAccessToken(token: string): JWTPayload {
 
 export function verifyRefreshToken(token: string): { userId: string; tokenVersion: number } {
   try {
-    const payload = jwt.verify(token, JWT_REFRESH_SECRET) as { userId: string; tokenVersion: number };
+    const payload = jwt.verify(token, secrets.jwt.refresh) as {
+      userId: string;
+      tokenVersion: number;
+    };
     return payload;
   } catch (error) {
     throw new Error('Token de refresco inválido');
@@ -60,16 +58,16 @@ export function verifyRefreshToken(token: string): { userId: string; tokenVersio
 }
 
 export function generateEmailVerificationToken(userId: string): string {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '24h' });
+  return jwt.sign({ userId }, secrets.jwt.legacy, { expiresIn: '24h' });
 }
 
 export function generatePasswordResetToken(userId: string): string {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '1h' });
+  return jwt.sign({ userId }, secrets.jwt.legacy, { expiresIn: '1h' });
 }
 
 export function verifyEmailToken(token: string): { userId: string } {
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { userId: string };
+    const payload = jwt.verify(token, secrets.jwt.legacy) as { userId: string };
     return payload;
   } catch (error) {
     throw new Error('Token de verificación de email inválido');
@@ -78,7 +76,7 @@ export function verifyEmailToken(token: string): { userId: string } {
 
 export function verifyPasswordResetToken(token: string): { userId: string } {
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { userId: string };
+    const payload = jwt.verify(token, secrets.jwt.legacy) as { userId: string };
     return payload;
   } catch (error) {
     throw new Error('Token de restablecimiento de contraseña inválido');

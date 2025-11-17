@@ -39,6 +39,11 @@
 # JWT Secrets (opcional - JWT_SECRET sigue funcionando como fallback)
 JWT_ACCESS_SECRET=tu_secreto_para_access_tokens
 JWT_REFRESH_SECRET=tu_secreto_para_refresh_tokens
+# Alternativa: leer desde archivos montados
+JWT_SECRET_FILE=/run/secrets/jwt_legacy
+JWT_ACCESS_SECRET_FILE=/run/secrets/jwt_access
+JWT_REFRESH_SECRET_FILE=/run/secrets/jwt_refresh
+# Genera nuevos valores ejecutando: npm run secrets:generate
 
 # Rate Limiting Global
 API_RATE_LIMIT_WINDOW_MS=900000  # 15 minutos en milisegundos
@@ -128,6 +133,13 @@ REQUEST_TIMEOUT_MS=30000  # Timeout en milisegundos (default: 30000 = 30 segundo
 - **Protección contra DoS**: Previene ataques de denegación de servicio mediante requests grandes
 - **Nota**: Endpoints específicos que necesitan archivos grandes (como uploads) usan multer con límites separados
 
+### 13. ✅ Gestión de Secretos Reforzada
+- **Gestor centralizado (`src/config/secrets.ts`)**: Todas las claves sensibles se cargan desde un único módulo con validaciones de entropía y longitud (`>=32` caracteres).
+- **Soporte para archivos seguros**: Cada secreto acepta una variante `_FILE` (por ejemplo `JWT_ACCESS_SECRET_FILE`) para apuntar a archivos montados por el sistema operativo o un Vault.
+- **Fallback controlado**: Si `JWT_ACCESS_SECRET` no existe, se usa `JWT_SECRET` pero se deja registro en logs para facilitar la separación en producción.
+- **Script de rotación**: `npm run secrets:generate` produce cadenas Base64/Hex aleatorias listas para actualizar en el gestor de secretos.
+- **Tip de operación**: los archivos apuntados por las variables `_FILE` se leen solo al arrancar la app; basta con reemplazarlos y reiniciar el proceso para completar una rotación.
+
 ## Próximos Pasos Recomendados
 
 1. ✅ **Validación de Entrada Centralizada**: Implementado con Zod
@@ -140,7 +152,8 @@ REQUEST_TIMEOUT_MS=30000  # Timeout en milisegundos (default: 30000 = 30 segundo
 8. ✅ **Validación de Contraseñas**: Validación robusta de fortaleza de contraseñas
 9. ✅ **Request Timeout**: Timeout global para prevenir requests colgados
 10. ✅ **Límites de Body**: Límites más estrictos para prevenir DoS
-11. **Integración con sistemas externos**: Considerar integración con:
+11. ✅ **Gestión de Secretos**: Validación, archivos seguros y script de rotación
+12. **Integración con sistemas externos**: Considerar integración con:
     - Sistemas de SIEM (Security Information and Event Management)
     - Notificaciones por email a administradores
     - Integración con Slack/Discord para alertas en tiempo real
