@@ -1,5 +1,5 @@
 import { Request } from 'express';
-import { Prisma, SecurityEventLog } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import { logger } from '../logger';
 import { AuthRequest } from '../middleware/auth';
@@ -319,7 +319,7 @@ export const getSecurityStats = async (): Promise<{
       ]);
 
     const eventsByType = eventsByTypeRows.reduce<Record<SecurityEventType, number>>(
-      (acc, row) => {
+      (acc: any, row: any) => {
         const count = row._count?._all ?? 0;
         acc[row.type as SecurityEventType] = count;
         return acc;
@@ -329,15 +329,15 @@ export const getSecurityStats = async (): Promise<{
 
     const eventsBySeverity = eventsBySeverityRows.reduce<
       Record<SecurityEvent['severity'], number>
-    >((acc, row) => {
+    >((acc: any, row: any) => {
       const count = row._count?._all ?? 0;
       acc[row.severity as SecurityEvent['severity']] = count;
       return acc;
     }, {} as Record<SecurityEvent['severity'], number>);
 
     const topIPs = topIPsRows
-      .filter((row) => row.ipAddress)
-      .map((row) => ({
+      .filter((row: any) => row.ipAddress)
+      .map((row: any) => ({
         ip: row.ipAddress as string,
         count: row._count.id ?? 0,
       }));
@@ -418,7 +418,7 @@ const persistSecurityEvent = async (event: SecurityEvent): Promise<void> => {
   }
 };
 
-const mapRecordToEvent = (record: SecurityEventLog): SecurityEvent => ({
+const mapRecordToEvent = (record: any): SecurityEvent => ({
   type: record.type as SecurityEventType,
   severity: record.severity as SecurityEvent['severity'],
   timestamp: record.createdAt,
@@ -434,12 +434,12 @@ const mapRecordToEvent = (record: SecurityEventLog): SecurityEvent => ({
 
 const buildSecurityEventWhere = (
   filters?: SecurityEventFilters
-): Prisma.SecurityEventLogWhereInput => {
+): any => {
   if (!filters) {
     return {};
   }
 
-  const where: Prisma.SecurityEventLogWhereInput = {};
+  const where: any = {};
 
   if (filters.type) {
     where.type = filters.type;

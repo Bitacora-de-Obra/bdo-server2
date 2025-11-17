@@ -42,7 +42,7 @@ export const entryTypeMap: { [key: string]: EntryType } = {
     'Administrativo': EntryType.ADMINISTRATIVE,
     'HSE': EntryType.SAFETY,
     'General': EntryType.GENERAL,
-    'Técnica': EntryType.GENERAL,
+    'Técnica': EntryType.TECHNICAL,
     'Ambiental': EntryType.ENVIRONMENTAL,
     'Social': EntryType.SOCIAL,
     'TECHNICAL': EntryType.TECHNICAL, // Añadido para manejar el tipo técnico
