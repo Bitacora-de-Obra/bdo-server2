@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import fsSync from "fs";
 import PDFDocument from "pdfkit";
 import { PrismaClient } from "@prisma/client";
+import { getStorage } from "../../storage";
 
 const GENERATED_SUBDIR = "generated";
 
@@ -219,10 +220,26 @@ export const generateReportPdf = async ({
   });
 
   const stats = await fs.stat(filePath);
+  
+  // Leer el PDF generado
+  const pdfBuffer = await fs.readFile(filePath);
+  
+  // Subir a Cloudflare R2 (o almacenamiento configurado)
+  const storage = getStorage();
+  const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
+  const storedKey = await storage.save({
+    path: storagePath,
+    content: pdfBuffer,
+  });
+  
+  // Obtener la URL pública del almacenamiento
+  const publicUrl = storage.getPublicUrl(storedKey);
+  
   const attachment = await prisma.attachment.create({
     data: {
       fileName,
-      url: `${baseUrl}/uploads/${GENERATED_SUBDIR}/${fileName}`,
+      url: publicUrl,
+      storagePath: storedKey,
       size: stats.size,
       type: "application/pdf",
     },
