@@ -678,6 +678,29 @@ const resolveServerPublicUrl = () => {
 };
 
 const buildAttachmentResponse = (attachment: any) => {
+  const storage = getStorage();
+  const storageDriver = (process.env.STORAGE_DRIVER || "local").toLowerCase();
+  
+  // Si usamos Cloudflare R2 y tenemos storagePath, usar URL pública directa
+  if ((storageDriver === "r2" || storageDriver === "cloudflare") && attachment.storagePath) {
+    try {
+      const publicUrl = storage.getPublicUrl(attachment.storagePath);
+      // Si la URL pública es accesible directamente, usarla
+      if (publicUrl && publicUrl.startsWith("http")) {
+        return {
+          ...attachment,
+          url: publicUrl,
+          downloadUrl: publicUrl,
+          viewUrl: publicUrl,
+          previewUrl: publicUrl,
+        };
+      }
+    } catch (error) {
+      // Si falla, continuar con el método tradicional
+    }
+  }
+  
+  // Método tradicional: usar endpoints del servidor
   const publicUrl = resolveServerPublicUrl();
   const downloadPath = `/api/attachments/${attachment.id}/download`;
   const viewPath = `/api/attachments/${attachment.id}/view`;
@@ -1891,16 +1914,38 @@ app.get("/api/attachments/:id/view", async (req, res) => {
       return res.status(404).json({ error: "Adjunto no encontrado." });
     }
 
-    const storageDriver = process.env.STORAGE_DRIVER || "local";
-    if (
-      storageDriver === "s3" &&
-      attachment.url &&
-      attachment.url.startsWith("http")
-    ) {
-      // Si usamos S3, redirigimos a la URL pública. Idealmente firmada con Content-Disposition=inline.
-      return res.redirect(attachment.url);
+    const storage = getStorage();
+    const storageDriver = (process.env.STORAGE_DRIVER || "local").toLowerCase();
+    
+    // Si usamos Cloudflare R2 o S3, intentar cargar desde storage
+    if (storageDriver === "r2" || storageDriver === "cloudflare" || storageDriver === "s3") {
+      const storagePath = attachment.storagePath || resolveStorageKeyFromUrl(attachment.url);
+      
+      if (storagePath) {
+        try {
+          // Si la URL es pública y accesible, redirigir directamente
+          if (attachment.url && attachment.url.startsWith("http") && !attachment.url.includes("/api/attachments/")) {
+            return res.redirect(attachment.url);
+          }
+          
+          // Cargar desde storage y servir
+          const fileBuffer = await storage.load(storagePath);
+          const mimeType = attachment.type || mime.lookup(storagePath) || "application/octet-stream";
+          
+          res.setHeader("Content-Type", mimeType as string);
+          res.setHeader(
+            "Content-Disposition",
+            `inline; filename="${attachment.fileName || "file"}"`
+          );
+          return res.send(fileBuffer);
+        } catch (storageError) {
+          console.error("Error cargando archivo desde storage:", storageError);
+          // Continuar con fallback a sistema local
+        }
+      }
     }
 
+    // Fallback: intentar desde sistema de archivos local
     let filePath: string | null = null;
     if (attachment.url) {
       try {

@@ -562,30 +562,60 @@ export const generateLogEntryPdf = async ({
               .text(`${i + 1}. ${image.fileName}`);
             doc.moveDown(0.2);
 
-            // Intentar cargar la imagen
-            const imagePath = path.join(uploadsDir, image.storagePath || "");
-            if (fsSync.existsSync(imagePath)) {
-              const imageBuffer = await fs.readFile(imagePath);
-
-              // Verificar si necesitamos nueva página
-              const imageHeight = 150;
-              if (doc.y + imageHeight > doc.page.height - 100) {
-                doc.addPage();
+            // Intentar cargar la imagen desde Cloudflare R2 o sistema local
+            let imageBuffer: Buffer | null = null;
+            
+            try {
+              const storage = getStorage();
+              const storagePath = image.storagePath || image.url?.replace(/^.*\/uploads\//, "") || "";
+              
+              if (storagePath) {
+                // Intentar cargar desde Cloudflare R2 primero
+                try {
+                  imageBuffer = await storage.load(storagePath);
+                } catch (r2Error) {
+                  // Si falla R2, intentar desde sistema de archivos local
+                  const imagePath = path.join(uploadsDir, storagePath);
+                  if (fsSync.existsSync(imagePath)) {
+                    imageBuffer = await fs.readFile(imagePath);
+                  }
+                }
+              } else {
+                // Fallback: intentar desde URL o path local
+                const imagePath = path.join(uploadsDir, image.url?.replace(/^.*\/uploads\//, "") || "");
+                if (fsSync.existsSync(imagePath)) {
+                  imageBuffer = await fs.readFile(imagePath);
+                }
               }
 
-              // Agregar imagen con posición fija
-              const startY = doc.y;
-              doc.image(imageBuffer, 50, startY, {
-                fit: [250, imageHeight],
-              });
+              if (imageBuffer) {
+                // Verificar si necesitamos nueva página
+                const imageHeight = 150;
+                if (doc.y + imageHeight > doc.page.height - 100) {
+                  doc.addPage();
+                }
 
-              // Mover cursor después de la imagen
-              doc.y = startY + imageHeight + 20;
-            } else {
+                // Agregar imagen con posición fija
+                const startY = doc.y;
+                doc.image(imageBuffer, 50, startY, {
+                  fit: [250, imageHeight],
+                });
+
+                // Mover cursor después de la imagen
+                doc.y = startY + imageHeight + 20;
+              } else {
+                doc
+                  .font("Helvetica")
+                  .fontSize(10)
+                  .text(`[Imagen no encontrada: ${image.fileName}]`);
+                doc.moveDown(0.3);
+              }
+            } catch (loadError) {
+              // Si hay error al cargar, mostrar mensaje
               doc
                 .font("Helvetica")
                 .fontSize(10)
-                .text(`[Imagen no encontrada: ${image.fileName}]`);
+                .text(`[Error cargando imagen: ${image.fileName}]`);
               doc.moveDown(0.3);
             }
           } catch (error) {
