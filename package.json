@@ -32,7 +32,9 @@
     "typecheck": "tsc --noEmit",
     "secrets:generate": "node scripts/generateSecret.js",
     "validate:env": "node scripts/validate-env.js",
-    "pre-deploy": "node scripts/pre-deploy.js"
+    "pre-deploy": "node scripts/pre-deploy.js",
+    "deploy:vercel": "vercel --prod",
+    "deploy:cloudflare": "npm run build && wrangler deploy"
   },
   "keywords": [],
   "author": "",
