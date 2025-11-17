@@ -59,6 +59,7 @@ import { validate } from "./middleware/validation";
 import { changePasswordSchema } from "./validators/userSchemas";
 import { requireLogEntryAccess, verifyLogEntryAccess } from "./middleware/resourcePermissions";
 import { validateUploadedFiles } from "./middleware/fileValidationMiddleware";
+import { getStorage } from "./storage";
 import { csrfTokenMiddleware, csrfProtection } from "./middleware/csrf";
 import { recordSecurityEvent, getSecurityEvents, getSecurityStats, cleanupOldEvents } from "./services/securityMonitoring";
 import { isAccountLocked, recordFailedAttempt, clearFailedAttempts, getRemainingAttempts } from "./services/accountLockout";
@@ -2639,23 +2640,7 @@ app.post(
 
       if (type === 'logEntry') {
         // Get the first available log entry for testing
-        const logEntry = await prisma.logEntry.findFirst({
-          include: {
-            user: {
-              select: {
-                fullName: true,
-                projectRole: true,
-              },
-            },
-            project: {
-              select: {
-                name: true,
-                location: true,
-              },
-            },
-            LogEntryAttachment: true,
-          },
-        });
+        const logEntry = await prisma.logEntry.findFirst();
 
         if (!logEntry) {
           return res.status(404).json({
@@ -2663,25 +2648,15 @@ app.post(
           });
         }
 
-        result = await generateLogEntryPdf(logEntry, testFileName);
+        result = await generateLogEntryPdf({
+          prisma,
+          logEntryId: logEntry.id,
+          uploadsDir: 'uploads',
+          baseUrl: process.env.API_BASE_URL || 'http://localhost:3000'
+        });
       } else {
         // Get the first available report for testing
-        const report = await prisma.weeklyReport.findFirst({
-          include: {
-            project: {
-              select: {
-                name: true,
-                location: true,
-              },
-            },
-            createdBy: {
-              select: {
-                fullName: true,
-                projectRole: true,
-              },
-            },
-          },
-        });
+        const report = await prisma.report.findFirst();
 
         if (!report) {
           return res.status(404).json({
@@ -2689,15 +2664,19 @@ app.post(
           });
         }
 
-        result = await generateReportPdf(report, testFileName);
+        result = await generateReportPdf({
+          prisma,
+          reportId: report.id,
+          uploadsDir: 'uploads',
+          baseUrl: process.env.API_BASE_URL || 'http://localhost:3000'
+        });
       }
 
       res.json({
         success: true,
         message: `${type} PDF generated successfully`,
         fileName: testFileName,
-        url: result.url,
-        storage: result.storage || 'local'
+        result: result
       });
 
     } catch (error) {
