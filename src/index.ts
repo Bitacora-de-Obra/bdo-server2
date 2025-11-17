@@ -725,9 +725,9 @@ const scheduleSecurityEventsCleanup = () => {
   const cronExpression = process.env.SECURITY_CLEANUP_CRON || "0 2 * * *"; // Diariamente a las 2 AM
   const maxAgeDays = Number(process.env.SECURITY_EVENTS_MAX_AGE_DAYS || 30); // Mantener 30 días por defecto
 
-  cron.schedule(cronExpression, () => {
+  cron.schedule(cronExpression, async () => {
     try {
-      cleanupOldEvents(maxAgeDays);
+      await cleanupOldEvents(maxAgeDays);
       logger.info(`Security events cleanup completed. Max age: ${maxAgeDays} days`);
     } catch (error) {
       logger.error("Error en limpieza de eventos de seguridad", {
@@ -2517,7 +2517,7 @@ app.get(
       if (endDate) filters.endDate = new Date(endDate as string);
       filters.limit = parseInt(limit as string, 10) || 100;
 
-      const events = getSecurityEvents(filters);
+      const events = await getSecurityEvents(filters);
 
       res.json({
         events,
@@ -2542,7 +2542,7 @@ app.get(
   requireAdmin,
   async (req: AuthRequest, res) => {
     try {
-      const stats = getSecurityStats();
+      const stats = await getSecurityStats();
       res.json(stats);
     } catch (error) {
       logger.error("Error obteniendo estadísticas de seguridad", {
