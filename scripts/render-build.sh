@@ -3,10 +3,18 @@ set -e
 
 echo "🔧 Starting Render build process..."
 
+# Save current NODE_ENV (Render sets it to production)
+ORIGINAL_NODE_ENV="${NODE_ENV:-production}"
+
 # Force install all dependencies including devDependencies
-# Render sets NODE_ENV=production which skips devDependencies by default
+# Temporarily set NODE_ENV=development for npm install only
+# This ensures devDependencies (TypeScript types) are installed
 echo "📦 Installing dependencies (including devDependencies)..."
 NODE_ENV=development npm ci
+
+# Restore original NODE_ENV for the rest of the build
+export NODE_ENV="$ORIGINAL_NODE_ENV"
+echo "📋 NODE_ENV restored to: $NODE_ENV"
 
 # Verify @types packages are installed
 echo "🔍 Verifying TypeScript types are installed..."
