@@ -67,7 +67,14 @@ if ! grep -q "SecurityEventLog" node_modules/.prisma/client/index.d.ts; then
   echo "❌ Error: SecurityEventLog not found in Prisma Client!"
   echo "📋 Checking schema..."
   grep -A 5 "model SecurityEventLog" prisma/schema.prisma || echo "SecurityEventLog not in schema!"
-  exit 1
+  echo "📋 Listing Prisma Client models:"
+  grep -E "export type \w+ = " node_modules/.prisma/client/index.d.ts | head -20
+  echo "🔄 Regenerating Prisma Client..."
+  npx prisma generate --force
+  if ! grep -q "SecurityEventLog" node_modules/.prisma/client/index.d.ts; then
+    echo "❌ SecurityEventLog still not found after regeneration!"
+    exit 1
+  fi
 fi
 
 echo "✅ Prisma Client generated successfully"
