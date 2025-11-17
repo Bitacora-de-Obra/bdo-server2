@@ -3,9 +3,30 @@ set -e
 
 echo "🔧 Starting Render build process..."
 
-# Install all dependencies including devDependencies
-echo "📦 Installing dependencies..."
-npm ci --include=dev
+# Force install all dependencies including devDependencies
+# Render sets NODE_ENV=production which skips devDependencies by default
+echo "📦 Installing dependencies (including devDependencies)..."
+NODE_ENV=development npm ci
+
+# Verify @types packages are installed
+echo "🔍 Verifying TypeScript types are installed..."
+if [ ! -d "node_modules/@types/jsonwebtoken" ]; then
+  echo "❌ Error: @types/jsonwebtoken not found!"
+  exit 1
+fi
+if [ ! -d "node_modules/@types/bcryptjs" ]; then
+  echo "❌ Error: @types/bcryptjs not found!"
+  exit 1
+fi
+if [ ! -d "node_modules/@types/nodemailer" ]; then
+  echo "❌ Error: @types/nodemailer not found!"
+  exit 1
+fi
+if [ ! -d "node_modules/@types/pdfkit" ]; then
+  echo "❌ Error: @types/pdfkit not found!"
+  exit 1
+fi
+echo "✅ TypeScript types verified"
 
 # Generate Prisma Client
 echo "🔨 Generating Prisma Client..."
@@ -20,6 +41,8 @@ fi
 # Verify SecurityEventLog exists
 if ! grep -q "SecurityEventLog" node_modules/.prisma/client/index.d.ts; then
   echo "❌ Error: SecurityEventLog not found in Prisma Client!"
+  echo "📋 Checking schema..."
+  grep -A 5 "model SecurityEventLog" prisma/schema.prisma || echo "SecurityEventLog not in schema!"
   exit 1
 fi
 
