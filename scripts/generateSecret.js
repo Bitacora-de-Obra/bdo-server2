@@ -36,3 +36,4 @@ console.log(
   "Copia uno de los valores anteriores en tu gestor de secretos o en los archivos *_SECRET_FILE."
 );
 
+

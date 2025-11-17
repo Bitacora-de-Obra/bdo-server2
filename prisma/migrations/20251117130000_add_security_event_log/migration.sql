@@ -31,3 +31,4 @@ CREATE INDEX `SecurityEventLog_userId_idx` ON `SecurityEventLog`(`userId`);
 -- CreateIndex
 CREATE INDEX `SecurityEventLog_ipAddress_idx` ON `SecurityEventLog`(`ipAddress`);
 
+

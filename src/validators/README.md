@@ -94,3 +94,4 @@ Si la validación falla, el middleware automáticamente responde con:
 3. Agregar validaciones personalizadas (ej: formato de fecha específico)
 4. Validar permisos granulares (usuario puede acceder al recurso)
 
+

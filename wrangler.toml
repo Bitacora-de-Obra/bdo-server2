@@ -14,3 +14,4 @@ command = "npm install && npx prisma generate && npm run build"
 [env.production.vars]
 NODE_ENV = "production"
 
+

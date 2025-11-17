@@ -281,3 +281,4 @@ async function getSecurityStats() {
 - ] Dashboard de visualización
 - ] Exportación de reportes
 
+

@@ -74,3 +74,4 @@ Después de cambiar las variables de entorno, reinicia el servidor para que tome
 | `S3_FORCE_PATH_STYLE` | `false` | Estilo de path para Cloudflare R2 |
 | `STORAGE_PUBLIC_URL` | (opcional) | URL pública para acceder a los archivos |
 
+
