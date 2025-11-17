@@ -9,6 +9,7 @@ import {
   normalizePersonnelEntries,
   normalizeWeatherReport,
 } from "../../utils/logEntryNormalization";
+import { getStorage } from "../../storage";
 
 const GENERATED_SUBDIR = "generated";
 
@@ -817,11 +818,25 @@ export const generateLogEntryPdf = async ({
   });
 
   const stats = await fs.stat(filePath);
+  
+  // Leer el PDF generado
+  const pdfBuffer = await fs.readFile(filePath);
+  
+  // Subir a Cloudflare R2 (o almacenamiento configurado)
+  const storage = getStorage();
   const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
+  await storage.save({
+    path: storagePath,
+    content: pdfBuffer,
+  });
+  
+  // Obtener la URL pública del almacenamiento
+  const publicUrl = storage.getPublicUrl(storagePath);
+  
   const attachment = await prisma.attachment.create({
     data: {
       fileName,
-      url: `${baseUrl}/uploads/${GENERATED_SUBDIR}/${fileName}`,
+      url: publicUrl,
       storagePath,
       size: stats.size,
       type: "application/pdf",
