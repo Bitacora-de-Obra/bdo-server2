@@ -4,7 +4,8 @@ import express, {
   Request,
   Response,
 } from "express";
-import cors, { CorsOptions } from "cors";
+const cors = require("cors");
+import { CorsOptions } from "cors";
 import OpenAI from "openai";
 import cookieParser from "cookie-parser";
 import fs from "fs";
