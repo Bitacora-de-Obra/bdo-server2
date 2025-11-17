@@ -788,12 +788,37 @@ const resolveProjectRole = (value?: string): UserRole | undefined => {
 
 const resolveStorageKeyFromUrl = (fileUrl?: string | null): string | null => {
   if (!fileUrl) return null;
+  
+  // Si es una URL de R2 pública, extraer el path
+  if (fileUrl.includes(".r2.dev") || fileUrl.includes("r2.cloudflarestorage.com")) {
+    try {
+      const parsed = new URL(fileUrl);
+      const pathname = parsed.pathname.replace(/^\/+/, "");
+      // Las URLs de R2 públicas tienen el formato: https://pub-xxx.r2.dev/path/to/file
+      // El pathname ya es el storagePath
+      return pathname || null;
+    } catch (error) {
+      // Si no es una URL válida, intentar extraer el path manualmente
+      const match = fileUrl.match(/\.r2\.dev\/(.+)$/);
+      if (match && match[1]) {
+        return match[1];
+      }
+    }
+  }
+  
+  // Si es una URL del servidor (/api/attachments/...), no podemos extraer el path
+  if (fileUrl.includes("/api/attachments/")) {
+    return null;
+  }
+  
   try {
     const parsed = new URL(fileUrl);
     const pathname = parsed.pathname.replace(/^\/+/, "");
     if (pathname.startsWith("uploads/")) {
       return pathname.replace(/^uploads\//, "");
     }
+    // Si es una URL absoluta pero no tiene "uploads/", devolver el pathname completo
+    return pathname || null;
   } catch (error) {
     // Not a valid absolute URL, fall back to relative handling
     const sanitized = fileUrl.replace(/^\/+/, "");
@@ -1861,15 +1886,18 @@ app.get("/api/attachments/:id/download", async (req, res) => {
     
     // Si usamos Cloudflare R2 o S3, intentar cargar desde storage
     if (storageDriver === "r2" || storageDriver === "cloudflare" || storageDriver === "s3") {
+      // Si la URL es una URL pública de R2, redirigir directamente
+      if (attachment.url && 
+          attachment.url.startsWith("http") && 
+          !attachment.url.includes("/api/attachments/") &&
+          (attachment.url.includes(".r2.dev") || attachment.url.includes("r2.cloudflarestorage.com"))) {
+        return res.redirect(attachment.url);
+      }
+      
       const storagePath = attachment.storagePath || resolveStorageKeyFromUrl(attachment.url);
       
       if (storagePath) {
         try {
-          // Si la URL es pública y accesible, redirigir directamente
-          if (attachment.url && attachment.url.startsWith("http") && !attachment.url.includes("/api/attachments/")) {
-            return res.redirect(attachment.url);
-          }
-          
           // Cargar desde storage y servir
           const fileBuffer = await storage.load(storagePath);
           const mimeType = attachment.type || mime.lookup(storagePath) || "application/octet-stream";
@@ -1882,8 +1910,17 @@ app.get("/api/attachments/:id/download", async (req, res) => {
           return res.send(fileBuffer);
         } catch (storageError) {
           console.error("Error cargando archivo desde storage:", storageError);
-          // Continuar con fallback a sistema local
+          // Si estamos usando R2 y falla, no intentar fallback local
+          return res.status(404).json({ 
+            error: "Archivo no disponible en el almacenamiento.",
+            details: storageError instanceof Error ? storageError.message : "Error desconocido"
+          });
         }
+      } else {
+        // Si no podemos determinar el storagePath y estamos usando R2, devolver error
+        return res.status(404).json({ 
+          error: "No se pudo determinar la ubicación del archivo en el almacenamiento."
+        });
       }
     }
 
@@ -1951,15 +1988,18 @@ app.get("/api/attachments/:id/view", async (req, res) => {
     
     // Si usamos Cloudflare R2 o S3, intentar cargar desde storage
     if (storageDriver === "r2" || storageDriver === "cloudflare" || storageDriver === "s3") {
+      // Si la URL es una URL pública de R2, redirigir directamente
+      if (attachment.url && 
+          attachment.url.startsWith("http") && 
+          !attachment.url.includes("/api/attachments/") &&
+          (attachment.url.includes(".r2.dev") || attachment.url.includes("r2.cloudflarestorage.com"))) {
+        return res.redirect(attachment.url);
+      }
+      
       const storagePath = attachment.storagePath || resolveStorageKeyFromUrl(attachment.url);
       
       if (storagePath) {
         try {
-          // Si la URL es pública y accesible, redirigir directamente
-          if (attachment.url && attachment.url.startsWith("http") && !attachment.url.includes("/api/attachments/")) {
-            return res.redirect(attachment.url);
-          }
-          
           // Cargar desde storage y servir
           const fileBuffer = await storage.load(storagePath);
           const mimeType = attachment.type || mime.lookup(storagePath) || "application/octet-stream";
@@ -1972,8 +2012,17 @@ app.get("/api/attachments/:id/view", async (req, res) => {
           return res.send(fileBuffer);
         } catch (storageError) {
           console.error("Error cargando archivo desde storage:", storageError);
-          // Continuar con fallback a sistema local
+          // Si estamos usando R2 y falla, no intentar fallback local
+          return res.status(404).json({ 
+            error: "Archivo no disponible en el almacenamiento.",
+            details: storageError instanceof Error ? storageError.message : "Error desconocido"
+          });
         }
+      } else {
+        // Si no podemos determinar el storagePath y estamos usando R2, devolver error
+        return res.status(404).json({ 
+          error: "No se pudo determinar la ubicación del archivo en el almacenamiento."
+        });
       }
     }
 
