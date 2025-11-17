@@ -29,7 +29,8 @@
     "seed": "ts-node prisma/seed.ts",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "secrets:generate": "node scripts/generateSecret.js"
   },
   "keywords": [],
   "author": "",
