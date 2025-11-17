@@ -227,19 +227,19 @@ export const generateReportPdf = async ({
   // Subir a Cloudflare R2 (o almacenamiento configurado)
   const storage = getStorage();
   const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
-  const storedKey = await storage.save({
+  await storage.save({
     path: storagePath,
     content: pdfBuffer,
   });
   
   // Obtener la URL pública del almacenamiento
-  const publicUrl = storage.getPublicUrl(storedKey);
+  const publicUrl = storage.getPublicUrl(storagePath);
   
   const attachment = await prisma.attachment.create({
     data: {
       fileName,
       url: publicUrl,
-      storagePath: storedKey,
+      storagePath,
       size: stats.size,
       type: "application/pdf",
     },
@@ -254,9 +254,16 @@ export const generateReportPdf = async ({
     },
   });
 
+  // Limpiar archivo temporal local
+  try {
+    await fs.unlink(filePath);
+  } catch (error) {
+    console.warn('No se pudo eliminar el archivo temporal:', error);
+  }
+
   return {
     attachment,
     fileName,
-    filePath,
+    filePath: publicUrl, // Retornar la URL pública en lugar del path local
   };
 };
