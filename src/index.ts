@@ -2575,6 +2575,50 @@ app.get(
   }
 );
 
+// Temporary debugging endpoint for storage configuration
+app.get(
+  "/api/admin/debug-storage",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const storage = getStorage();
+      
+      // Detect which storage type is being used
+      const storageType = storage.constructor.name;
+      
+      const debugInfo = {
+        storageType,
+        environment: {
+          STORAGE_DRIVER: process.env.STORAGE_DRIVER || 'not set (auto-detect)',
+          CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID ? 'Set ✅' : 'Missing ❌',
+          CLOUDFLARE_R2_BUCKET: process.env.CLOUDFLARE_R2_BUCKET || 'Missing ❌',
+          CLOUDFLARE_R2_ACCESS_KEY_ID: process.env.CLOUDFLARE_R2_ACCESS_KEY_ID ? 'Set ✅' : 'Missing ❌',
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY ? 'Set ✅' : 'Missing ❌',
+          CLOUDFLARE_R2_PUBLIC_URL: process.env.CLOUDFLARE_R2_PUBLIC_URL || 'Not set (will use default)',
+        },
+        detection: {
+          autoDetectedDriver: (
+            process.env.CLOUDFLARE_ACCOUNT_ID &&
+            process.env.CLOUDFLARE_R2_ACCESS_KEY_ID &&
+            process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY
+          ) ? 'r2' : 'local',
+          finalDriver: (process.env.STORAGE_DRIVER || 
+            ((process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_R2_ACCESS_KEY_ID && process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY) ? 'r2' : 'local')
+          ).toLowerCase()
+        }
+      };
+      
+      res.json(debugInfo);
+    } catch (error) {
+      res.status(500).json({
+        error: "Error getting storage debug info",
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+);
+
 // Health check endpoint
 app.get("/", (req, res) => {
   res.json({
