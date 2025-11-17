@@ -22,6 +22,7 @@
     "project:update-from-extract": "node scripts/updateProjectFromExtract.js",
     "project:set-from-tables": "node scripts/setProjectFromTables.js",
     "project:add-personnel": "node scripts/addKeyPersonnel.js",
+    "cronograma:import": "node scripts/importCronograma.js",
     "actas:import-history": "node scripts/importActasHistory.js",
     "cost-actas:import-history": "node scripts/importCostActasHistory.js",
     "contract-items:import": "node scripts/importContractItems.js",
