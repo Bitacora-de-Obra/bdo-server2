@@ -50,6 +50,7 @@ import {
   CronogramaValidationError,
 } from "./utils/xmlValidator";
 import { logger } from "./logger";
+import { secretDiagnostics } from "./config/secrets";
 import fsPromises from "fs/promises";
 import { sha256 } from "./utils/hash";
 import { JsonValue } from "./types/json";
@@ -107,6 +108,14 @@ import {
 // El middleware de autenticación ya está importado arriba
 const app = express();
 const prisma = new PrismaClient();
+
+logger.info("Secrets cargados", {
+  jwt: {
+    access: secretDiagnostics.jwt.access.source,
+    refresh: secretDiagnostics.jwt.refresh.source,
+    legacy: secretDiagnostics.jwt.legacy.source,
+  },
+});
 const port = 4001;
 const isProduction = process.env.NODE_ENV === "production";
 

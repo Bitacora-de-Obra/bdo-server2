@@ -39,6 +39,10 @@ declare global {
       CRON_XML_MAX_NAME_LENGTH?: string;
       JWT_SECRET?: string;
       JWT_REFRESH_SECRET?: string;
+      JWT_ACCESS_SECRET?: string;
+      JWT_SECRET_FILE?: string;
+      JWT_ACCESS_SECRET_FILE?: string;
+      JWT_REFRESH_SECRET_FILE?: string;
     }
   }
 }
