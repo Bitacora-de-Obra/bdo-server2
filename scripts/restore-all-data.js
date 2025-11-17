@@ -8,10 +8,10 @@ const path = require('path');
 
 async function restoreAllData() {
   console.log('🔄 Restaurando todos los datos originales...\n');
-  console.log('📋 Esto incluye:');
-  console.log('   1. Usuarios (IDU, CONTRATISTA, INTERVENTORIA)');
-  console.log('   2. Proyecto (Ampliación Av. Ciudad de Cali)');
-  console.log('   3. Personal clave del proyecto');
+    console.log('📋 Esto incluye:');
+    console.log('   1. Usuarios (IDU, CONTRATISTA, INTERVENTORIA)');
+    console.log('   2. Proyecto Mutis (José Celestino Mutis)');
+    console.log('   3. Personal clave del proyecto');
   console.log('   4. Ítems contractuales');
   console.log('   5. Actas de obra');
   console.log('   6. Actas de costo');
@@ -28,13 +28,13 @@ async function restoreAllData() {
     });
     console.log('✅ Usuarios restaurados\n');
 
-    // 2. Configurar proyecto
-    console.log('📋 2/7 Configurando proyecto...');
-    execSync(`node ${path.join(scriptsDir, 'setProjectObject.js')}`, {
+    // 2. Crear/actualizar proyecto Mutis
+    console.log('📋 2/7 Creando/actualizando Proyecto Mutis...');
+    execSync(`node ${path.join(scriptsDir, 'createMutisProject.js')}`, {
       stdio: 'inherit',
       cwd: path.join(__dirname, '..'),
     });
-    console.log('✅ Proyecto configurado\n');
+    console.log('✅ Proyecto Mutis configurado\n');
 
     // 3. Agregar personal clave
     console.log('👤 3/7 Agregando personal clave...');
