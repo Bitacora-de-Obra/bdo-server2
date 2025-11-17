@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { AuthRequest } from './auth';
 import { logger } from '../logger';
+import { recordSecurityEvent } from '../services/securityMonitoring';
 
 const prisma = new PrismaClient();
 
@@ -124,6 +125,12 @@ export const requireLogEntryAccess = (requireWrite = false) => {
       );
 
       if (!hasAccess) {
+        recordSecurityEvent('ACCESS_DENIED', 'medium', req, {
+          reason: reason || 'Resource access denied',
+          resourceType: 'logEntry',
+          resourceId: id,
+          requireWrite: requireWrite,
+        });
         return res.status(403).json({
           error: reason || 'No tienes acceso a este recurso',
           code: 'ACCESS_DENIED',
