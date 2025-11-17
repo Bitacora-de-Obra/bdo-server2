@@ -91,7 +91,6 @@ import {
   normalizeEquipmentEntries,
   normalizeWeatherReport,
 } from "./utils/logEntryNormalization";
-import { getStorage } from "./storage";
 import {
   sendEmailVerificationEmail,
   sendPasswordResetEmail,
