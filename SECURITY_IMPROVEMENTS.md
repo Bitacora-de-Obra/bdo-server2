@@ -47,6 +47,9 @@ API_RATE_LIMIT_MAX=100           # Máximo de requests por ventana
 # Monitoreo de Seguridad
 SECURITY_CLEANUP_CRON=0 2 * * *  # Cron para limpieza (default: diario a las 2 AM)
 SECURITY_EVENTS_MAX_AGE_DAYS=30  # Días a mantener eventos (default: 30)
+
+# Request Timeout
+REQUEST_TIMEOUT_MS=30000  # Timeout en milisegundos (default: 30000 = 30 segundos)
 ```
 
 ### 6. ✅ Protección CSRF
@@ -86,6 +89,45 @@ SECURITY_EVENTS_MAX_AGE_DAYS=30  # Días a mantener eventos (default: 30)
   - Máximo 10,000 eventos en memoria
   - Limpieza automática de eventos antiguos
 
+### 8. ✅ Account Lockout (Bloqueo de Cuentas)
+- **Protección contra fuerza bruta**: Bloqueo automático de cuentas después de 5 intentos fallidos de login
+- **Duración del bloqueo**: 15 minutos (configurable)
+- **Ventana de tiempo**: Los intentos se cuentan en una ventana de 15 minutos
+- **Limpieza automática**: Los intentos fallidos se limpian después de un login exitoso
+- **Mensajes informativos**: El usuario recibe información sobre cuántos intentos le quedan y cuándo se desbloqueará la cuenta
+- **Integración con monitoreo**: Los bloqueos se registran como eventos de seguridad de alta severidad
+
+### 9. ✅ Headers de Seguridad Mejorados (Helmet)
+- **Content Security Policy (CSP)**: Política estricta para prevenir XSS y ataques de inyección
+- **HTTP Strict Transport Security (HSTS)**: Fuerza conexiones HTTPS con max-age de 1 año
+- **X-Frame-Options**: Previene clickjacking (deny)
+- **X-Content-Type-Options**: Previene MIME type sniffing (noSniff)
+- **X-XSS-Protection**: Habilita filtro XSS del navegador
+- **Referrer Policy**: Controla qué información de referrer se envía (strict-origin-when-cross-origin)
+- **Permitted Cross-Domain Policies**: Deshabilitado para mayor seguridad
+
+### 10. ✅ Validación de Fortaleza de Contraseñas
+- **Requisitos mínimos**:
+  - Mínimo 8 caracteres
+  - Al menos una letra mayúscula
+  - Al menos una letra minúscula
+  - Al menos un número
+  - Al menos un carácter especial (!@#$%^&*()_+-=[]{}|;:,.<>?)
+- **Evaluación de fortaleza**: Clasifica contraseñas como weak, medium o strong
+- **Mensajes detallados**: Retorna lista de errores específicos cuando la contraseña no cumple requisitos
+- **Compatibilidad**: Respeta la configuración de `requireStrongPassword` en AppSettings
+
+### 11. ✅ Request Timeout
+- **Timeout global**: 30 segundos por defecto (configurable via `REQUEST_TIMEOUT_MS`)
+- **Prevención de requests colgados**: Termina automáticamente requests que tardan demasiado
+- **Respuesta apropiada**: Retorna error 408 (Request Timeout) con mensaje claro
+- **Limpieza automática**: Limpia el timeout cuando la respuesta se envía correctamente
+
+### 12. ✅ Límites de Tamaño de Body Más Estrictos
+- **Límite global JSON**: Reducido de 10MB a 2MB
+- **Protección contra DoS**: Previene ataques de denegación de servicio mediante requests grandes
+- **Nota**: Endpoints específicos que necesitan archivos grandes (como uploads) usan multer con límites separados
+
 ## Próximos Pasos Recomendados
 
 1. ✅ **Validación de Entrada Centralizada**: Implementado con Zod
@@ -93,11 +135,16 @@ SECURITY_EVENTS_MAX_AGE_DAYS=30  # Días a mantener eventos (default: 30)
 3. ✅ **Validación de Archivos Mejorada**: Implementado con magic bytes
 4. ✅ **CSRF Protection**: Implementado con Double Submit Cookie pattern
 5. ✅ **Monitoreo**: Sistema completo de monitoreo y alertas implementado
-6. **Integración con sistemas externos**: Considerar integración con:
-   - Sistemas de SIEM (Security Information and Event Management)
-   - Notificaciones por email a administradores
-   - Integración con Slack/Discord para alertas en tiempo real
-   - Almacenamiento persistente en base de datos o Redis para eventos históricos
+6. ✅ **Account Lockout**: Implementado con bloqueo temporal después de intentos fallidos
+7. ✅ **Headers de Seguridad**: Helmet configurado con CSP, HSTS y otros headers
+8. ✅ **Validación de Contraseñas**: Validación robusta de fortaleza de contraseñas
+9. ✅ **Request Timeout**: Timeout global para prevenir requests colgados
+10. ✅ **Límites de Body**: Límites más estrictos para prevenir DoS
+11. **Integración con sistemas externos**: Considerar integración con:
+    - Sistemas de SIEM (Security Information and Event Management)
+    - Notificaciones por email a administradores
+    - Integración con Slack/Discord para alertas en tiempo real
+    - Almacenamiento persistente en base de datos o Redis para eventos históricos
 
 ## Testing
 
@@ -114,6 +161,18 @@ Para probar las mejoras:
    - Cambiar contraseña → Verificar evento `PASSWORD_CHANGE`
    - Consultar eventos: `GET /api/admin/security/events`
    - Consultar estadísticas: `GET /api/admin/security/stats`
+6. **Probar Account Lockout**:
+   - Intentar login con contraseña incorrecta 5 veces → Verificar que la cuenta se bloquea
+   - Intentar login con cuenta bloqueada → Verificar mensaje de bloqueo con tiempo restante
+   - Esperar 15 minutos o hacer login exitoso → Verificar que el bloqueo se limpia
+7. **Probar validación de contraseñas**:
+   - Intentar cambiar contraseña con contraseña débil → Verificar mensajes de error detallados
+   - Cambiar contraseña con contraseña fuerte → Verificar que se acepta
+8. **Probar headers de seguridad**:
+   - Verificar que las respuestas incluyen headers CSP, HSTS, X-Frame-Options, etc.
+   - Usar herramientas como SecurityHeaders.com para verificar la configuración
+9. **Probar request timeout**:
+   - Crear un endpoint de prueba que tarde más de 30 segundos → Verificar que retorna 408
 
 ## Notas
 
