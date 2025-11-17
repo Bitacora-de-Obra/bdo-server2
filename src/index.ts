@@ -1530,6 +1530,8 @@ const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:3000",
   "http://localhost:3001",
   "http://localhost:5173",
+  "https://bdigitales.com",
+  "https://bdo-client.vercel.app",
 ];
 
 const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
