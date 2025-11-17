@@ -2619,6 +2619,97 @@ app.get(
   }
 );
 
+// Temporary endpoint to test PDF generation
+app.post(
+  "/api/admin/test-pdf-generation",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { type } = req.body; // 'logEntry' or 'report'
+      
+      if (!type || !['logEntry', 'report'].includes(type)) {
+        return res.status(400).json({
+          error: "Invalid or missing type. Must be 'logEntry' or 'report'"
+        });
+      }
+
+      let result;
+      const testFileName = `test-${type}-${Date.now()}.pdf`;
+
+      if (type === 'logEntry') {
+        // Get the first available log entry for testing
+        const logEntry = await prisma.logEntry.findFirst({
+          include: {
+            user: {
+              select: {
+                fullName: true,
+                projectRole: true,
+              },
+            },
+            project: {
+              select: {
+                name: true,
+                location: true,
+              },
+            },
+            LogEntryAttachment: true,
+          },
+        });
+
+        if (!logEntry) {
+          return res.status(404).json({
+            error: "No log entries found for testing"
+          });
+        }
+
+        result = await generateLogEntryPdf(logEntry, testFileName);
+      } else {
+        // Get the first available report for testing
+        const report = await prisma.weeklyReport.findFirst({
+          include: {
+            project: {
+              select: {
+                name: true,
+                location: true,
+              },
+            },
+            createdBy: {
+              select: {
+                fullName: true,
+                projectRole: true,
+              },
+            },
+          },
+        });
+
+        if (!report) {
+          return res.status(404).json({
+            error: "No reports found for testing"
+          });
+        }
+
+        result = await generateReportPdf(report, testFileName);
+      }
+
+      res.json({
+        success: true,
+        message: `${type} PDF generated successfully`,
+        fileName: testFileName,
+        url: result.url,
+        storage: result.storage || 'local'
+      });
+
+    } catch (error) {
+      console.error("Error testing PDF generation:", error);
+      res.status(500).json({
+        error: "Error generating test PDF",
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+);
+
 // Health check endpoint
 app.get("/", (req, res) => {
   res.json({
