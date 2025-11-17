@@ -88,5 +88,8 @@
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
+  },
+  "overrides": {
+    "js-yaml": ">=4.1.1"
   }
 }
