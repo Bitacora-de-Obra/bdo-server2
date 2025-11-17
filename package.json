@@ -16,6 +16,7 @@
     "users:create-contratista": "node scripts/createContratistaUsers.js",
     "users:restore-all": "node scripts/restore-all-users.js",
     "data:restore-all": "node scripts/restore-all-data.js",
+    "project:create-mutis": "node scripts/createMutisProject.js",
     "users:create-admin": "node scripts/createAdmin.js",
     "project:set-object": "node scripts/setProjectObject.js",
     "project:update-from-extract": "node scripts/updateProjectFromExtract.js",
