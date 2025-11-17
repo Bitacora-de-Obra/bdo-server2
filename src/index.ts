@@ -1532,6 +1532,8 @@ const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "https://bdigitales.com",
   "https://bdo-client.vercel.app",
+  "https://bdo-client-git-main-bitacora-de-obras-projects.vercel.app",
+  "https://bdo-client-bitacora-de-obras-projects.vercel.app",
 ];
 
 const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
