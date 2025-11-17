@@ -56,6 +56,7 @@ import { JsonValue } from "./types/json";
 import { validate } from "./middleware/validation";
 import { changePasswordSchema } from "./validators/userSchemas";
 import { requireLogEntryAccess, verifyLogEntryAccess } from "./middleware/resourcePermissions";
+import { validateUploadedFiles } from "./middleware/fileValidationMiddleware";
 
 type JsonObject = { [Key in string]: JsonValue };
 
@@ -3122,6 +3123,7 @@ app.post(
       next();
     });
   },
+  validateUploadedFiles, // Validar magic bytes después de multer
   async (req: AuthRequest, res) => {
     console.log("=== INICIO POST /api/log-entries ===");
     console.log("DEBUG: Método:", req.method);
@@ -3993,6 +3995,7 @@ app.put(
       next();
     }
   },
+  validateUploadedFiles, // Validar magic bytes después de multer (si hay archivos)
   async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
@@ -4802,6 +4805,8 @@ app.post(
         return res.status(500).json({ error: err.message });
       }
 
+      // Validar archivos después de multer
+      validateUploadedFiles(req, res, async () => {
       try {
         const { id } = req.params;
         const { content, authorId } = req.body ?? {};
@@ -4943,6 +4948,7 @@ app.post(
         console.error("Error al crear comentario de bitácora:", error);
         res.status(500).json({ error: "No se pudo crear el comentario." });
       }
+      }); // Cerrar callback de validateUploadedFiles
     });
   }
 );
