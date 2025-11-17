@@ -57,6 +57,7 @@ import { validate } from "./middleware/validation";
 import { changePasswordSchema } from "./validators/userSchemas";
 import { requireLogEntryAccess, verifyLogEntryAccess } from "./middleware/resourcePermissions";
 import { validateUploadedFiles } from "./middleware/fileValidationMiddleware";
+import { csrfTokenMiddleware, csrfProtection } from "./middleware/csrf";
 
 type JsonObject = { [Key in string]: JsonValue };
 
@@ -1582,6 +1583,12 @@ if (!fs.existsSync(uploadsDir)) {
 app.use(cookieParser()); // Permite que Express maneje cookies
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+// CSRF Protection: Generar token CSRF para requests GET
+app.use(csrfTokenMiddleware);
+
+// CSRF Protection: Verificar token en requests modificadores
+app.use(csrfProtection);
 
 // Middleware global para debug - solo en desarrollo
 if (!isProduction) {
