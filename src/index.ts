@@ -1615,6 +1615,17 @@ const multerConfig = {
       "application/pdf",
       "image/gif",
       "image/webp",
+      // Planos CAD
+      "application/acad",
+      "image/vnd.dwg",
+      "application/x-dwg",
+      "image/x-dwg",
+      "application/dxf",
+      "image/vnd.dxf",
+      // XML para cronogramas
+      "text/xml",
+      "application/xml",
+      "text/xml; charset=utf-8",
     ];
 
     if (allowedMimes.includes(file.mimetype)) {
@@ -1622,7 +1633,7 @@ const multerConfig = {
     } else {
       cb(
         new Error(
-          "Tipo de archivo no permitido. Solo se permiten imágenes (JPG, PNG, GIF, WEBP) y PDFs."
+          "Tipo de archivo no permitido. Solo se permiten imágenes (JPG, PNG, GIF, WEBP), PDFs, planos CAD (DWG, DXF) y archivos XML."
         )
       );
     }
