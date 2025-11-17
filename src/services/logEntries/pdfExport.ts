@@ -492,10 +492,10 @@ export const generateLogEntryPdf = async ({
     doc.moveDown();
     doc.font("Helvetica-Bold").fontSize(13).text("Firmas registradas");
     doc.moveDown(0.25);
-    if (!entry.signatures.length) {
+    if (!entry.signatures?.length) {
       doc.font("Helvetica").fontSize(11).text("No hay firmas registradas.");
     } else {
-      entry.signatures.forEach((signature, index) => {
+      entry.signatures.forEach((signature: any, index: number) => {
         const signerName = signature.signer?.fullName || "Firmante";
         const signedAt = signature.signedAt
           ? formatDateTime(new Date(signature.signedAt))
@@ -510,10 +510,10 @@ export const generateLogEntryPdf = async ({
     doc.moveDown();
     doc.font("Helvetica-Bold").fontSize(13).text("Comentarios").moveDown(0.25);
 
-    if (!entry.comments.length) {
+    if (!entry.comments?.length) {
       doc.font("Helvetica").fontSize(11).text("Sin comentarios registrados.");
     } else {
-      entry.comments.forEach((comment, index) => {
+      entry.comments.forEach((comment: any, index: number) => {
         const authorName = comment.author?.fullName || "Usuario";
         const timestamp = comment.timestamp
           ? formatDateTime(new Date(comment.timestamp))
@@ -533,15 +533,15 @@ export const generateLogEntryPdf = async ({
     doc.moveDown();
     doc.font("Helvetica-Bold").fontSize(13).text("Adjuntos").moveDown(0.25);
 
-    if (!entry.attachments.length) {
+    if (!entry.attachments?.length) {
       doc.font("Helvetica").fontSize(11).text("No hay archivos adjuntos.");
     } else {
       // Separar imágenes de otros archivos
       const images = entry.attachments.filter(
-        (att) => att.type && att.type.startsWith("image/")
+        (att: any) => att.type && att.type.startsWith("image/")
       );
       const otherFiles = entry.attachments.filter(
-        (att) => !att.type || !att.type.startsWith("image/")
+        (att: any) => !att.type || !att.type.startsWith("image/")
       );
 
       // Mostrar imágenes con layout mejorado
@@ -608,7 +608,7 @@ export const generateLogEntryPdf = async ({
           doc.moveDown(0.2);
         }
 
-        otherFiles.forEach((attachment, index) => {
+        otherFiles.forEach((attachment: any, index: number) => {
           doc
             .font("Helvetica")
             .fontSize(11)
