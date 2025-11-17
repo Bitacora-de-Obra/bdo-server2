@@ -79,3 +79,4 @@ Revisa los logs de Render para ver:
 - Si los tipos se están instalando
 - Si hay errores específicos durante la instalación
 
+

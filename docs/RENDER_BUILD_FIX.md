@@ -57,3 +57,4 @@ Si el problema persiste, una solución alternativa es mover los tipos de `devDep
 
 **Nota:** Esto aumentará el tamaño del bundle de producción, pero garantiza que los tipos estén disponibles durante el build.
 
+

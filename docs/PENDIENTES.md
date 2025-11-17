@@ -124,3 +124,4 @@ Todos los requerimientos críticos están **100% cumplidos**:
 - Los pendientes son mejoras y optimizaciones
 - El sistema es funcional y cumple con los requerimientos mínimos del cliente
 
+

@@ -442,3 +442,4 @@ Antes de considerar producción lista:
 
 **Última actualización:** Noviembre 2025
 
+

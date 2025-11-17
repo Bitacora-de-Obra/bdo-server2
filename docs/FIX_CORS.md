@@ -103,3 +103,4 @@ Esto permitirá:
 
 **Urgencia:** 🔴 **Alta** - Debe corregirse antes de que los usuarios usen la aplicación
 
+
