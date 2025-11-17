@@ -681,10 +681,17 @@ const buildAttachmentResponse = (attachment: any) => {
   const storage = getStorage();
   const storageDriver = (process.env.STORAGE_DRIVER || "local").toLowerCase();
   
+  // Intentar obtener storagePath desde diferentes fuentes
+  let storagePath = attachment.storagePath;
+  if (!storagePath && attachment.url) {
+    // Intentar extraer storagePath desde la URL si no está en el attachment
+    storagePath = resolveStorageKeyFromUrl(attachment.url);
+  }
+  
   // Si usamos Cloudflare R2 y tenemos storagePath, usar URL pública directa
-  if ((storageDriver === "r2" || storageDriver === "cloudflare") && attachment.storagePath) {
+  if ((storageDriver === "r2" || storageDriver === "cloudflare") && storagePath) {
     try {
-      const publicUrl = storage.getPublicUrl(attachment.storagePath);
+      const publicUrl = storage.getPublicUrl(storagePath);
       // Si la URL pública es accesible directamente, usarla
       if (publicUrl && publicUrl.startsWith("http")) {
         return {
@@ -693,9 +700,11 @@ const buildAttachmentResponse = (attachment: any) => {
           downloadUrl: publicUrl,
           viewUrl: publicUrl,
           previewUrl: publicUrl,
+          storagePath: storagePath, // Asegurar que storagePath esté presente
         };
       }
     } catch (error) {
+      console.warn("Error generando URL pública de R2:", error);
       // Si falla, continuar con el método tradicional
     }
   }
