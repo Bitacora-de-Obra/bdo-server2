@@ -55,6 +55,7 @@ import { sha256 } from "./utils/hash";
 import { JsonValue } from "./types/json";
 import { validate } from "./middleware/validation";
 import { changePasswordSchema } from "./validators/userSchemas";
+import { requireLogEntryAccess, verifyLogEntryAccess } from "./middleware/resourcePermissions";
 
 type JsonObject = { [Key in string]: JsonValue };
 
@@ -4001,17 +4002,18 @@ app.put(
         return res.status(401).json({ error: "Usuario no autenticado." });
       }
 
-      // Obtener la anotación actual
-      const existingEntry = await prisma.logEntry.findUnique({
-        where: { id },
-        include: {
-          author: true,
-          assignees: true,
-        },
-      });
+      // Verificar acceso al recurso usando el middleware de permisos
+      const { entry: existingEntry, hasAccess, reason } = await verifyLogEntryAccess(
+        id,
+        userId,
+        true // requireWriteAccess = true
+      );
 
-      if (!existingEntry) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
+      if (!hasAccess || !existingEntry) {
+        return res.status(403).json({
+          error: reason || "No tienes acceso a este recurso",
+          code: "ACCESS_DENIED",
+        });
       }
 
       const { status: statusFromBody } = req.body ?? {};
@@ -4526,7 +4528,7 @@ app.put(
 
       // Registrar cambios en asignados
       if (assigneeIds !== undefined) {
-        const oldAssigneeNames = existingEntry.assignees.map((a) => a.fullName).join(", ") || "Ninguno";
+        const oldAssigneeNames = existingEntry.assignees.map((a: any) => a.fullName).join(", ") || "Ninguno";
         const newAssigneeIds = Array.isArray(assigneeIds) ? assigneeIds : [];
         const newAssignees = await prisma.user.findMany({
           where: { id: { in: newAssigneeIds } },
@@ -4803,6 +4805,7 @@ app.post(
       try {
         const { id } = req.params;
         const { content, authorId } = req.body ?? {};
+        const userId = req.user?.userId;
 
         if (!content || typeof content !== "string" || !content.trim()) {
           return res.status(400).json({
@@ -4810,11 +4813,22 @@ app.post(
           });
         }
 
-        const logEntry = await prisma.logEntry.findUnique({ where: { id } });
-        if (!logEntry) {
-          return res
-            .status(404)
-            .json({ error: "Anotación no encontrada." });
+        if (!userId) {
+          return res.status(401).json({ error: "Usuario no autenticado." });
+        }
+
+        // Verificar acceso al log entry antes de permitir comentar
+        const { entry: logEntry, hasAccess, reason } = await verifyLogEntryAccess(
+          id,
+          userId,
+          false // Solo lectura necesaria para comentar
+        );
+
+        if (!hasAccess || !logEntry) {
+          return res.status(403).json({
+            error: reason || "No tienes acceso a este recurso",
+            code: "ACCESS_DENIED",
+          });
         }
 
         const resolvedAuthorId = req.user?.userId || authorId;
