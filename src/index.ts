@@ -1570,11 +1570,6 @@ const corsOptions: CorsOptions = {
       callback(null, true);
     } else {
       // Log para debugging
-      console.log("CORS Debug Info:");
-      console.log("- Request Origin:", origin);
-      console.log("- Normalized Origin:", normalizedRequestOrigin);
-      console.log("- Allowed Origins:", allowedOrigins);
-      
       logger.warn("CORS blocked origin", {
         origin,
         normalizedOrigin: normalizedRequestOrigin,
@@ -9692,9 +9687,6 @@ app.post(
   refreshAuthMiddleware,
   async (req: AuthRequest, res) => {
     try {
-      console.log("=== /api/auth/refresh Debug Info ===");
-      console.log("Origin:", req.get("Origin"));
-      console.log("Cookies:", req.cookies);
       console.log("Refresh token request received");
 
       if (!req.user) {
@@ -9743,14 +9735,7 @@ app.post(
 // Endpoint para verificar el usuario autenticado
 app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
   try {
-    console.log("=== /api/auth/me Debug Info ===");
-    console.log("Origin:", req.get("Origin"));
-    console.log("Cookies:", req.cookies);
-    console.log("Headers Authorization:", req.get("Authorization"));
-    console.log("User from middleware:", req.user);
-    
     if (!req.user?.userId) {
-      console.log("No user found in request");
       return res.status(401).json({ error: "No authenticated user" });
     }
 
