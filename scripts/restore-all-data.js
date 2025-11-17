@@ -79,7 +79,7 @@ async function restoreAllData() {
     console.log('🎉 ¡Todos los datos originales han sido restaurados!');
     console.log('\n📊 Resumen:');
     console.log('   ✅ Usuarios: ~34 usuarios (IDU, CONTRATISTA, INTERVENTORIA)');
-    console.log('   ✅ Proyecto: Ampliación Av. Ciudad de Cali');
+    console.log('   ✅ Proyecto: Mutis (José Celestino Mutis - IDU-2412-2024)');
     console.log('   ✅ Personal clave: Agregado');
     console.log('   ✅ Ítems contractuales: Importados');
     console.log('   ✅ Actas de obra: Importadas');
