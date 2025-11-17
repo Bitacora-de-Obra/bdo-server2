@@ -28,9 +28,12 @@ if [ ! -d "node_modules/@types/pdfkit" ]; then
 fi
 echo "✅ TypeScript types verified"
 
-# Generate Prisma Client
+# Generate Prisma Client (this doesn't require DB connection)
 echo "🔨 Generating Prisma Client..."
 npx prisma generate
+
+# Note: Migrations should be run separately via Render's postdeploy script
+# or manually after deployment. Prisma Client generation doesn't require DB.
 
 # Verify Prisma Client was generated
 if [ ! -d "node_modules/.prisma/client" ]; then
