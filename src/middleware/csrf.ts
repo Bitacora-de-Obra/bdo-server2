@@ -98,10 +98,9 @@ export const csrfProtection = (
 
   // Verificar que el token del header exista
   if (!headerToken) {
-    logger.warn('CSRF token missing', {
+    logger.warn('CSRF token missing in header', {
       path: req.path,
       method: req.method,
-      hasCookieToken: !!cookieToken,
       hasHeaderToken: !!headerToken,
       userId: (req as AuthRequest).user?.userId,
     });
