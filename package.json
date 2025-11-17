@@ -30,7 +30,9 @@
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "typecheck": "tsc --noEmit",
-    "secrets:generate": "node scripts/generateSecret.js"
+    "secrets:generate": "node scripts/generateSecret.js",
+    "validate:env": "node scripts/validate-env.js",
+    "pre-deploy": "node scripts/pre-deploy.js"
   },
   "keywords": [],
   "author": "",
