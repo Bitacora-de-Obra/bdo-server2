@@ -58,6 +58,7 @@ import { changePasswordSchema } from "./validators/userSchemas";
 import { requireLogEntryAccess, verifyLogEntryAccess } from "./middleware/resourcePermissions";
 import { validateUploadedFiles } from "./middleware/fileValidationMiddleware";
 import { csrfTokenMiddleware, csrfProtection } from "./middleware/csrf";
+import { recordSecurityEvent, getSecurityEvents, getSecurityStats, cleanupOldEvents } from "./services/securityMonitoring";
 
 type JsonObject = { [Key in string]: JsonValue };
 
@@ -245,7 +246,11 @@ const apiRateLimiter = rateLimit({
            req.path.startsWith('/api/auth/refresh') ||
            req.path.startsWith('/api/docs');
   },
-  handler: (_req: Request, res: Response) => {
+  handler: (req: Request, res: Response) => {
+    recordSecurityEvent('RATE_LIMIT_EXCEEDED', 'medium', req, {
+      path: req.path,
+      method: req.method,
+    });
     res.status(429).json({
       error: "Demasiadas solicitudes. Inténtalo nuevamente en unos minutos.",
       code: "RATE_LIMIT",
@@ -298,6 +303,12 @@ const validatePasswordStrength = async (password: string) => {
 
 const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
   if (req.user?.appRole !== "admin") {
+    recordSecurityEvent('ACCESS_DENIED', 'high', req, {
+      reason: 'Admin access required',
+      userRole: req.user?.appRole,
+      path: req.path,
+      method: req.method,
+    });
     return res
       .status(403)
       .json({ error: "Acceso restringido a administradores." });
@@ -311,10 +322,21 @@ const requireEditor = (
   next: NextFunction
 ) => {
   if (!req.user) {
+    recordSecurityEvent('UNAUTHORIZED_ACCESS_ATTEMPT', 'medium', req, {
+      reason: 'User not authenticated',
+      path: req.path,
+      method: req.method,
+    });
     return res.status(401).json({ error: "Usuario no autenticado." });
   }
 
   if (req.user.appRole === "viewer") {
+    recordSecurityEvent('ACCESS_DENIED', 'medium', req, {
+      reason: 'Editor access required',
+      userRole: req.user.appRole,
+      path: req.path,
+      method: req.method,
+    });
     return res.status(403).json({
       error: "Acceso restringido a editores y administradores.",
     });
@@ -687,6 +709,27 @@ ensureAppSettings().catch((error) => {
 });
 
 scheduleDailyCommitmentReminder();
+
+// Programar limpieza de eventos de seguridad antiguos (diariamente a las 2 AM)
+const scheduleSecurityEventsCleanup = () => {
+  const cronExpression = process.env.SECURITY_CLEANUP_CRON || "0 2 * * *"; // Diariamente a las 2 AM
+  const maxAgeDays = Number(process.env.SECURITY_EVENTS_MAX_AGE_DAYS || 30); // Mantener 30 días por defecto
+
+  cron.schedule(cronExpression, () => {
+    try {
+      cleanupOldEvents(maxAgeDays);
+      logger.info(`Security events cleanup completed. Max age: ${maxAgeDays} days`);
+    } catch (error) {
+      logger.error("Error en limpieza de eventos de seguridad", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  logger.info(`Security events cleanup scheduled. Cron: ${cronExpression}, Max age: ${maxAgeDays} days`);
+};
+
+scheduleSecurityEventsCleanup();
 
 const resolveProjectRole = (value?: string): UserRole | undefined => {
   if (!value) return undefined;
@@ -2379,6 +2422,71 @@ app.post(
   }
 );
 
+// Security monitoring endpoints (admin only)
+app.get(
+  "/api/admin/security/events",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const {
+        type,
+        severity,
+        ipAddress,
+        userId,
+        startDate,
+        endDate,
+        limit = 100,
+      } = req.query;
+
+      const filters: any = {};
+      if (type) filters.type = type;
+      if (severity) filters.severity = severity;
+      if (ipAddress) filters.ipAddress = ipAddress as string;
+      if (userId) filters.userId = userId as string;
+      if (startDate) filters.startDate = new Date(startDate as string);
+      if (endDate) filters.endDate = new Date(endDate as string);
+      filters.limit = parseInt(limit as string, 10) || 100;
+
+      const events = getSecurityEvents(filters);
+
+      res.json({
+        events,
+        count: events.length,
+        filters,
+      });
+    } catch (error) {
+      logger.error("Error obteniendo eventos de seguridad", {
+        error: error instanceof Error ? error.message : String(error),
+        userId: req.user?.userId,
+      });
+      res.status(500).json({
+        error: "No se pudieron obtener los eventos de seguridad.",
+      });
+    }
+  }
+);
+
+app.get(
+  "/api/admin/security/stats",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const stats = getSecurityStats();
+      res.json(stats);
+    } catch (error) {
+      logger.error("Error obteniendo estadísticas de seguridad", {
+        error: error instanceof Error ? error.message : String(error),
+        userId: req.user?.userId,
+      });
+      res.status(500).json({
+        error: "No se pudieron obtener las estadísticas de seguridad.",
+      });
+    }
+  }
+);
+
 // Health check endpoint
 app.get("/", (req, res) => {
   res.json({
@@ -4031,6 +4139,12 @@ app.put(
       );
 
       if (!hasAccess || !existingEntry) {
+        recordSecurityEvent('ACCESS_DENIED', 'medium', req, {
+          reason: reason || 'Resource access denied',
+          resourceType: 'logEntry',
+          resourceId: id,
+          requireWrite: true,
+        });
         return res.status(403).json({
           error: reason || "No tienes acceso a este recurso",
           code: "ACCESS_DENIED",
@@ -4848,6 +4962,12 @@ app.post(
         );
 
         if (!hasAccess || !logEntry) {
+          recordSecurityEvent('ACCESS_DENIED', 'medium', req, {
+            reason: reason || 'Resource access denied for commenting',
+            resourceType: 'logEntry',
+            resourceId: id,
+            requireWrite: false,
+          });
           return res.status(403).json({
             error: reason || "No tienes acceso a este recurso",
             code: "ACCESS_DENIED",
@@ -9293,6 +9413,7 @@ app.post("/api/auth/login", async (req, res) => {
     console.log("User found:", user ? "yes" : "no");
 
     if (!user) {
+      recordSecurityEvent('LOGIN_FAILED', 'medium', req, { email });
       return res.status(401).json({ error: "Credenciales inválidas." });
     }
 
@@ -9300,10 +9421,12 @@ app.post("/api/auth/login", async (req, res) => {
     console.log("Password valid:", isPasswordValid ? "yes" : "no");
 
     if (!isPasswordValid) {
+      recordSecurityEvent('LOGIN_FAILED', 'medium', req, { email, userId: user.id });
       return res.status(401).json({ error: "Credenciales inválidas." });
     }
 
     if (user.status !== "active") {
+      recordSecurityEvent('ACCESS_DENIED', 'high', req, { email, userId: user.id, reason: 'Account inactive' });
       return res
         .status(403)
         .json({ error: "La cuenta de usuario está inactiva." });
@@ -9320,6 +9443,9 @@ app.post("/api/auth/login", async (req, res) => {
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
     });
+
+    // Registrar login exitoso
+    recordSecurityEvent('LOGIN_SUCCESS', 'low', req, { email, userId: user.id });
 
     // Enviar refresh token como cookie httpOnly
     res.cookie("jid", refreshToken, buildRefreshCookieOptions());
@@ -9503,6 +9629,12 @@ app.post(
         ),
         actorId: actorInfo.actorId,
         actorEmail: actorInfo.actorEmail,
+      });
+
+      // Registrar evento de seguridad
+      recordSecurityEvent('PASSWORD_CHANGE', 'medium', req, {
+        userId: user.id,
+        email: user.email,
       });
 
       res.json({ message: "Contraseña actualizada correctamente." });

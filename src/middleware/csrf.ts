@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { randomBytes, createHash } from 'crypto';
 import { logger } from '../logger';
 import { AuthRequest } from './auth';
+import { recordSecurityEvent } from '../services/securityMonitoring';
 
 const CSRF_COOKIE_NAME = 'XSRF-TOKEN';
 const CSRF_HEADER_NAME = 'X-XSRF-TOKEN';
@@ -140,6 +141,10 @@ export const csrfProtection = (
     logger.warn('CSRF token mismatch', {
       path: req.path,
       method: req.method,
+      userId: (req as AuthRequest).user?.userId,
+    });
+
+    recordSecurityEvent('CSRF_TOKEN_INVALID', 'high', req, {
       userId: (req as AuthRequest).user?.userId,
     });
 

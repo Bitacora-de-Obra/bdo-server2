@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
+import { recordSecurityEvent } from '../services/securityMonitoring';
 
 const prisma = new PrismaClient();
 
@@ -92,6 +93,7 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
       next();
     } catch (err) {
       if (err instanceof jwt.TokenExpiredError) {
+        recordSecurityEvent('TOKEN_EXPIRED', 'medium', req);
         return res.status(401).json({ 
           error: 'Token expired',
           code: 'TOKEN_EXPIRED'
@@ -101,6 +103,7 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
     }
   } catch (error) {
     console.error('Auth middleware error:', error);
+    recordSecurityEvent('TOKEN_INVALID', 'medium', req);
     res.status(401).json({ error: 'Invalid token', code: 'INVALID_ACCESS_TOKEN' });
   }
 };

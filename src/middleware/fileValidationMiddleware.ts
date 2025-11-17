@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { validateFileType, validateFileSize } from '../utils/fileValidation';
 import { logger } from '../logger';
 import { AuthRequest } from './auth';
+import { recordSecurityEvent } from '../services/securityMonitoring';
 
 /**
  * Middleware para validar archivos después de que multer los procese
@@ -49,6 +50,13 @@ export const validateUploadedFiles = async (
             declaredMimeType: multerFile.mimetype,
             detectedType: typeValidation.detectedType,
             error: typeValidation.errorMessage,
+            userId: (req as AuthRequest).user?.userId,
+          });
+
+          recordSecurityEvent('FILE_UPLOAD_REJECTED', 'medium', req, {
+            fileName: multerFile.originalname,
+            declaredMimeType: multerFile.mimetype,
+            detectedType: typeValidation.detectedType,
             userId: (req as AuthRequest).user?.userId,
           });
 
