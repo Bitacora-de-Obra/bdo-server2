@@ -1553,9 +1553,23 @@ const allowedOrigins = Array.from(
 const corsOptions: CorsOptions = {
   origin(origin, callback) {
     // Permitir requests sin origen (ej. curl) y orígenes registrados
-    if (!origin || allowedOrigins.includes(origin.replace(/\/+$/, ""))) {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    
+    // Normalizar el origen del request (igual que normalizeOrigin)
+    const normalizedRequestOrigin = normalizeOrigin(origin);
+    
+    if (normalizedRequestOrigin && allowedOrigins.includes(normalizedRequestOrigin)) {
       callback(null, true);
     } else {
+      // Log para debugging
+      logger.warn("CORS blocked origin", {
+        origin,
+        normalizedOrigin: normalizedRequestOrigin,
+        allowedOrigins,
+      });
       callback(new Error(`Origin ${origin} not allowed by CORS`));
     }
   },
