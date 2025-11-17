@@ -11,7 +11,13 @@ ORIGINAL_NODE_ENV="${NODE_ENV:-production}"
 # This ensures devDependencies (TypeScript types) are installed
 echo "📦 Installing dependencies (including devDependencies)..."
 echo "📋 Current NODE_ENV: $NODE_ENV"
-NODE_ENV=development npm ci
+
+# Clear npm cache to ensure fresh install
+echo "🧹 Clearing npm cache..."
+npm cache clean --force || true
+
+# Install with development environment to get devDependencies
+NODE_ENV=development npm install --include=dev
 
 # Verify @types packages are installed BEFORE restoring NODE_ENV
 echo "🔍 Verifying TypeScript types are installed..."
