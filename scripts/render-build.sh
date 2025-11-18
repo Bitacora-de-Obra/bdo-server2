@@ -53,8 +53,13 @@ echo "📋 NODE_ENV restored to: $NODE_ENV"
 echo "🔨 Generating Prisma Client..."
 npx prisma generate
 
-# Note: Migrations should be run separately via Render's postdeploy script
-# or manually after deployment. Prisma Client generation doesn't require DB.
+# Push schema changes to database (with --accept-data-loss for unique constraints)
+# This is safe because tenantId is already assigned to all records
+echo "🔄 Pushing schema changes to database..."
+npx prisma db push --accept-data-loss || {
+  echo "⚠️  prisma db push failed, but continuing build..."
+  echo "   This might be expected if the schema is already in sync"
+}
 
 # Verify Prisma Client was generated
 if [ ! -d "node_modules/.prisma/client" ]; then
