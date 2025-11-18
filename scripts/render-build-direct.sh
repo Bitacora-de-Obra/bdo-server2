@@ -17,15 +17,11 @@ node scripts/create-composite-unique-indexes.js || {
   echo "⚠️  Script de índices falló, pero continuando..."
 }
 
-# Push schema changes (skip if indexes already exist)
+# Push schema changes (skip generate since we already did it)
 echo "🔄 Pushing remaining schema changes to database..."
 npx prisma db push --accept-data-loss --skip-generate || {
   echo "⚠️  prisma db push falló, pero continuando..."
 }
-
-# Generate Prisma Client
-echo "🔨 Generating Prisma Client..."
-npx prisma generate
 
 # Build TypeScript
 echo "🔨 Building TypeScript..."
