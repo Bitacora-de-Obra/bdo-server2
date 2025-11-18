@@ -6634,7 +6634,10 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
       pendingCommitments,
       recentLogEntries,
     ] = await Promise.all([
-      prisma.project.findFirst({ include: { keyPersonnel: true } }),
+      prisma.project.findFirst({ 
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
+        include: { keyPersonnel: true } 
+      }),
       prisma.contractModification.findMany({
         orderBy: { date: "desc" },
         take: 10,
