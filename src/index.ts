@@ -2996,7 +2996,9 @@ app.get(
       }
 
       // Si no es summary, retornar la lista normal
+      const modWhere = withTenantFilter(req);
       const modifications = await prisma.contractModification.findMany({
+        where: Object.keys(modWhere).length > 0 ? (modWhere as any) : undefined,
         orderBy: { date: "desc" },
         include: {
           attachment: true,
@@ -3073,19 +3075,26 @@ app.post(
           ? (affectsFiftyPercent !== undefined ? Boolean(affectsFiftyPercent) : true)
           : null;
 
+      // Asignar tenantId si está disponible
+      const tenantId = (req as any).tenant?.id;
+      const modData: any = {
+        number,
+        type: prismaType,
+        date: new Date(date),
+        value: parsedValue,
+        days: parsedDays,
+        justification,
+        affectsFiftyPercent: affectsFiftyPercentValue,
+        attachment: attachmentId
+          ? { connect: { id: attachmentId } }
+          : undefined,
+      };
+      if (tenantId) {
+        modData.tenantId = tenantId;
+      }
+
       const newModification = await prisma.contractModification.create({
-        data: {
-          number,
-          type: prismaType,
-          date: new Date(date),
-          value: parsedValue,
-          days: parsedDays,
-          justification,
-          affectsFiftyPercent: affectsFiftyPercentValue,
-          attachment: attachmentId
-            ? { connect: { id: attachmentId } }
-            : undefined,
-        },
+        data: modData,
         include: {
           attachment: true,
         },
@@ -6248,9 +6257,11 @@ app.post(
 );
 
 // --- RUTAS PARA COMUNICACIONES ---
-app.get("/api/communications", async (_req, res) => {
+app.get("/api/communications", async (req, res) => {
   try {
+    const where = withTenantFilter(req);
     const communications = await prisma.communication.findMany({
+      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { sentDate: "desc" },
       include: {
         uploader: true,
@@ -6278,8 +6289,9 @@ app.get("/api/communications", async (_req, res) => {
 app.get("/api/communications/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const communication = await prisma.communication.findUnique({
-      where: { id },
+    const where = withTenantFilter(req, { id } as any);
+    const communication = await prisma.communication.findFirst({
+      where: Object.keys(where).length > 1 ? (where as any) : { id },
       include: {
         uploader: true,
         assignee: true,
@@ -6292,6 +6304,11 @@ app.get("/api/communications/:id", async (req, res) => {
     });
 
     if (!communication) {
+      return res.status(404).json({ error: "Comunicación no encontrada." });
+    }
+    
+    // Verificar que el tenant coincida si hay tenant
+    if ((req as any).tenant && (communication as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Comunicación no encontrada." });
     }
 
@@ -6344,11 +6361,12 @@ app.post("/api/communications", async (req, res) => {
       "RECEIVED";
     const normalizedRequiresResponse = Boolean(requiresResponse);
 
-    const newComm = await prisma.communication.create({
-      data: {
-        radicado,
-        subject,
-        description,
+    // Asignar tenantId si está disponible
+    const tenantId = (req as any).tenant?.id;
+    const commData: any = {
+      radicado,
+      subject,
+      description,
         senderEntity: senderDetails?.entity,
         senderName: senderDetails?.personName,
         senderTitle: senderDetails?.personTitle,
@@ -8359,8 +8377,9 @@ app.get("/api/work-actas", async (_req, res) => {
 app.get("/api/work-actas/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const acta = await prisma.workActa.findUnique({
-      where: { id },
+    const where = withTenantFilter(req, { id } as any);
+    const acta = await prisma.workActa.findFirst({
+      where: Object.keys(where).length > 1 ? (where as any) : { id },
       include: {
         items: { include: { contractItem: true } },
         attachments: true,
@@ -9080,8 +9099,9 @@ app.get("/api/cost-actas", async (_req, res) => {
 app.get("/api/cost-actas/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const acta = await prisma.costActa.findUnique({
-      where: { id },
+    const where = withTenantFilter(req, { id } as any);
+    const acta = await prisma.costActa.findFirst({
+      where: Object.keys(where).length > 1 ? (where as any) : { id },
       include: {
         observations: { 
           include: { author: true }, 
