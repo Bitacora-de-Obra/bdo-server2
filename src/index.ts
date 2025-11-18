@@ -4585,10 +4585,14 @@ app.put(
       }
 
       // Verificar acceso al recurso usando el middleware de permisos
+      // Obtener tenantId del request si está disponible
+      const tenantId = (req as any).tenant?.id;
+      
       const { entry: existingEntry, hasAccess, reason } = await verifyLogEntryAccess(
         id,
         userId,
-        true // requireWriteAccess = true
+        true, // requireWriteAccess = true
+        tenantId
       );
 
       if (!hasAccess || !existingEntry) {
