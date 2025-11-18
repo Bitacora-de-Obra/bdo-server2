@@ -111,8 +111,11 @@ Thumbs.db
 desktop.ini
 
 # Backup files
+backups/
 *.bak
 *.backup
+*.sql
+backup_*.json
 *~
 *.orig
 
