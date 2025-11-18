@@ -56,13 +56,24 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
     try {
       const payload = jwt.verify(token, secrets.jwt.access) as any;
       
-      const user = await prisma.user.findUnique({
-        where: { id: payload.userId },
+      // Buscar usuario considerando tenant si está disponible
+      const tenantId = (req as any).tenant?.id;
+      const whereClause: any = tenantId 
+        ? { id: payload.userId, tenantId }
+        : { id: payload.userId };
+      
+      const user = await prisma.user.findFirst({
+        where: whereClause,
         select: { id: true, status: true, tokenVersion: true, appRole: true, email: true }
-      });
+      }) as any;
 
       if (!user) {
         return respondUnauthorized(res, 'User not found', 'USER_NOT_FOUND');
+      }
+
+      // Validar que el usuario pertenezca al tenant si hay tenant
+      if (tenantId && (user as any).tenantId !== tenantId) {
+        return respondForbidden(res, 'User does not belong to this tenant', 'TENANT_MISMATCH');
       }
 
       if (user.status !== 'active') {
@@ -115,13 +126,24 @@ export const refreshAuthMiddleware = async (req: AuthRequest, res: Response, nex
       return respondUnauthorized(res, 'Invalid refresh token', 'INVALID_REFRESH_TOKEN');
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: payload.userId },
+    // Buscar usuario considerando tenant si está disponible
+    const tenantId = (req as any).tenant?.id;
+    const whereClause: any = tenantId 
+      ? { id: payload.userId, tenantId }
+      : { id: payload.userId };
+    
+    const user = await prisma.user.findFirst({
+      where: whereClause,
       select: { id: true, status: true, tokenVersion: true, appRole: true, email: true }
-    });
+    }) as any;
 
     if (!user) {
       return respondUnauthorized(res, 'User not found', 'USER_NOT_FOUND');
+    }
+
+    // Validar que el usuario pertenezca al tenant si hay tenant
+    if (tenantId && (user as any).tenantId !== tenantId) {
+      return respondForbidden(res, 'User does not belong to this tenant', 'TENANT_MISMATCH');
     }
 
     if (user.status !== 'active') {
