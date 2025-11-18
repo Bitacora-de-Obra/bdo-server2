@@ -70,6 +70,7 @@ interface LogEntryPdfOptions {
   logEntryId: string;
   uploadsDir: string;
   baseUrl: string;
+  tenantId?: string; // Para validar tenant (el log entry ya debería estar validado, pero esto es una capa adicional)
 }
 
 const sanitizeFileName = (value: string) =>
