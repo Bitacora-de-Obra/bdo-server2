@@ -2066,6 +2066,34 @@ app.get("/api/attachments/:id/download", async (req, res) => {
     }
 
     const storageDriver = process.env.STORAGE_DRIVER || "local";
+    
+    // Si es storage S3/R2 y tiene storagePath, cargar desde el storage provider
+    if (storageDriver === "s3" && attachment.storagePath) {
+      try {
+        const storage = getStorage();
+        const fileBuffer = await storage.load(attachment.storagePath);
+        
+        const mimeType =
+          attachment.type || mime.lookup(attachment.fileName) || "application/octet-stream";
+
+        res.setHeader("Content-Type", mimeType as string);
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${attachment.fileName}"`
+        );
+
+        return res.send(fileBuffer);
+      } catch (error) {
+        console.error("Error al cargar archivo desde R2:", error);
+        // Si falla, intentar con redirect a URL pública si está disponible
+        if (attachment.url && attachment.url.startsWith("http")) {
+          return res.redirect(attachment.url);
+        }
+        return res.status(404).json({ error: "Archivo no disponible en el servidor." });
+      }
+    }
+
+    // Si es S3/R2 y tiene URL pública, hacer redirect
     if (
       storageDriver === "s3" &&
       attachment.url &&
@@ -2074,6 +2102,7 @@ app.get("/api/attachments/:id/download", async (req, res) => {
       return res.redirect(attachment.url);
     }
 
+    // Para storage local, buscar en el sistema de archivos
     let filePath: string | null = null;
     if (attachment.url) {
       try {
