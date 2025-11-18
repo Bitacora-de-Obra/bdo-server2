@@ -8070,7 +8070,7 @@ app.get("/api/control-points", async (_req, res) => {
       orderBy: { createdAt: "asc" },
       include: {
         photos: {
-          orderBy: { date: "asc" },
+          orderBy: [{ order: "asc" }, { date: "asc" }], // Ordenar por order primero, luego por fecha
           include: { author: true, attachment: true },
         },
       },
@@ -9227,7 +9227,7 @@ app.post(
       const newPoint = await prisma.controlPoint.create({
         data: { name, description, location },
         include: {
-          photos: { include: { author: true }, orderBy: { date: "asc" } },
+          photos: { include: { author: true }, orderBy: [{ order: "asc" }, { date: "asc" }] },
         },
       });
 
@@ -9257,6 +9257,7 @@ app.post(
 
       const pointExists = await prisma.controlPoint.findUnique({
         where: { id },
+        include: { photos: true },
       });
       if (!pointExists) {
         return res.status(404).json({ error: "Punto de control no encontrado." });
@@ -9269,10 +9270,14 @@ app.post(
         return res.status(404).json({ error: "Archivo adjunto no encontrado." });
       }
 
+      // Asignar el orden basado en el número de fotos existentes
+      const nextOrder = pointExists.photos.length;
+
       const newPhoto = await prisma.photoEntry.create({
         data: {
           notes,
           url: attachment.url,
+          order: nextOrder, // Asignar orden secuencial
           author: { connect: { id: resolvedAuthorId } },
           controlPoint: { connect: { id } },
           attachment: { connect: { id: attachmentId } },
@@ -9293,6 +9298,68 @@ app.post(
         });
       }
       res.status(500).json({ error: "No se pudo añadir la foto." });
+    }
+  }
+);
+
+// Endpoint para actualizar el orden de las fotos de un punto fijo
+app.put(
+  "/api/control-points/:id/photos/reorder",
+  authMiddleware,
+  requireEditor,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { photoIds } = req.body ?? {}; // Array de IDs en el nuevo orden
+
+      if (!Array.isArray(photoIds) || photoIds.length === 0) {
+        return res.status(400).json({ error: "Se requiere un array de IDs de fotos en el nuevo orden." });
+      }
+
+      const pointExists = await prisma.controlPoint.findUnique({
+        where: { id },
+        include: { photos: true },
+      });
+
+      if (!pointExists) {
+        return res.status(404).json({ error: "Punto de control no encontrado." });
+      }
+
+      // Verificar que todos los IDs pertenezcan a este punto fijo
+      const photoIdsInPoint = pointExists.photos.map((p) => p.id);
+      const allIdsValid = photoIds.every((photoId: string) => photoIdsInPoint.includes(photoId));
+      if (!allIdsValid) {
+        return res.status(400).json({ error: "Algunos IDs de fotos no pertenecen a este punto fijo." });
+      }
+
+      // Actualizar el orden de cada foto en una transacción
+      await prisma.$transaction(
+        photoIds.map((photoId: string, index: number) =>
+          prisma.photoEntry.update({
+            where: { id: photoId },
+            data: { order: index },
+          })
+        )
+      );
+
+      // Obtener las fotos actualizadas
+      const updatedPoint = await prisma.controlPoint.findUnique({
+        where: { id },
+        include: {
+          photos: {
+            orderBy: [{ order: "asc" }, { date: "asc" }],
+            include: { author: true, attachment: true },
+          },
+        },
+      });
+
+      res.json({
+        message: "Orden de fotos actualizado correctamente.",
+        photos: updatedPoint?.photos || [],
+      });
+    } catch (error) {
+      console.error("Error al actualizar el orden de las fotos:", error);
+      res.status(500).json({ error: "No se pudo actualizar el orden de las fotos." });
     }
   }
 );

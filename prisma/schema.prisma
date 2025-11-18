@@ -703,6 +703,7 @@ model PhotoEntry {
   url            String
   date           DateTime     @default(now())
   notes          String?
+  order          Int          @default(0) // Orden manual para reorganizar fotos
   author         User         @relation(fields: [authorId], references: [id])
   authorId       String
   controlPoint   ControlPoint @relation(fields: [controlPointId], references: [id])
