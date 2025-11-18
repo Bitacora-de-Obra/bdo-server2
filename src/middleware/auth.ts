@@ -64,7 +64,7 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
       
       const user = await prisma.user.findFirst({
         where: whereClause,
-        select: { id: true, status: true, tokenVersion: true, appRole: true, email: true }
+        select: { id: true, status: true, tokenVersion: true, appRole: true, email: true, tenantId: true }
       }) as any;
 
       if (!user) {
