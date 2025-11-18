@@ -194,3 +194,4 @@ Si quieres servir archivos directamente desde R2:
 **¿En qué plataforma quieres desplegar primero?** Railway, Render, o Vercel?
 
 
+

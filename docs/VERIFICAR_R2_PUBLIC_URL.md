@@ -65,3 +65,4 @@ const publicUrl = storage.getPublicUrl(attachment.storagePath);
 
 Verifica que `attachment.storagePath` tenga el formato correcto (ej: `log-entries/archivo.png`).
 
+

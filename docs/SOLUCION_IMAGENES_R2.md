@@ -86,3 +86,4 @@ Si no carga, el problema está en la configuración del dominio público de R2.
 - Configurar CORS si es necesario
 - Actualizar URLs de attachments existentes si tienen URLs antiguas
 
+

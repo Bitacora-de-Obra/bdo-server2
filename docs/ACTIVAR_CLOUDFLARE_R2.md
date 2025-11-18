@@ -75,3 +75,4 @@ Después de cambiar las variables de entorno, reinicia el servidor para que tome
 | `STORAGE_PUBLIC_URL` | (opcional) | URL pública para acceder a los archivos |
 
 
+
