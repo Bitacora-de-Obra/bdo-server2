@@ -3534,11 +3534,11 @@ app.post(
           .json({ error: "El identificador del proyecto es obligatorio." });
       }
 
-      const prismaType = entryTypeMap[type] || entryTypeMap["Anotación"];
+      const prismaType = entryTypeMap[type] || entryTypeMap["General"];
       const prismaStatus =
         entryStatusMap[status] ||
-        entryStatusMap[entryStatusReverseMap[status] || "Abierta"] ||
-        "OPEN";
+        entryStatusMap[entryStatusReverseMap[status] || "Borrador"] ||
+        "DRAFT";
 
       const entryDateValue = entryDate ? new Date(entryDate) : new Date();
       const activityStartValue = activityStartDate
