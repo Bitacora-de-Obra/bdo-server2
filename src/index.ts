@@ -1750,6 +1750,10 @@ if (!isProduction || process.env.LOG_CORS === "true") {
 // Aplicar CORS antes que cualquier otro middleware para asegurar que los preflight requests se manejen correctamente
 app.use(cors(corsOptions));
 
+// Middleware de detección de tenant (después de CORS, antes de otros middlewares)
+import { detectTenantMiddleware, requireTenantMiddleware } from "./middleware/tenant";
+app.use(detectTenantMiddleware);
+
 // Manejar preflight requests explícitamente para asegurar que siempre respondan
 // Esto es crítico porque algunos navegadores fallan si el preflight no responde correctamente
 app.options("*", (req, res) => {
@@ -8099,19 +8103,61 @@ app.get("/api/project-tasks", async (_req, res) => {
   }
 });
 
-app.get("/api/control-points", async (_req, res) => {
+app.get("/api/control-points", async (req, res) => {
   try {
-    const points = await prisma.controlPoint.findMany({
-      orderBy: { createdAt: "asc" },
-      include: {
-        photos: {
-          orderBy: [{ order: "asc" }, { date: "asc" }], // Ordenar por order primero, luego por fecha
-          include: { author: true, attachment: true },
+    // Filtrar por tenant si está disponible
+    // Nota: tenantId se agregará después de aplicar la migración
+    // Por ahora, usar query raw si hay tenant, o query normal si no
+    let points: any[];
+    
+    if (req.tenant) {
+      // Después de la migración, usar findMany con where
+      // Por ahora, usar query raw como fallback
+      try {
+        points = await prisma.$queryRawUnsafe(
+          `SELECT * FROM ControlPoint WHERE tenantId = ? ORDER BY createdAt ASC`,
+          req.tenant.id
+        ) as any[];
+      } catch (error) {
+        // Si falla (campo no existe aún), usar query normal
+        points = await prisma.controlPoint.findMany({
+          orderBy: { createdAt: "asc" },
+          include: {
+            photos: {
+              orderBy: [{ order: "asc" }, { date: "asc" }],
+              include: { author: true, attachment: true },
+            },
+          },
+        });
+      }
+    } else {
+      points = await prisma.controlPoint.findMany({
+        orderBy: { createdAt: "asc" },
+        include: {
+          photos: {
+            orderBy: [{ order: "asc" }, { date: "asc" }],
+            include: { author: true, attachment: true },
+          },
         },
-      },
-    });
+      });
+    }
+    
+    // Si usamos query raw, necesitamos cargar las relaciones manualmente
+    if (req.tenant && points.length > 0 && !points[0].photos) {
+      const pointIds = points.map((p: any) => p.id);
+      const allPhotos = await prisma.photoEntry.findMany({
+        where: { controlPointId: { in: pointIds } },
+        include: { author: true, attachment: true },
+        orderBy: [{ order: "asc" }, { date: "asc" }],
+      });
+      
+      points = points.map((point: any) => ({
+        ...point,
+        photos: allPhotos.filter((p: any) => p.controlPointId === point.id),
+      }));
+    }
 
-    const formatted = points.map((point) => ({
+    const formatted = points.map((point: any) => ({
       ...point,
       photos: (point.photos || []).map((photo: any) => ({
         ...photo,
@@ -9259,8 +9305,14 @@ app.post(
           .json({ error: "El nombre del punto de control es obligatorio." });
       }
 
+      // Asignar tenantId si está disponible (después de migración)
+      const data: any = { name, description, location };
+      if (req.tenant) {
+        data.tenantId = req.tenant.id;
+      }
+
       const newPoint = await prisma.controlPoint.create({
-        data: { name, description, location },
+        data,
         include: {
           photos: { include: { author: true }, orderBy: [{ order: "asc" }, { date: "asc" }] },
         },
