@@ -692,7 +692,8 @@ const sanitizeFileName = (value: string) =>
 const createStorageKey = (
   seccion: string,
   originalName: string,
-  subfolder?: string
+  subfolder?: string,
+  tenantId?: string
 ) => {
   const now = new Date();
   const year = now.getFullYear().toString();
@@ -712,10 +713,22 @@ const createStorageKey = (
     ? subfolder.replace(/[^a-zA-Z0-9_-]/g, "").toLowerCase()
     : undefined;
   
-  const pathParts = [normalizedSeccion];
+  // Construir path con tenant si está disponible (para aislamiento multi-tenant)
+  const pathParts: string[] = [];
+  
+  // Agregar prefijo de tenant si existe
+  if (tenantId) {
+    // Normalizar tenantId para evitar caracteres inválidos
+    const normalizedTenantId = tenantId.replace(/[^a-zA-Z0-9_-]/g, "");
+    pathParts.push('tenants', normalizedTenantId);
+  }
+  
+  pathParts.push(normalizedSeccion);
+  
   if (normalizedSubfolder) {
     pathParts.push(normalizedSubfolder);
   }
+  
   pathParts.push(year, month, `${uniqueSuffix}-${baseName}${ext}`);
   
   return path.posix.join(...pathParts);
@@ -745,10 +758,11 @@ const createStorageKeyLegacy = (folder: string, originalName: string) => {
 const persistUploadedFile = async (
   file: Express.Multer.File,
   seccion: string,
-  subfolder?: string
+  subfolder?: string,
+  tenantId?: string
 ) => {
   const storage = getStorage();
-  const key = createStorageKey(seccion, file.originalname, subfolder);
+  const key = createStorageKey(seccion, file.originalname, subfolder, tenantId);
   await storage.save({ path: key, content: file.buffer });
   return {
     key,
@@ -2303,8 +2317,8 @@ app.post(
       }
 
       // Validar tenant a través del recurso relacionado
-      const tenantId = (req as any).tenant?.id;
-      if (tenantId && attachment) {
+      const requestTenantId = (req as any).tenant?.id;
+      if (requestTenantId && attachment) {
         let resourceTenantId: string | null = null;
         
         if (attachment.logEntryId) {
@@ -2339,7 +2353,7 @@ app.post(
           resourceTenantId = (costActa as any)?.tenantId || null;
         }
         
-        if (resourceTenantId && resourceTenantId !== tenantId) {
+        if (resourceTenantId && resourceTenantId !== requestTenantId) {
           return res.status(404).json({ error: "Adjunto no encontrado." });
         }
       }
@@ -2521,11 +2535,14 @@ app.post(
       });
 
       const storage = getStorage();
+      const storageTenantId = (req as any).tenant?.id;
       const parsedFileName = path.parse(attachment.fileName || "documento.pdf");
       const signedFileName = `${parsedFileName.name}-firmado-${Date.now()}.pdf`;
       const signedKey = createStorageKey(
         "firmas",
-        signedFileName
+        signedFileName,
+        undefined,
+        storageTenantId
       );
       await storage.save({ path: signedKey, content: signedBuffer });
       const signedUrl = storage.getPublicUrl(signedKey);
@@ -3918,10 +3935,13 @@ app.post(
       }[] = [];
 
       if (req.files && Array.isArray(req.files)) {
+        const tenantId = (req as any).tenant?.id;
         for (const file of req.files as Express.Multer.File[]) {
           const key = createStorageKey(
             "bitacora",
-            file.originalname
+            file.originalname,
+            undefined,
+            tenantId
           );
           await storage.save({ path: key, content: file.buffer });
           attachmentRecords.push({
@@ -5049,8 +5069,9 @@ app.put(
       const newAttachments: any[] = [];
 
       if (req.files && Array.isArray(req.files)) {
+        const tenantId = (req as any).tenant?.id;
         for (const file of req.files as Express.Multer.File[]) {
-          const key = createStorageKey("bitacora", file.originalname);
+          const key = createStorageKey("bitacora", file.originalname, undefined, tenantId);
           await storage.save({ path: key, content: file.buffer });
           newAttachments.push({
             fileName: file.originalname,
@@ -5768,9 +5789,12 @@ app.post(
               continue;
             }
             // Comentarios de bitácoras van en la sección bitacora
+            const tenantId = (req as any).tenant?.id;
             const stored = await persistUploadedFile(
               file,
-              "bitacora"
+              "bitacora",
+              undefined,
+              tenantId
             );
             const attachment = await prisma.attachment.create({
               data: {
@@ -6267,6 +6291,7 @@ app.post(
 
             // Crear nuevo PDF firmado para acumular firmas
             const storage = getStorage();
+            const tenantId = (req as any).tenant?.id;
             const parsedFileName = path.parse(
               basePdf.fileName || "documento.pdf"
             );
@@ -6277,7 +6302,9 @@ app.post(
             // Firmas de bitácoras van en la sección bitacora
             const signedKey = createStorageKey(
               "bitacora",
-              signedFileName
+              signedFileName,
+              undefined,
+              tenantId
             );
             
             console.log(`Guardando PDF firmado en storage:`, {
@@ -8023,7 +8050,8 @@ app.post(
 
       // Guardar la firma encriptada en storage
       const storage = getStorage();
-      const key = createStorageKey("firmas", file.originalname);
+      const tenantId = (req as any).tenant?.id;
+      const key = createStorageKey("firmas", file.originalname, undefined, tenantId);
       await storage.save({ path: key, content: encryptedBuffer });
       
       // NO guardar la URL pública ni el hash del archivo original
@@ -8483,7 +8511,8 @@ app.post(
       }
       
       const storage = getStorage();
-      const key = createStorageKey(seccion, file.originalname, subfolder);
+      const tenantId = (req as any).tenant?.id;
+      const key = createStorageKey(seccion, file.originalname, subfolder, tenantId);
       await storage.save({ path: key, content: file.buffer });
       const stored = {
         key,

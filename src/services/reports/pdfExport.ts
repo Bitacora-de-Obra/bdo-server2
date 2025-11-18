@@ -56,13 +56,8 @@ const parseRequiredSignatories = (value?: string | null) => {
   return [] as Array<{ name?: string; role?: string }>;
 };
 
-export const generateReportPdf = async ({
-  prisma,
-  reportId,
-  uploadsDir,
-  baseUrl,
-  tenantId,
-}: PdfExportOptions) => {
+export const generateReportPdf = async (options: PdfExportOptions) => {
+  const { prisma, reportId, uploadsDir, baseUrl, tenantId } = options;
   const report = await prisma.report.findUnique({
     where: { id: reportId },
     include: {
@@ -237,11 +232,20 @@ export const generateReportPdf = async ({
   
   // Subir a Cloudflare R2 (o almacenamiento configurado)
   const storage = getStorage();
-  // Organizar PDFs generados igual que el expediente (informes/año/mes/)
+  // Organizar PDFs generados igual que el expediente (tenants/{tenantId}/informes/año/mes/)
   const now = new Date();
   const year = now.getFullYear().toString();
   const month = String(now.getMonth() + 1).padStart(2, '0');
-  const storagePath = path.posix.join("informes", year, month, fileName);
+  
+  // Construir path con tenant si está disponible
+  const pathParts: string[] = [];
+  if (options.tenantId) {
+    const normalizedTenantId = options.tenantId.replace(/[^a-zA-Z0-9_-]/g, "");
+    pathParts.push('tenants', normalizedTenantId);
+  }
+  pathParts.push("informes", year, month, fileName);
+  
+  const storagePath = path.posix.join(...pathParts);
   await storage.save({
     path: storagePath,
     content: pdfBuffer,
