@@ -69,11 +69,18 @@ export async function detectTenantMiddleware(
     const origin = Array.isArray(req.headers.origin)
       ? req.headers.origin[0]
       : req.headers.origin || "";
+    const referer = Array.isArray(req.headers.referer)
+      ? req.headers.referer[0]
+      : req.headers.referer || "";
     
-    const hostname = host || forwardedHost;
+    // Priorizar origin sobre host para detectar el tenant desde el frontend
+    // El origin contiene el dominio completo desde donde se hace la petición
+    const hostname = origin || forwardedHost || host;
     
-    // Intentar extraer subdominio del host o origin
-    const subdomain = extractSubdomain(hostname) || extractSubdomain(origin);
+    // Intentar extraer subdominio del origin, referer, host o forwardedHost
+    const subdomain = extractSubdomain(origin) || 
+                      extractSubdomain(referer ? new URL(referer).hostname : null) ||
+                      extractSubdomain(hostname);
 
     if (!subdomain) {
       // Si no hay subdominio, no es un request multi-tenant
