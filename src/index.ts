@@ -29,6 +29,13 @@ import jwt from "jsonwebtoken";
 import "dotenv/config";
 import multer from "multer";
 import { randomUUID, randomBytes, createHash } from "crypto";
+import {
+  encryptSignature,
+  decryptSignature,
+  packEncryptedSignature,
+  unpackEncryptedSignature,
+  verifySignaturePassword,
+} from "./utils/signatureEncryption";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import cron from "node-cron";
@@ -846,39 +853,90 @@ const loadAttachmentBuffer = async (attachment: any): Promise<Buffer> => {
   return storage.read(storagePath);
 };
 
+/**
+ * Carga y desencripta la firma del usuario
+ * @param userSignature - Objeto UserSignature de la BD
+ * @param userPassword - Contraseña del usuario para desencriptar (requerida si la firma está encriptada)
+ * @returns Buffer de la firma desencriptada
+ */
 const loadUserSignatureBuffer = async (
-  userSignature: any
+  userSignature: any,
+  userPassword?: string
 ): Promise<Buffer> => {
   const storage = getStorage();
-  const candidates = [
-    userSignature.storagePath,
-    resolveStorageKeyFromUrl(userSignature.url),
-  ].filter((value): value is string => Boolean(value));
-
-  for (const candidate of candidates) {
+  
+  // Si hay storagePath, intentar cargar desde ahí (puede estar encriptada o no)
+  if (userSignature.storagePath) {
     try {
-      return await storage.read(candidate);
+      const buffer = await storage.read(userSignature.storagePath);
+      
+      // Intentar desencriptar si tenemos contraseña
+      if (userPassword) {
+        try {
+          const encryptedData = unpackEncryptedSignature(buffer);
+          return decryptSignature(encryptedData, userPassword);
+        } catch (decryptError) {
+          // Si falla la desencriptación, puede ser una firma antigua sin encriptar
+          // o la contraseña es incorrecta
+          console.warn("No se pudo desencriptar la firma, intentando como archivo sin encriptar...", decryptError);
+          // Continuar con el buffer original (firma antigua sin encriptar)
+        }
+      }
+      
+      // Si no hay contraseña o es una firma antigua, retornar el buffer tal cual
+      return buffer;
     } catch (error) {
       console.warn("No se pudo leer la firma desde storage.", {
-        candidate,
+        storagePath: userSignature.storagePath,
         error,
       });
     }
   }
 
-  if (typeof userSignature.url === "string") {
-    try {
-      const response = await fetch(userSignature.url);
-      if (!response.ok) {
-        throw new Error(`Descarga fallida con status ${response.status}`);
+  // Fallback: intentar desde URL (firmas antiguas)
+  if (userSignature.url) {
+    const candidates = [
+      userSignature.storagePath,
+      resolveStorageKeyFromUrl(userSignature.url),
+    ].filter((value): value is string => Boolean(value));
+
+    for (const candidate of candidates) {
+      try {
+        const buffer = await storage.read(candidate);
+        // Si hay contraseña, intentar desencriptar
+        if (userPassword) {
+          try {
+            const encryptedData = unpackEncryptedSignature(buffer);
+            return decryptSignature(encryptedData, userPassword);
+          } catch {
+            // Firma antigua sin encriptar
+            return buffer;
+          }
+        }
+        return buffer;
+      } catch (error) {
+        console.warn("No se pudo leer la firma desde storage.", {
+          candidate,
+          error,
+        });
       }
-      const arrayBuffer = await response.arrayBuffer();
-      return Buffer.from(arrayBuffer);
-    } catch (error) {
-      console.warn("No se pudo descargar la firma desde la URL.", {
-        url: userSignature.url,
-        error,
-      });
+    }
+
+    // Intentar descargar desde URL directa
+    if (typeof userSignature.url === "string") {
+      try {
+        const response = await fetch(userSignature.url);
+        if (!response.ok) {
+          throw new Error(`Descarga fallida con status ${response.status}`);
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        return Buffer.from(arrayBuffer);
+      } catch (error) {
+        console.warn("No se pudo descargar la firma desde la URL.", {
+          url: userSignature.url,
+          error,
+        });
+      }
     }
   }
 
@@ -2166,9 +2224,32 @@ app.post(
         }
       }
 
+      // Obtener la contraseña del body para desencriptar la firma
+      const { password: signaturePassword } = req.body || {};
+      if (!signaturePassword) {
+        return res.status(400).json({
+          error: "Se requiere la contraseña para usar tu firma manuscrita.",
+        });
+      }
+
+      // Verificar que la contraseña sea correcta
+      const signer = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { password: true },
+      });
+      if (!signer) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+      const passwordMatches = await bcrypt.compare(signaturePassword, signer.password);
+      if (!passwordMatches) {
+        return res.status(401).json({
+          error: "Contraseña incorrecta.",
+        });
+      }
+
       const [originalBuffer, signatureBuffer] = await Promise.all([
         loadAttachmentBuffer(baseAttachment),
-        loadUserSignatureBuffer(signature),
+        loadUserSignatureBuffer(signature, signaturePassword),
       ]);
 
       // Si no recibimos coordenadas, calcularlas automáticamente para alinear con el cuadro del firmante
@@ -5798,7 +5879,11 @@ app.post(
               });
 
               try {
-                const signatureBuffer = await loadUserSignatureBuffer(userSig);
+                // Usar la contraseña del firmante para desencriptar su firma
+                // Nota: esto solo funciona si el firmante actual es quien está firmando
+                // Para otros firmantes, sus firmas se aplicarán cuando ellos firmen con su contraseña
+                const signaturePassword = signature.signer?.id === signerId ? password : undefined;
+                const signatureBuffer = await loadUserSignatureBuffer(userSig, signaturePassword);
                 currentPdfBuffer = await applySignatureToPdf({
                   originalPdf: currentPdfBuffer,
                   signature: {
@@ -7346,14 +7431,15 @@ app.get("/api/users/me/signature", authMiddleware, async (req: AuthRequest, res)
       return res.json({ signature: null });
     }
 
+    // NO exponer la firma encriptada - solo metadatos
+    // La firma solo se puede obtener desencriptada con el endpoint específico que requiere contraseña
     res.json({
       signature: {
         id: signature.id,
         fileName: signature.fileName,
         mimeType: signature.mimeType,
         size: signature.size,
-        url: signature.url,
-        hash: signature.hash,
+        hasSignature: true,
         createdAt: signature.createdAt,
         updatedAt: signature.updatedAt,
       },
@@ -7363,6 +7449,85 @@ app.get("/api/users/me/signature", authMiddleware, async (req: AuthRequest, res)
     res.status(500).json({ error: "No se pudo obtener la firma guardada." });
   }
 });
+
+/**
+ * Endpoint para obtener la firma desencriptada (requiere contraseña)
+ * Solo el usuario puede acceder a su propia firma desencriptada
+ */
+app.post(
+  "/api/users/me/signature/decrypt",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      const { password } = req.body || {};
+      if (!password || typeof password !== "string") {
+        return res.status(400).json({
+          error: "Se requiere la contraseña para desencriptar la firma.",
+        });
+      }
+
+      // Verificar que la contraseña sea correcta
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { password: true },
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({
+          error: "Contraseña incorrecta.",
+        });
+      }
+
+      const signature = await prisma.userSignature.findUnique({
+        where: { userId },
+      });
+
+      if (!signature || !signature.storagePath) {
+        return res.status(404).json({ error: "No hay firma registrada." });
+      }
+
+      // Cargar la firma encriptada desde storage
+      const storage = getStorage();
+      const encryptedBuffer = await storage.load(signature.storagePath);
+
+      // Desencriptar usando la contraseña del usuario
+      const encryptedData = unpackEncryptedSignature(encryptedBuffer);
+      const decryptedBuffer = decryptSignature(encryptedData, password);
+
+      // Retornar como base64 para que el frontend pueda usarla
+      const base64Signature = decryptedBuffer.toString("base64");
+      const dataUrl = `data:${signature.mimeType || "image/png"};base64,${base64Signature}`;
+
+      res.json({
+        signature: {
+          id: signature.id,
+          fileName: signature.fileName,
+          mimeType: signature.mimeType,
+          size: signature.size,
+          dataUrl, // Firma desencriptada como data URL
+        },
+      });
+    } catch (error) {
+      console.error("Error al desencriptar la firma:", error);
+      if (error instanceof Error && error.message.includes("Unsupported state")) {
+        return res.status(401).json({
+          error: "Contraseña incorrecta o firma corrupta.",
+        });
+      }
+      res.status(500).json({ error: "No se pudo desencriptar la firma." });
+    }
+  }
+);
 
 app.post(
   "/api/users/me/signature",
@@ -7382,22 +7547,60 @@ app.post(
           .json({ error: "No se recibió ningún archivo válido." });
       }
 
+      // Requerir contraseña para encriptar la firma
+      const { password } = req.body || {};
+      if (!password || typeof password !== "string") {
+        return res.status(400).json({
+          error: "Se requiere la contraseña del usuario para proteger la firma.",
+        });
+      }
+
+      // Verificar que la contraseña sea correcta
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { password: true },
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: "Usuario no encontrado." });
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({
+          error: "Contraseña incorrecta. La firma requiere tu contraseña para ser protegida.",
+        });
+      }
+
       const existing = await prisma.userSignature.findUnique({
         where: { userId },
       });
 
+      // Encriptar la firma usando la contraseña del usuario
+      const encryptedData = encryptSignature(file.buffer, password);
+      const encryptedBuffer = packEncryptedSignature(encryptedData);
+
+      // Guardar la firma encriptada en storage
       const storage = getStorage();
-      const key = createStorageKey(
-        "firmas",
-        file.originalname
-      );
-      await storage.save({ path: key, content: file.buffer });
-      const url = storage.getPublicUrl(key);
-      const hash = sha256(file.buffer);
+      const key = createStorageKey("firmas", file.originalname);
+      await storage.save({ path: key, content: encryptedBuffer });
+      
+      // NO guardar la URL pública ni el hash del archivo original
+      // Solo guardar metadatos y el hash del archivo encriptado para verificación
+      const hash = sha256(encryptedBuffer);
 
       let newSignature: any = null;
       await prisma.$transaction(async (tx) => {
         if (existing) {
+          // Eliminar firma anterior del storage
+          if (existing.storagePath) {
+            await storage.remove(existing.storagePath).catch((error) => {
+              console.warn(
+                "No se pudo eliminar la firma anterior del almacenamiento.",
+                { error }
+              );
+            });
+          }
           await tx.userSignature.delete({ where: { id: existing.id } });
         }
         newSignature = await tx.userSignature.create({
@@ -7405,10 +7608,11 @@ app.post(
             userId,
             fileName: file.originalname,
             mimeType: file.mimetype,
-            size: file.size,
+            size: file.size, // Tamaño original
             storagePath: key,
-            url,
-            hash,
+            // NO guardar URL pública - la firma está encriptada
+            url: null,
+            hash, // Hash del archivo encriptado
           },
         });
       });
@@ -7417,26 +7621,18 @@ app.post(
         throw new Error("No se pudo registrar la nueva firma.");
       }
 
-      if (existing?.storagePath && existing.storagePath !== key) {
-        await storage.remove(existing.storagePath).catch((error) => {
-          console.warn(
-            "No se pudo eliminar la firma anterior del almacenamiento.",
-            { error }
-          );
-        });
-      }
-
       res.status(201).json({
         signature: {
           id: newSignature.id,
           fileName: newSignature.fileName,
           mimeType: newSignature.mimeType,
           size: newSignature.size,
-          url: newSignature.url,
-          hash: newSignature.hash,
+          // NO exponer URL ni hash - la firma está protegida
+          hasSignature: true,
           createdAt: newSignature.createdAt,
           updatedAt: newSignature.updatedAt,
         },
+        message: "Firma guardada y protegida con encriptación. Solo tú puedes acceder a ella con tu contraseña.",
       });
     } catch (error) {
       console.error("Error al guardar la firma del usuario:", error);
