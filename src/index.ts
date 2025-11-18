@@ -6730,6 +6730,44 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
           .slice(-6)
       : [];
 
+    // Preparar query de commitments con filtro de tenant antes del Promise.all
+    const tenantId = (req as any).tenant?.id;
+    const commitmentQueryPromise = tenantId
+      ? (async () => {
+          const actaIds = (await prisma.acta.findMany({
+            where: { tenantId } as any,
+            select: { id: true },
+          })).map((a: any) => a.id);
+          
+          return prisma.commitment.findMany({
+            where: {
+              status: "PENDING",
+              dueDate: { gte: new Date() },
+              actaId: { in: actaIds },
+            },
+            include: {
+              responsible: {
+                select: { fullName: true, projectRole: true },
+              },
+            },
+            orderBy: { dueDate: "asc" },
+            take: 10,
+          });
+        })()
+      : prisma.commitment.findMany({
+          where: {
+            status: "PENDING",
+            dueDate: { gte: new Date() },
+          },
+          include: {
+            responsible: {
+              select: { fullName: true, projectRole: true },
+            },
+          },
+          orderBy: { dueDate: "asc" },
+          take: 10,
+        });
+
     const [
       project,
       contractModifications,
@@ -6760,9 +6798,14 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         orderBy: { createdAt: "desc" },
         include: { author: { select: { fullName: true } } },
       }),
+      // ContractItems no tienen tenantId directo, pero están relacionados con workActas que sí lo tienen
+      // Filtrar workActas primero si hay tenant
       prisma.contractItem.findMany({
         include: {
           workActaItems: {
+            where: (req as any).tenant 
+              ? { workActa: { tenantId: (req as any).tenant.id } as any }
+              : undefined,
             include: {
               workActa: {
                 select: { id: true, number: true, date: true, status: true },
@@ -6831,6 +6874,8 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
           },
         },
       }),
+      // Drawings no tienen tenantId en el schema actual, pero podemos filtrar si se agrega en el futuro
+      // Por ahora, obtener todos (puede que drawings sean compartidos entre tenants o no implementados aún)
       prisma.drawing.findMany({
         orderBy: { code: "asc" },
         take: 20,
@@ -6851,19 +6896,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         },
         take: 10,
       }),
-      prisma.commitment.findMany({
-        where: {
-          status: "PENDING",
-          dueDate: { gte: new Date() },
-        },
-        include: {
-          responsible: {
-            select: { fullName: true, projectRole: true },
-          },
-        },
-        orderBy: { dueDate: "asc" },
-        take: 10,
-      }),
+      commitmentQueryPromise,
       prisma.logEntry.findMany({
         where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { createdAt: "desc" },
@@ -6927,12 +6960,12 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         : null;
 
       const totalAdditionsValue = contractModifications
-        .filter((mod) => mod.type === "ADDITION" && mod.value)
-        .reduce((sum, mod) => sum + (mod.value || 0), 0);
+        .filter((mod: any) => mod.type === "ADDITION" && mod.value)
+        .reduce((sum: number, mod: any) => sum + (mod.value || 0), 0);
 
       const totalExtensionsDays = contractModifications
-        .filter((mod) => mod.type === "TIME_EXTENSION" && mod.days)
-        .reduce((sum, mod) => sum + (mod.days || 0), 0);
+        .filter((mod: any) => mod.type === "TIME_EXTENSION" && mod.days)
+        .reduce((sum: number, mod: any) => sum + (mod.days || 0), 0);
 
       let initialDurationDays: number | null = null;
       if (startDate && initialEndDate) {
@@ -6996,7 +7029,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         const highlightedPersonnel = project.keyPersonnel
           .slice(0, 5)
           .map(
-            (person) =>
+            (person: any) =>
               `${person.role} (${person.company}): ${person.name} | Correo: ${
                 person.email
               } | Teléfono: ${person.phone || "N/D"}`
@@ -7021,7 +7054,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
       if (contractModifications.length) {
         const modificationsSummary = contractModifications
           .slice(0, 5)
-          .map((mod) => {
+          .map((mod: any) => {
             const partes: string[] = [
               `${mod.number} - ${
                 modificationTypeReverseMap[mod.type] || mod.type
@@ -7047,8 +7080,8 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
     }
 
     if (contractItems.length) {
-      const itemsWithProgress = contractItems.map((item) => {
-        const executedQuantity = item.workActaItems.reduce((sum, entry) => {
+      const itemsWithProgress = contractItems.map((item: any) => {
+        const executedQuantity = item.workActaItems.reduce((sum: number, entry: any) => {
           const quantity =
             typeof entry.quantity === "number"
               ? entry.quantity
@@ -7062,8 +7095,8 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
             : 0;
 
         const latestEntry = item.workActaItems
-          .filter((entry) => entry.workActa?.date)
-          .sort((a, b) => {
+          .filter((entry: any) => entry.workActa?.date)
+          .sort((a: any, b: any) => {
             const dateA = a.workActa?.date
               ? new Date(a.workActa.date as unknown as string).getTime()
               : 0;
@@ -7096,7 +7129,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
       const topItems = itemsWithProgress
         .sort(
-          (a, b) =>
+          (a: any, b: any) =>
             b.percentage - a.percentage ||
             b.executedQuantity - a.executedQuantity
         )
@@ -7104,7 +7137,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
       if (topItems.length) {
         const lines = topItems.map(
-          (item) =>
+          (item: any) =>
             `• ${item.itemCode} - ${item.description}: Contratado ${formatNumber(
               item.contractQuantity,
               2
@@ -7125,8 +7158,8 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
     }
 
     if (workActas.length) {
-      const workActaLines = workActas.map((acta) => {
-        const totalQuantity = acta.items.reduce((sum, item) => {
+      const workActaLines = workActas.map((acta: any) => {
+        const totalQuantity = acta.items.reduce((sum: number, item: any) => {
           const quantity =
             typeof item.quantity === "number"
               ? item.quantity
@@ -7134,7 +7167,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
           return sum + quantity;
         }, 0);
 
-        const totalValue = acta.items.reduce((sum, item) => {
+        const totalValue = acta.items.reduce((sum: number, item: any) => {
           const quantity =
             typeof item.quantity === "number"
               ? item.quantity
@@ -7145,7 +7178,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
         const principales = acta.items
           .slice(0, 3)
-          .map((item) => {
+          .map((item: any) => {
             const code = item.contractItem?.itemCode || "N/D";
             const qty =
               typeof item.quantity === "number"
@@ -7177,7 +7210,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
     }
 
     if (projectTasks.length) {
-      const taskLines = projectTasks.map((task) => {
+      const taskLines = projectTasks.map((task: any) => {
         const label = task.isSummary ? "hito" : "tarea";
         return `• ${task.name} (${label}): avance ${formatPercentage(
           task.progress,
@@ -7220,7 +7253,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (communications.length) {
       const communicationsSummary = communications
-        .map((comm) => {
+        .map((comm: any) => {
           const sender = comm.senderEntity || "No especificado";
           const recipient = comm.recipientEntity || "No especificado";
           const status =
@@ -7240,7 +7273,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (actas.length) {
       const actasSummary = actas
-        .map((acta) => {
+        .map((acta: any) => {
           const area = actaAreaReverseMap[acta.area] || acta.area;
           const status = actaStatusReverseMap[acta.status] || acta.status;
           const commitmentsCount = acta.commitments?.length || 0;
@@ -7259,7 +7292,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (costActas.length) {
       const costActasSummary = costActas
-        .map((acta) => {
+        .map((acta: any) => {
           const status =
             costActaStatusReverseMap[acta.status] || acta.status;
           return `• ${acta.number}: Período ${acta.period} - Valor: ${formatCurrency(
@@ -7279,7 +7312,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (reports.length) {
       const reportsSummary = reports
-        .map((report) => {
+        .map((report: any) => {
           const scope =
             reportScopeReverseMap[report.reportScope] || report.reportScope;
           const status = reportStatusReverseMap[report.status] || report.status;
@@ -7298,7 +7331,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (drawings.length) {
       const drawingsSummary = drawings
-        .map((drawing) => {
+        .map((drawing: any) => {
           const discipline =
             drawingDisciplineMap[drawing.discipline] || drawing.discipline;
           const status =
@@ -7317,7 +7350,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (controlPoints.length) {
       const controlPointsSummary = controlPoints
-        .map((point) => {
+        .map((point: any) => {
           const photosCount = point.photos?.length || 0;
           return `• ${point.name}: ${point.description} - Ubicación: ${point.location} - Fotos: ${photosCount}`;
         })
@@ -7332,7 +7365,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (pendingCommitments.length) {
       const commitmentsSummary = pendingCommitments
-        .map((commitment) => {
+        .map((commitment: any) => {
           const responsible =
             commitment.responsible?.fullName || "No asignado";
           const role = commitment.responsible?.projectRole || "";
@@ -7352,12 +7385,12 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (recentLogEntries.length) {
       const logEntriesSummary = recentLogEntries
-        .map((entry) => {
+        .map((entry: any) => {
           const author = entry.author?.fullName || "No especificado";
           const type = entryTypeReverseMap[entry.type] || entry.type;
           const status = entryStatusReverseMap[entry.status] || entry.status;
           const assignees =
-            entry.assignees?.map((a) => a.fullName).join(", ") ||
+            entry.assignees?.map((a: any) => a.fullName).join(", ") ||
             "Sin asignados";
           return `• "${entry.title}" - Autor: ${author} - Tipo: ${type} - Estado: ${status} - Asignados: ${assignees} - Fecha: ${formatDate(
             entry.createdAt
