@@ -9539,11 +9539,18 @@ app.post(
           .json({ error: "Faltan datos del autor o del archivo adjunto." });
       }
 
-      const pointExists = await prisma.controlPoint.findUnique({
-        where: { id },
+      // Verificar que el control point pertenezca al tenant
+      const where = withTenantFilter(req, { id } as any);
+      const pointExists = await prisma.controlPoint.findFirst({
+        where: Object.keys(where).length > 1 ? (where as any) : { id },
         include: { photos: true },
       });
       if (!pointExists) {
+        return res.status(404).json({ error: "Punto de control no encontrado." });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (pointExists as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Punto de control no encontrado." });
       }
 
@@ -9600,12 +9607,19 @@ app.put(
         return res.status(400).json({ error: "Se requiere un array de IDs de fotos en el nuevo orden." });
       }
 
-      const pointExists = await prisma.controlPoint.findUnique({
-        where: { id },
+      // Verificar que el control point pertenezca al tenant
+      const where = withTenantFilter(req, { id } as any);
+      const pointExists = await prisma.controlPoint.findFirst({
+        where: Object.keys(where).length > 1 ? (where as any) : { id },
         include: { photos: true },
       });
 
       if (!pointExists) {
+        return res.status(404).json({ error: "Punto de control no encontrado." });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (pointExists as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Punto de control no encontrado." });
       }
 
@@ -9724,7 +9738,7 @@ app.post(
               .filter((dep: string) => dep.length > 0)
           : [];
 
-        return {
+        const taskData: any = {
           id,
           taskId: id,
           name: safeName,
@@ -9738,16 +9752,31 @@ app.post(
             ? JSON.stringify(dependencyArray)
             : null,
         };
+        
+        // Asignar tenantId si está disponible
+        const tenantId = (req as any).tenant?.id;
+        if (tenantId) {
+          taskData.tenantId = tenantId;
+        }
+        
+        return taskData;
       });
 
+      const tenantId = (req as any).tenant?.id;
       await prisma.$transaction(async (tx) => {
-        await tx.projectTask.deleteMany();
+        // Eliminar solo las tareas del tenant actual
+        const deleteWhere: any = tenantId ? { tenantId } : {};
+        await tx.projectTask.deleteMany({ where: deleteWhere });
+        
         if (sanitizedTasks.length) {
           await tx.projectTask.createMany({ data: sanitizedTasks });
         }
       });
 
+      // Obtener solo las tareas del tenant actual
+      const whereClause: any = tenantId ? { tenantId } : undefined;
       const updatedTasks = await prisma.projectTask.findMany({
+        where: whereClause,
         orderBy: { outlineLevel: "asc" },
       });
 
@@ -9775,9 +9804,12 @@ app.get(
   "/api/admin/users",
   authMiddleware,
   requireAdmin,
-  async (_req: AuthRequest, res) => {
+  async (req: AuthRequest, res) => {
     try {
+      // Filtrar usuarios por tenant
+      const where = withTenantFilter(req);
       const users = await prisma.user.findMany({
+        where: Object.keys(where).length > 0 ? (where as any) : undefined,
         orderBy: { fullName: "asc" },
       });
       res.json(users.map(formatAdminUser));
@@ -9810,9 +9842,14 @@ app.post(
         });
       }
 
-      // Verificar si el usuario ya existe
-      const existingUser = await prisma.user.findUnique({
-        where: { email: email.toLowerCase().trim() },
+      // Verificar si el usuario ya existe (considerando tenant)
+      const tenantId = (req as any).tenant?.id;
+      const whereClause: any = tenantId
+        ? { email: email.toLowerCase().trim(), tenantId }
+        : { email: email.toLowerCase().trim() };
+      
+      const existingUser = await prisma.user.findFirst({
+        where: whereClause,
       });
 
       if (existingUser) {
@@ -9844,17 +9881,24 @@ app.post(
       const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
 
       // Crear el usuario
-      const newUser = await prisma.user.create({
-        data: {
-          email: email.toLowerCase().trim(),
-          password: hashedPassword,
-          fullName: fullName.trim(),
+      const userData: any = {
+        email: email.toLowerCase().trim(),
+        password: hashedPassword,
+        fullName: fullName.trim(),
         appRole: appRole as AppRole,
         projectRole: resolvedRole || "CONTRACTOR_REP", // Valor por defecto
         entity: entity ? entity.toUpperCase() : null,
         status: "active",
         canDownload: true, // Por defecto todos pueden descargar
-        },
+      };
+      
+      // Asignar tenantId si está disponible
+      if (tenantId) {
+        userData.tenantId = tenantId;
+      }
+      
+      const newUser = await prisma.user.create({
+        data: userData,
       });
 
       // Registrar en auditoría
