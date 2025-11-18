@@ -9069,9 +9069,11 @@ app.post(
 );
 
 // --- RUTAS PARA ACTAS DE COSTO ---
-app.get("/api/cost-actas", async (_req, res) => {
+app.get("/api/cost-actas", async (req, res) => {
   try {
+    const where = withTenantFilter(req);
     const actas = await prisma.costActa.findMany({
+      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { submissionDate: "desc" },
       include: {
         observations: { include: { author: true }, orderBy: { timestamp: "asc" } },
