@@ -4055,7 +4055,7 @@ app.post(
           isConfidential: parseBooleanInput(isConfidential),
           scheduleDay: parsedScheduleDay,
           folioNumber: nextFolioNumber, // Generado automáticamente por tenant
-          tenantId: tenantId, // Siempre requerido
+          tenant: { connect: { id: tenantId } }, // Usar relación en lugar de tenantId directo
           author: { connect: { id: userId } },
           project: { connect: { id: projectId } },
         };
