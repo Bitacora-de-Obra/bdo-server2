@@ -299,17 +299,18 @@ model CommunicationStatusHistory {
 }
 
 model ContractModification {
-  id            String           @id @default(uuid())
-  number        String           @unique
-  type          ModificationType
-  date          DateTime
-  value         Float?
-  days          Int?
-  justification String
-  attachment    Attachment?      @relation(fields: [attachmentId], references: [id])
-  attachmentId  String?          @unique
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  id                 String           @id @default(uuid())
+  number             String           @unique
+  type               ModificationType
+  date               DateTime
+  value              Float?
+  days               Int?
+  justification      String
+  affectsFiftyPercent Boolean?        @default(true)
+  attachment         Attachment?      @relation(fields: [attachmentId], references: [id])
+  attachmentId       String?          @unique
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 }
 
 model WeeklyReport {

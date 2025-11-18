@@ -2760,15 +2760,22 @@ app.get(
         const baseValue = project.initialValue || 0;
         const cap = baseValue * 0.5;
 
-        // Por ahora, todas las adiciones afectan el 50% (hasta que se agregue el campo en la BD)
-        // Las incorporaciones por mayores cantidades no afectan, pero no tenemos forma de distinguirlas aún
+        // Separar adiciones que afectan el 50% de las que no (incorporaciones por mayores cantidades)
         const additionsAffecting = modifications
-          .filter((mod) => mod.type === "ADDITION" && mod.value !== null)
+          .filter((mod) => 
+            mod.type === "ADDITION" && 
+            mod.value !== null && 
+            (mod.affectsFiftyPercent === true || mod.affectsFiftyPercent === null) // null se trata como true por compatibilidad
+          )
           .reduce((sum, mod) => sum + (mod.value || 0), 0);
 
-        // Por ahora, las incorporaciones que no afectan son 0
-        // TODO: Agregar campo en BD para distinguir incorporaciones por mayores cantidades
-        const additionsNonAffecting = 0;
+        const additionsNonAffecting = modifications
+          .filter((mod) => 
+            mod.type === "ADDITION" && 
+            mod.value !== null && 
+            mod.affectsFiftyPercent === false
+          )
+          .reduce((sum, mod) => sum + (mod.value || 0), 0);
 
         const usedPercent = baseValue > 0 ? (additionsAffecting / baseValue) * 100 : 0;
         const remainingCap = Math.max(cap - additionsAffecting, 0);
@@ -2819,7 +2826,7 @@ app.post(
   authMiddleware,
   async (req: AuthRequest, res) => {
     try {
-      const { number, type, date, value, days, justification, attachmentId } =
+      const { number, type, date, value, days, justification, attachmentId, affectsFiftyPercent } =
         req.body ?? {};
 
       if (!number || !type || !date || !justification) {
@@ -2854,6 +2861,13 @@ app.post(
           ? null
           : parsedDaysRaw;
 
+      // Para adiciones, affectsFiftyPercent es true por defecto (solo false si es incorporación por mayores cantidades)
+      // Para otros tipos (prórrogas), no aplica
+      const affectsFiftyPercentValue = 
+        prismaType === "ADDITION" 
+          ? (affectsFiftyPercent !== undefined ? Boolean(affectsFiftyPercent) : true)
+          : null;
+
       const newModification = await prisma.contractModification.create({
         data: {
           number,
@@ -2862,6 +2876,7 @@ app.post(
           value: parsedValue,
           days: parsedDays,
           justification,
+          affectsFiftyPercent: affectsFiftyPercentValue,
           attachment: attachmentId
             ? { connect: { id: attachmentId } }
             : undefined,
