@@ -63,12 +63,20 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
         return res.status(400).json({ error: passwordError });
       }
 
-      const existingUser = await prisma.user.findUnique({
-        where: { email: normalizedEmail },
+      // Buscar usuario por email y tenantId (email es único por tenant)
+      const tenantId = (req as any).tenant?.id;
+      const existingUser = await prisma.user.findFirst({
+        where: tenantId 
+          ? { email: normalizedEmail, tenantId } as any
+          : { email: normalizedEmail } as any,
       });
 
       if (existingUser) {
         return res.status(409).json({ error: "El email ya está registrado." });
+      }
+
+      if (!tenantId) {
+        return res.status(400).json({ error: "No se pudo determinar el tenant." });
       }
 
       const hashedPassword = await bcrypt.hash(password, 12);
@@ -93,7 +101,8 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
           status: "active",
           tokenVersion: 0,
           emailVerifiedAt: isEmailServiceConfigured() ? null : new Date(),
-        },
+          tenantId,
+        } as any,
       });
 
       let verificationEmailSent = false;
@@ -202,8 +211,12 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
         return res.status(400).json({ error: "Email y contraseña son requeridos." });
       }
 
-      const user = await prisma.user.findUnique({
-        where: { email },
+      // Buscar usuario por email y tenantId (email es único por tenant)
+      const tenantId = (req as any).tenant?.id;
+      const user = await prisma.user.findFirst({
+        where: tenantId 
+          ? { email, tenantId } as any
+          : { email } as any,
       });
 
       console.log('User found:', user ? 'yes' : 'no');
@@ -328,8 +341,12 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
     const normalizedEmail = String(email).trim().toLowerCase();
 
     try {
-      const user = await prisma.user.findUnique({
-        where: { email: normalizedEmail },
+      // Buscar usuario por email y tenantId (email es único por tenant)
+      const tenantId = (req as any).tenant?.id;
+      const user = await prisma.user.findFirst({
+        where: tenantId 
+          ? { email: normalizedEmail, tenantId } as any
+          : { email: normalizedEmail } as any,
       });
 
       if (user) {

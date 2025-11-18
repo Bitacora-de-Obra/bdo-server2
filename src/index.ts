@@ -2870,6 +2870,12 @@ app.get(
       if (endDate) filters.endDate = new Date(endDate as string);
       filters.limit = parseInt(limit as string, 10) || 100;
 
+      // Agregar tenantId a los filtros si está disponible
+      const tenantId = (req as any).tenant?.id;
+      if (tenantId) {
+        filters.tenantId = tenantId;
+      }
+
       const events = await getSecurityEvents(filters);
 
       res.json({
@@ -7045,8 +7051,6 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
           },
         },
       }),
-      // Drawings no tienen tenantId en el schema actual, pero podemos filtrar si se agrega en el futuro
-      // Por ahora, obtener todos (puede que drawings sean compartidos entre tenants o no implementados aún)
       prisma.drawing.findMany({
         where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { code: "asc" },
@@ -8261,7 +8265,6 @@ app.post(
           discipline: prismaDiscipline,
           status: "VIGENTE",
           tenantId,
-        } as any,
           versions: {
             create: [
               {
@@ -8273,7 +8276,7 @@ app.post(
               },
             ],
           },
-        },
+        } as any,
         include: {
           versions: { include: { uploader: true } },
           comments: { include: { author: true } },

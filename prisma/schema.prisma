@@ -166,6 +166,8 @@ model Tenant {
   communications        Communication[]
   contractModifications ContractModification[]
   projectTasks          ProjectTask[]
+  drawings              Drawing[]
+  securityEventLogs     SecurityEventLog[]
 
   @@index([subdomain])
   @@index([isActive])
