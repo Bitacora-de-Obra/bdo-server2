@@ -24,14 +24,42 @@ declare global {
 }
 
 /**
+ * Lista de hosts conocidos de deployment que deben ser ignorados
+ * Estos no son tenants válidos
+ */
+const DEPLOYMENT_HOSTS = [
+  'bdo-server2.onrender.com',
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+];
+
+/**
+ * Verifica si un hostname es un host de deployment conocido
+ */
+function isDeploymentHost(hostname: string | undefined): boolean {
+  if (!hostname) return false;
+  const host = hostname.split(":")[0].toLowerCase();
+  return DEPLOYMENT_HOSTS.some(deploymentHost => 
+    host === deploymentHost || host.endsWith(`.${deploymentHost}`)
+  );
+}
+
+/**
  * Extrae el subdominio del hostname
  * Ejemplos:
  *   "mutis.bdigitales.com" -> "mutis"
  *   "www.bdigitales.com" -> null
  *   "localhost:3000" -> null
+ *   "bdo-server2.onrender.com" -> null (host de deployment)
  */
 function extractSubdomain(hostname: string | undefined): string | null {
   if (!hostname) return null;
+
+  // Ignorar hosts de deployment conocidos
+  if (isDeploymentHost(hostname)) {
+    return null;
+  }
 
   // Remover puerto si existe
   const host = hostname.split(":")[0];
@@ -86,16 +114,23 @@ export async function detectTenantMiddleware(
         // Si referer no es una URL válida, ignorar
       }
     }
+    
+    // Extraer subdominio, priorizando origin y referer (que vienen del frontend)
+    // sobre el host (que puede ser el host de deployment)
     const subdomain = extractSubdomain(origin) || 
                       extractSubdomain(refererHostname) ||
-                      extractSubdomain(hostname);
+                      (isDeploymentHost(host) ? null : extractSubdomain(hostname));
 
     if (!subdomain) {
       // Si no hay subdominio, no es un request multi-tenant
-      // Permitir continuar sin tenant (para desarrollo local o requests sin subdominio)
+      // Permitir continuar sin tenant (para desarrollo local, requests sin subdominio,
+      // o requests directos a hosts de deployment como downloads)
+      // Los endpoints que requieren tenant validarán a través del recurso relacionado
       logger.debug("No se detectó subdominio, continuando sin tenant", {
         host,
         origin,
+        referer: refererHostname,
+        isDeploymentHost: isDeploymentHost(host),
       });
       return next();
     }
