@@ -9,10 +9,10 @@ const getLogoUrl = () => {
     return logoUrl;
   }
   
-  // Si no, usar el logo desde el frontend (si está disponible)
+  // Si no, usar el logo desde el frontend (ubicado en /logo.png en la carpeta public)
   const frontendUrl = process.env.APP_BASE_URL || process.env.FRONTEND_URL || "https://bdigitales.com";
-  // Usar el logo PNG generado
-  return `${frontendUrl.replace(/\/$/, "")}/assets/Generated%20Image%20November%2018%2C%202025%20-%2011_44AM%20(1).png`;
+  // Usar el logo desde la carpeta public (nombre fijo, sin hash)
+  return `${frontendUrl.replace(/\/$/, "")}/logo.png`;
 };
 
 /**
