@@ -2008,6 +2008,48 @@ app.get("/api/attachments/:id/download", async (req, res) => {
       return res.status(404).json({ error: "Adjunto no encontrado." });
     }
 
+    // Validar tenant a través del recurso relacionado
+    const tenantId = (req as any).tenant?.id;
+    if (tenantId && attachment) {
+      let resourceTenantId: string | null = null;
+      
+      if (attachment.logEntryId) {
+        const logEntry = await prisma.logEntry.findUnique({
+          where: { id: attachment.logEntryId },
+          select: { tenantId: true } as any,
+        });
+        resourceTenantId = (logEntry as any)?.tenantId || null;
+      } else if (attachment.actaId) {
+        const acta = await prisma.acta.findUnique({
+          where: { id: attachment.actaId },
+          select: { tenantId: true } as any,
+        });
+        resourceTenantId = (acta as any)?.tenantId || null;
+      } else if (attachment.reportId) {
+        const report = await prisma.report.findUnique({
+          where: { id: attachment.reportId },
+          select: { tenantId: true } as any,
+        });
+        resourceTenantId = (report as any)?.tenantId || null;
+      } else if (attachment.communicationId) {
+        const communication = await prisma.communication.findUnique({
+          where: { id: attachment.communicationId },
+          select: { tenantId: true } as any,
+        });
+        resourceTenantId = (communication as any)?.tenantId || null;
+      } else if (attachment.costActaId) {
+        const costActa = await prisma.costActa.findUnique({
+          where: { id: attachment.costActaId },
+          select: { tenantId: true } as any,
+        });
+        resourceTenantId = (costActa as any)?.tenantId || null;
+      }
+      
+      if (resourceTenantId && resourceTenantId !== tenantId) {
+        return res.status(404).json({ error: "Adjunto no encontrado." });
+      }
+    }
+
     const storageDriver = process.env.STORAGE_DRIVER || "local";
     if (
       storageDriver === "s3" &&
@@ -2073,6 +2115,48 @@ app.get("/api/attachments/:id/view", async (req, res) => {
 
     if (!attachment) {
       return res.status(404).json({ error: "Adjunto no encontrado." });
+    }
+
+    // Validar tenant a través del recurso relacionado
+    const tenantId = (req as any).tenant?.id;
+    if (tenantId && attachment) {
+      let resourceTenantId: string | null = null;
+      
+      if (attachment.logEntryId) {
+        const logEntry = await prisma.logEntry.findUnique({
+          where: { id: attachment.logEntryId },
+          select: { tenantId: true } as any,
+        });
+        resourceTenantId = (logEntry as any)?.tenantId || null;
+      } else if (attachment.actaId) {
+        const acta = await prisma.acta.findUnique({
+          where: { id: attachment.actaId },
+          select: { tenantId: true } as any,
+        });
+        resourceTenantId = (acta as any)?.tenantId || null;
+      } else if (attachment.reportId) {
+        const report = await prisma.report.findUnique({
+          where: { id: attachment.reportId },
+          select: { tenantId: true } as any,
+        });
+        resourceTenantId = (report as any)?.tenantId || null;
+      } else if (attachment.communicationId) {
+        const communication = await prisma.communication.findUnique({
+          where: { id: attachment.communicationId },
+          select: { tenantId: true } as any,
+        });
+        resourceTenantId = (communication as any)?.tenantId || null;
+      } else if (attachment.costActaId) {
+        const costActa = await prisma.costActa.findUnique({
+          where: { id: attachment.costActaId },
+          select: { tenantId: true } as any,
+        });
+        resourceTenantId = (costActa as any)?.tenantId || null;
+      }
+      
+      if (resourceTenantId && resourceTenantId !== tenantId) {
+        return res.status(404).json({ error: "Adjunto no encontrado." });
+      }
     }
 
     const storageDriver = process.env.STORAGE_DRIVER || "local";
@@ -2216,6 +2300,49 @@ app.post(
       if (!attachment) {
         return res.status(404).json({ error: "Adjunto no encontrado." });
       }
+
+      // Validar tenant a través del recurso relacionado
+      const tenantId = (req as any).tenant?.id;
+      if (tenantId && attachment) {
+        let resourceTenantId: string | null = null;
+        
+        if (attachment.logEntryId) {
+          const logEntry = await prisma.logEntry.findUnique({
+            where: { id: attachment.logEntryId },
+            select: { tenantId: true } as any,
+          });
+          resourceTenantId = (logEntry as any)?.tenantId || null;
+        } else if (attachment.actaId) {
+          const acta = await prisma.acta.findUnique({
+            where: { id: attachment.actaId },
+            select: { tenantId: true } as any,
+          });
+          resourceTenantId = (acta as any)?.tenantId || null;
+        } else if (attachment.reportId) {
+          const report = await prisma.report.findUnique({
+            where: { id: attachment.reportId },
+            select: { tenantId: true } as any,
+          });
+          resourceTenantId = (report as any)?.tenantId || null;
+        } else if (attachment.communicationId) {
+          const communication = await prisma.communication.findUnique({
+            where: { id: attachment.communicationId },
+            select: { tenantId: true } as any,
+          });
+          resourceTenantId = (communication as any)?.tenantId || null;
+        } else if (attachment.costActaId) {
+          const costActa = await prisma.costActa.findUnique({
+            where: { id: attachment.costActaId },
+            select: { tenantId: true } as any,
+          });
+          resourceTenantId = (costActa as any)?.tenantId || null;
+        }
+        
+        if (resourceTenantId && resourceTenantId !== tenantId) {
+          return res.status(404).json({ error: "Adjunto no encontrado." });
+        }
+      }
+
       if (attachment.type !== "application/pdf") {
         return res
           .status(400)
