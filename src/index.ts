@@ -4020,8 +4020,19 @@ app.post(
       console.log("DEBUG: Intentando crear LogEntry en Prisma...");
       let logEntry;
       try {
-        // Asignar tenantId si está disponible
+        // Asignar tenantId (obligatorio para multi-tenancy)
         const tenantId = (req as any).tenant?.id;
+        
+        // Validar que existe tenantId antes de crear
+        if (!tenantId) {
+          console.error("❌ ERROR: No se pudo detectar el tenant del request");
+          return res.status(400).json({ 
+            error: "No se pudo determinar el cliente (tenant). Por favor, verifica tu acceso." 
+          });
+        }
+        
+        console.log("DEBUG: tenantId detectado:", tenantId);
+        
         const logEntryData: any = {
           title,
           description,
@@ -4034,12 +4045,10 @@ app.post(
           activityEndDate: activityEndValue,
           isConfidential: parseBooleanInput(isConfidential),
           scheduleDay: parsedScheduleDay,
+          tenantId: tenantId, // Siempre requerido
           author: { connect: { id: userId } },
           project: { connect: { id: projectId } },
         };
-        if (tenantId) {
-          logEntryData.tenantId = tenantId;
-        }
         
         logEntry = await prisma.logEntry.create({
           data: {
@@ -4292,9 +4301,23 @@ app.post(
           }
         }
       }
+      // Log detallado del error para debugging
+      console.error("❌ ERROR DETALLADO al crear anotación:");
+      console.error("Error type:", error?.constructor?.name);
+      console.error("Error message:", error instanceof Error ? error.message : String(error));
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        console.error("Prisma error code:", error.code);
+        console.error("Prisma error meta:", JSON.stringify(error.meta, null, 2));
+      }
+      if (error instanceof Error && error.stack) {
+        console.error("Error stack:", error.stack);
+      }
+      
       res.status(500).json({ 
         error: "No se pudo crear la anotación.",
-        details: error instanceof Error ? error.message : String(error)
+        details: process.env.NODE_ENV === 'development' 
+          ? (error instanceof Error ? error.message : String(error))
+          : undefined
       });
     }
   }
