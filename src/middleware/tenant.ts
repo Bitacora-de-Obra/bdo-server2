@@ -78,8 +78,16 @@ export async function detectTenantMiddleware(
     const hostname = origin || forwardedHost || host;
     
     // Intentar extraer subdominio del origin, referer, host o forwardedHost
+    let refererHostname: string | null = null;
+    if (referer) {
+      try {
+        refererHostname = new URL(referer).hostname;
+      } catch {
+        // Si referer no es una URL válida, ignorar
+      }
+    }
     const subdomain = extractSubdomain(origin) || 
-                      extractSubdomain(referer ? new URL(referer).hostname : null) ||
+                      extractSubdomain(refererHostname) ||
                       extractSubdomain(hostname);
 
     if (!subdomain) {
