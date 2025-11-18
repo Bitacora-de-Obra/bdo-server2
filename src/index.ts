@@ -2957,7 +2957,9 @@ app.get(
           });
         }
 
+        const modWhere = withTenantFilter(req);
         const modifications = await prisma.contractModification.findMany({
+          where: Object.keys(modWhere).length > 0 ? (modWhere as any) : undefined,
           orderBy: { date: "desc" },
         });
 
@@ -3367,6 +3369,21 @@ app.put("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { number, title, date, area, status, summary } = req.body ?? {};
+
+    // Verificar que el acta pertenezca al tenant
+    const where = withTenantFilter(req, { id } as any);
+    const existingActa = await prisma.acta.findFirst({
+      where: Object.keys(where).length > 1 ? (where as any) : { id },
+    });
+
+    if (!existingActa) {
+      return res.status(404).json({ error: "Acta no encontrada." });
+    }
+    
+    // Verificar que el tenant coincida si hay tenant
+    if ((req as any).tenant && (existingActa as any).tenantId !== (req as any).tenant.id) {
+      return res.status(404).json({ error: "Acta no encontrada." });
+    }
 
     const data: Record<string, unknown> = {};
     if (number) data.number = number;
@@ -6729,10 +6746,12 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         },
       }),
       prisma.costActa.findMany({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { submissionDate: "desc" },
         take: 10,
       }),
       prisma.report.findMany({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { submissionDate: "desc" },
         take: 10,
         include: {
@@ -6752,6 +6771,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         },
       }),
       prisma.controlPoint.findMany({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         include: {
           photos: {
             orderBy: { date: "desc" },
