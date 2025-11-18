@@ -9721,6 +9721,80 @@ app.post("/api/auth/forgot-password", async (req, res) => {
   }
 });
 
+app.post("/api/auth/reset-password/:token", async (req, res) => {
+  const { token } = req.params;
+  const { password } = req.body;
+
+  if (!token || !password) {
+    return res
+      .status(400)
+      .json({ error: "Token y nueva contraseña son requeridos." });
+  }
+
+  try {
+    const passwordError = await validatePasswordStrength(password);
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError });
+    }
+
+    const tokenHash = hashToken(token);
+
+    const resetToken = await prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+
+    if (!resetToken || !resetToken.user) {
+      return res.status(400).json({ error: "Token inválido o no encontrado." });
+    }
+
+    if (resetToken.usedAt) {
+      return res
+        .status(400)
+        .json({ error: "Este token ya fue utilizado, solicita uno nuevo." });
+    }
+
+    if (resetToken.expiresAt < new Date()) {
+      return res.status(400).json({
+        error: "El token ha expirado. Solicita un nuevo enlace de restablecimiento.",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: resetToken.userId },
+        data: {
+          password: hashedPassword,
+          tokenVersion: resetToken.user.tokenVersion + 1,
+          emailVerifiedAt: resetToken.user.emailVerifiedAt ?? new Date(),
+        },
+      }),
+      prisma.passwordResetToken.update({
+        where: { id: resetToken.id },
+        data: { usedAt: new Date() },
+      }),
+      prisma.passwordResetToken.deleteMany({
+        where: {
+          userId: resetToken.userId,
+          id: { not: resetToken.id },
+        },
+      }),
+    ]);
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error("Error al restablecer contraseña", {
+      error: error instanceof Error ? error.message : String(error),
+      tokenHash: hashToken(token),
+    });
+    res
+      .status(500)
+      .json({ error: "No fue posible restablecer la contraseña." });
+  }
+});
+
 app.post(
   "/api/auth/refresh",
   refreshAuthMiddleware,
