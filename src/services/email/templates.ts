@@ -11,8 +11,8 @@ const getLogoUrl = () => {
   
   // Si no, usar el logo desde el frontend (si está disponible)
   const frontendUrl = process.env.APP_BASE_URL || process.env.FRONTEND_URL || "https://bdigitales.com";
-  // Intentar primero con SVG, luego con PNG
-  return `${frontendUrl.replace(/\/$/, "")}/assets/bitacora-logo.svg`;
+  // Usar el logo PNG generado
+  return `${frontendUrl.replace(/\/$/, "")}/assets/Generated%20Image%20November%2018%2C%202025%20-%2011_44AM%20(1).png`;
 };
 
 /**
