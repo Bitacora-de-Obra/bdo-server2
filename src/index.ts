@@ -6234,8 +6234,14 @@ app.post(
       if (status && status !== "all") where.status = entryStatusMap[status] || status;
       if (authorId && authorId !== "all") where.authorId = authorId;
 
+      // Filtrar por tenant
+      const tenantWhere = withTenantFilter(req, where);
+      const finalWhere = Object.keys(tenantWhere).length > Object.keys(where).length 
+        ? tenantWhere 
+        : where;
+
       const entries = await prisma.logEntry.findMany({
-        where,
+        where: Object.keys(finalWhere).length > 0 ? (finalWhere as any) : undefined,
         orderBy: { entryDate: "asc" },
         include: {
           attachments: true,
@@ -10553,8 +10559,14 @@ app.post("/api/auth/forgot-password", async (req, res) => {
     const normalizedEmail = String(email).trim().toLowerCase();
 
     try {
-      const user = await prisma.user.findUnique({
-        where: { email: normalizedEmail },
+      // Buscar usuario considerando tenant si está disponible
+      const tenantId = (req as any).tenant?.id;
+      const whereClause: any = tenantId
+        ? { email: normalizedEmail, tenantId }
+        : { email: normalizedEmail };
+      
+      const user = await prisma.user.findFirst({
+        where: whereClause,
       });
 
       if (user) {
