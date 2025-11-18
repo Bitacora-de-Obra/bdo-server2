@@ -8481,7 +8481,7 @@ app.put(
 app.get("/api/reports", async (req, res) => {
   try {
     const { type, scope } = req.query;
-    const where: Prisma.ReportWhereInput = {};
+    const where: any = withTenantFilter(req);
 
     if (type) where.type = String(type);
     if (scope && reportScopeMap[String(scope)]) {
@@ -8489,7 +8489,7 @@ app.get("/api/reports", async (req, res) => {
     }
 
     const reports = await prisma.report.findMany({
-      where,
+      where: Object.keys(where).length > 0 ? where : undefined,
       orderBy: [{ number: "asc" }, { version: "desc" }],
       include: {
         author: true,
