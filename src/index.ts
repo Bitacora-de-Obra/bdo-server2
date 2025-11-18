@@ -2907,7 +2907,9 @@ app.get(
   authMiddleware,
   async (req: AuthRequest, res) => {
     try {
+      const where = withTenantFilter(req);
       const project = await prisma.project.findFirst({
+        where: Object.keys(where).length > 0 ? (where as any) : undefined,
         include: {
           keyPersonnel: {
             orderBy: {
@@ -2945,7 +2947,10 @@ app.get(
     try {
       // Si se solicita el summary, calcular y retornar el resumen
       if (req.query.summary === "1") {
-        const project = await prisma.project.findFirst();
+        const where = withTenantFilter(req);
+        const project = await prisma.project.findFirst({
+          where: Object.keys(where).length > 0 ? (where as any) : undefined,
+        });
         if (!project) {
           return res.status(404).json({
             error: "No se encontró ningún proyecto.",
@@ -3225,9 +3230,11 @@ app.post(
 );
 
 // --- RUTAS PARA ACTAS DE COMITÉ ---
-app.get("/api/actas", async (_req, res) => {
+app.get("/api/actas", async (req, res) => {
   try {
+    const where = withTenantFilter(req);
     const actas = await prisma.acta.findMany({
+      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { date: "desc" },
       include: {
         attachments: true,
@@ -3245,8 +3252,9 @@ app.get("/api/actas", async (_req, res) => {
 app.get("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const acta = await prisma.acta.findUnique({
-      where: { id },
+    const where = withTenantFilter(req, { id } as any);
+    const acta = await prisma.acta.findFirst({
+      where: Object.keys(where).length > 1 ? (where as any) : { id },
       include: {
         attachments: true,
         commitments: { include: { responsible: true } },
@@ -3255,6 +3263,11 @@ app.get("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
     });
 
     if (!acta) {
+      return res.status(404).json({ error: "Acta no encontrada." });
+    }
+    
+    // Verificar que el tenant coincida si hay tenant
+    if ((req as any).tenant && (acta as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Acta no encontrada." });
     }
 
@@ -8115,9 +8128,11 @@ app.post(
 );
 
 // --- RUTAS DE CRONOGRAMA Y CONTROL ---
-app.get("/api/project-tasks", async (_req, res) => {
+app.get("/api/project-tasks", async (req, res) => {
   try {
+    const where = withTenantFilter(req);
     const tasks = await prisma.projectTask.findMany({
+      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { outlineLevel: "asc" },
     });
 
