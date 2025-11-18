@@ -5049,6 +5049,92 @@ app.put(
   }
 );
 
+app.delete(
+  "/api/log-entries/:id",
+  authMiddleware,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.userId;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      // Buscar la anotación
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
+        include: {
+          attachments: true,
+          author: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+            },
+          },
+        },
+      });
+
+      if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+
+      // Eliminar archivos adjuntos del storage
+      const storage = getStorage();
+      if (entry.attachments && entry.attachments.length > 0) {
+        for (const attachment of entry.attachments) {
+          if (attachment.storagePath) {
+            try {
+              await storage.remove(attachment.storagePath);
+            } catch (storageError) {
+              console.warn(
+                `No se pudo eliminar el archivo del storage: ${attachment.storagePath}`,
+                storageError
+              );
+              // Continuar con la eliminación aunque falle el storage
+            }
+          }
+        }
+      }
+
+      // Eliminar la anotación (Prisma manejará las relaciones en cascada si están configuradas)
+      await prisma.logEntry.delete({
+        where: { id },
+      });
+
+      // Registrar evento de seguridad
+      recordSecurityEvent('LOG_ENTRY_DELETED', 'high', req, {
+        logEntryId: id,
+        authorId: entry.authorId,
+        authorEmail: entry.author.email,
+        folioNumber: entry.folioNumber,
+        title: entry.title,
+      });
+
+      logger.info("Anotación eliminada por administrador", {
+        logEntryId: id,
+        folioNumber: entry.folioNumber,
+        deletedBy: userId,
+        authorId: entry.authorId,
+      });
+
+      res.status(204).send();
+    } catch (error) {
+      logger.error("Error al eliminar la anotación", {
+        error: error instanceof Error ? error.message : String(error),
+        logEntryId: req.params.id,
+        userId: req.user?.userId,
+      });
+      res.status(500).json({
+        error: "No se pudo eliminar la anotación.",
+        details: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+);
+
 app.post(
   "/api/log-entries/:id/comments",
   authMiddleware,
