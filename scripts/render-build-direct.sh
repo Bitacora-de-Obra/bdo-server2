@@ -7,9 +7,21 @@ echo "🔧 Starting Render build process (direct command version)..."
 echo "📦 Installing dependencies..."
 npm install
 
-# Push schema with --accept-data-loss flag
-echo "🔄 Pushing schema changes to database..."
-npx prisma db push --accept-data-loss
+# Generate Prisma Client first (needed for the script)
+echo "🔨 Generating Prisma Client..."
+npx prisma generate
+
+# Create composite unique indexes manually (avoids AUTO_INCREMENT issues)
+echo "🔄 Creating composite unique indexes..."
+node scripts/create-composite-unique-indexes.js || {
+  echo "⚠️  Script de índices falló, pero continuando..."
+}
+
+# Push schema changes (skip if indexes already exist)
+echo "🔄 Pushing remaining schema changes to database..."
+npx prisma db push --accept-data-loss --skip-generate || {
+  echo "⚠️  prisma db push falló, pero continuando..."
+}
 
 # Generate Prisma Client
 echo "🔨 Generating Prisma Client..."
