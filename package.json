@@ -30,6 +30,7 @@
     "corredor-vial:import": "node scripts/importCorredorVialElements.js",
           "control-points:delete-all": "node scripts/delete-all-control-points.js",
           "db:backup": "node scripts/backup-database.js",
+          "db:migrate-to-multi-tenant": "node scripts/migrate-to-multi-tenant.js",
     "pdf:extract": "node scripts/extractProjectFromPdf.js",
     "migrate:safe": "bash scripts/fix-migrations.sh",
     "seed": "ts-node prisma/seed.ts",
