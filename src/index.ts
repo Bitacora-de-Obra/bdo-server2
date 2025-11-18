@@ -117,6 +117,24 @@ import {
 const app = express();
 const prisma = new PrismaClient();
 
+/**
+ * Helper para agregar filtro de tenant a queries
+ * Retorna un objeto where que incluye tenantId si hay tenant en el request
+ */
+function withTenantFilter<T extends { tenantId?: string }>(
+  req: Request,
+  baseWhere?: T
+): T & { tenantId?: string } {
+  const tenantId = (req as any).tenant?.id;
+  if (!tenantId) {
+    return baseWhere || ({} as T);
+  }
+  return {
+    ...baseWhere,
+    tenantId,
+  } as T & { tenantId?: string };
+}
+
 logger.info("Secrets cargados", {
   jwt: {
     access: secretDiagnostics.jwt.access.source,
@@ -3537,7 +3555,9 @@ app.post(
 // --- RUTAS DE BITÁCORA ---
 app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
   try {
+    const where = withTenantFilter(req);
     const entries = await prisma.logEntry.findMany({
+      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { createdAt: "desc" },
       include: logEntryResponseInclude as any,
     });
@@ -3768,8 +3788,9 @@ app.post(
       console.log("DEBUG: Intentando crear LogEntry en Prisma...");
       let logEntry;
       try {
-        logEntry = await prisma.logEntry.create({
-        data: {
+        // Asignar tenantId si está disponible
+        const tenantId = (req as any).tenant?.id;
+        const logEntryData: any = {
           title,
           description,
           type: prismaType,
@@ -3783,22 +3804,30 @@ app.post(
           scheduleDay: parsedScheduleDay,
           author: { connect: { id: userId } },
           project: { connect: { id: projectId } },
-          assignees: {
-            connect: (Array.isArray(assigneeIds) ? assigneeIds : [])
-              .filter((id) => typeof id === "string" && id.trim().length > 0)
-              .map((id) => ({ id })),
+        };
+        if (tenantId) {
+          logEntryData.tenantId = tenantId;
+        }
+        
+        logEntry = await prisma.logEntry.create({
+          data: {
+            ...logEntryData,
+            assignees: {
+              connect: (Array.isArray(assigneeIds) ? assigneeIds : [])
+                .filter((id) => typeof id === "string" && id.trim().length > 0)
+                .map((id) => ({ id })),
+            },
+            attachments: {
+              create: attachmentRecords.map((att) => ({
+                fileName: att.fileName,
+                url: att.url,
+                size: att.size,
+                type: att.type,
+                storagePath: att.storagePath,
+              })),
+            },
           },
-          attachments: {
-            create: attachmentRecords.map((att) => ({
-              fileName: att.fileName,
-              url: att.url,
-              size: att.size,
-              type: att.type,
-              storagePath: att.storagePath,
-            })),
-          },
-        },
-      });
+        });
       console.log("✅ LogEntry creado exitosamente:", { id: logEntry.id, title: logEntry.title });
       
       // Registrar la creación inicial en el historial
@@ -4045,12 +4074,18 @@ app.get(
   async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      const entry = await prisma.logEntry.findUnique({
-        where: { id },
+      const where = withTenantFilter(req, { id } as any);
+      const entry = await prisma.logEntry.findFirst({
+        where: Object.keys(where).length > 1 ? where : { id },
         include: logEntryResponseInclude as any,
       });
 
       if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -10074,8 +10109,14 @@ app.post("/api/auth/register", async (req, res) => {
       return res.status(400).json({ error: passwordError });
     }
 
-    const existingUser = await prisma.user.findUnique({
-      where: { email: normalizedEmail },
+    // Buscar usuario considerando tenant (después de migración)
+    const tenantId = (req as any).tenant?.id;
+    const whereClause: any = tenantId 
+      ? { email: normalizedEmail, tenantId }
+      : { email: normalizedEmail };
+    
+    const existingUser = await prisma.user.findFirst({
+      where: whereClause,
     });
 
     if (existingUser) {
@@ -10094,17 +10135,23 @@ app.post("/api/auth/register", async (req, res) => {
       ? (normalizedAppRole as AppRole)
       : AppRole.viewer;
 
+    // Asignar tenantId si está disponible
+    const userData: any = {
+      email: normalizedEmail,
+      password: hashedPassword,
+      fullName,
+      projectRole: resolvedProjectRole,
+      appRole: resolvedAppRole,
+      status: "active",
+      tokenVersion: 0,
+      emailVerifiedAt: isEmailServiceConfigured() ? null : new Date(),
+    };
+    if (tenantId) {
+      userData.tenantId = tenantId;
+    }
+
     const newUser = await prisma.user.create({
-      data: {
-        email: normalizedEmail,
-        password: hashedPassword,
-        fullName,
-        projectRole: resolvedProjectRole,
-        appRole: resolvedAppRole,
-        status: "active",
-        tokenVersion: 0,
-        emailVerifiedAt: isEmailServiceConfigured() ? null : new Date(),
-      },
+      data: userData,
     });
 
     let verificationEmailSent = false;
@@ -10164,8 +10211,14 @@ app.post("/api/auth/login", async (req, res) => {
         .json({ error: "Email y contraseña son requeridos." });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email },
+    // Buscar usuario considerando tenant (después de migración)
+    const tenantId = (req as any).tenant?.id;
+    const whereClause: any = tenantId 
+      ? { email, tenantId }
+      : { email };
+    
+    const user = await prisma.user.findFirst({
+      where: whereClause,
     });
 
     console.log("User found:", user ? "yes" : "no");
