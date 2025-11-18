@@ -1676,6 +1676,7 @@ const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "https://bdigitales.com",
   "https://www.bdigitales.com",
+  "https://mutis.bdigitales.com",
   "https://bdo-client.vercel.app",
   "https://bdo-client-git-main-bitacora-de-obras-projects.vercel.app",
   "https://bdo-client-bitacora-de-obras-projects.vercel.app",
