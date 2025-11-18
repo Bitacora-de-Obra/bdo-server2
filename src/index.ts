@@ -683,13 +683,19 @@ const buildAttachmentResponse = (attachment: any) => {
   const viewPath = `/api/attachments/${attachment.id}/view`;
   const downloadUrl = `${publicUrl}${downloadPath}`;
   const viewUrl = `${publicUrl}${viewPath}`;
+  
   return {
     ...attachment,
-    // url is used for previews in iframes/img; point to inline view
-    url: viewUrl,
+    // If the attachment has a storagePath and we're using cloud storage, use the original URL
+    // Otherwise, fallback to server-proxied URLs for local storage
+    url: attachment.storagePath && attachment.url && !attachment.url.includes('localhost') 
+      ? attachment.url  // Use the direct Cloudflare R2 URL for cloud storage
+      : viewUrl,        // Use server-proxied URL for local storage or legacy attachments
     downloadUrl,
     downloadPath,
-    previewUrl: viewUrl,
+    previewUrl: attachment.storagePath && attachment.url && !attachment.url.includes('localhost')
+      ? attachment.url  // Use direct URL for cloud storage previews too  
+      : viewUrl,
   };
 };
 
