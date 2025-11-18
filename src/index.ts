@@ -9246,7 +9246,7 @@ app.post(
   async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      const { notes, authorId, attachmentId, fileDate } = req.body ?? {};
+      const { notes, authorId, attachmentId } = req.body ?? {};
       const resolvedAuthorId = req.user?.userId || authorId;
 
       if (!resolvedAuthorId || !attachmentId) {
@@ -9269,25 +9269,10 @@ app.post(
         return res.status(404).json({ error: "Archivo adjunto no encontrado." });
       }
 
-      // Usar la fecha del archivo si se proporciona, sino usar la fecha actual
-      // Esto preserva el orden cronológico de las fotos
-      let photoDate = new Date();
-      if (fileDate) {
-        try {
-          const parsedDate = new Date(fileDate);
-          if (!isNaN(parsedDate.getTime())) {
-            photoDate = parsedDate;
-          }
-        } catch (error) {
-          console.warn("Fecha de archivo inválida, usando fecha actual:", error);
-        }
-      }
-
       const newPhoto = await prisma.photoEntry.create({
         data: {
           notes,
           url: attachment.url,
-          date: photoDate, // Usar la fecha del archivo para mantener orden cronológico
           author: { connect: { id: resolvedAuthorId } },
           controlPoint: { connect: { id } },
           attachment: { connect: { id: attachmentId } },
