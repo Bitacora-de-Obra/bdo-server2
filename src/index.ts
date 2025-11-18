@@ -3301,14 +3301,23 @@ app.post("/api/actas", async (req, res) => {
     const prismaArea = actaAreaMap[area] || "OTHER";
     const prismaStatus = actaStatusMap[status] || "DRAFT";
 
+    // Asignar tenantId si está disponible
+    const tenantId = (req as any).tenant?.id;
+    const actaData: any = {
+      number,
+      title,
+      date: new Date(date),
+      area: prismaArea,
+      status: prismaStatus,
+      summary,
+    };
+    if (tenantId) {
+      actaData.tenantId = tenantId;
+    }
+
     const newActa = await prisma.acta.create({
       data: {
-        number,
-        title,
-        date: new Date(date),
-        area: prismaArea,
-        status: prismaStatus,
-        summary,
+        ...actaData,
         commitments: {
           create: commitments.map((commitment: any) => ({
             description: commitment.description,
@@ -8522,8 +8531,9 @@ app.get("/api/reports", async (req, res) => {
 app.get("/api/reports/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const report = await prisma.report.findUnique({
-      where: { id },
+    const where = withTenantFilter(req, { id } as any);
+    const report = await prisma.report.findFirst({
+      where: Object.keys(where).length > 1 ? (where as any) : { id },
       include: {
         author: true,
         attachments: true,
@@ -8532,6 +8542,11 @@ app.get("/api/reports/:id", async (req, res) => {
     });
 
     if (!report) {
+      return res.status(404).json({ error: "Informe no encontrado." });
+    }
+    
+    // Verificar que el tenant coincida si hay tenant
+    if ((req as any).tenant && (report as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Informe no encontrado." });
     }
 
