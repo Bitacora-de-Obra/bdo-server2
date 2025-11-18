@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import fsSync from "fs";
 import PDFDocument from "pdfkit";
 import { PrismaClient } from "@prisma/client";
+import { getStorage } from "../../storage";
 import {
   normalizeEquipmentEntries,
   normalizeListItems,
@@ -818,10 +819,19 @@ export const generateLogEntryPdf = async ({
 
   const stats = await fs.stat(filePath);
   const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
+  
+  // Upload file to storage
+  const storage = getStorage();
+  const fileBuffer = await fs.readFile(filePath);
+  await storage.save({
+    path: storagePath,
+    content: fileBuffer
+  });
+  
   const attachment = await prisma.attachment.create({
     data: {
       fileName,
-      url: `${baseUrl}/uploads/${GENERATED_SUBDIR}/${fileName}`,
+      url: storage.getPublicUrl(storagePath),
       storagePath,
       size: stats.size,
       type: "application/pdf",
