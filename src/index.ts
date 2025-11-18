@@ -4252,12 +4252,19 @@ app.post(
         return res.status(401).json({ error: "Usuario no autenticado." });
       }
 
-      const entry = await prisma.logEntry.findUnique({
-        where: { id },
+      // Verificar que el log entry pertenezca al tenant
+      const where = withTenantFilter(req, { id } as any);
+      const entry = await prisma.logEntry.findFirst({
+        where: Object.keys(where).length > 1 ? (where as any) : { id },
         include: { assignees: true },
       });
 
       if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
