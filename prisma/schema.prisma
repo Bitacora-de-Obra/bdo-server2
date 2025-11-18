@@ -366,6 +366,8 @@ model SecurityEventLog {
   method    String?  @db.VarChar(16)
   details   Json?
   metadata  Json?
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now())
 
   @@index([type])
@@ -373,6 +375,7 @@ model SecurityEventLog {
   @@index([createdAt])
   @@index([userId])
   @@index([ipAddress])
+  @@index([tenantId])
 }
 
 model CommunicationStatusHistory {
@@ -764,14 +767,20 @@ model Report {
 
 model Drawing {
   id         String            @id @default(uuid())
-  code       String            @unique
+  code       String
   title      String
   discipline DrawingDiscipline
   status     DrawingStatus
+  tenantId   String
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   versions   DrawingVersion[]
   comments   Comment[]
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
+
+  // Code único por tenant (composite unique)
+  @@unique([code, tenantId])
+  @@index([tenantId])
 }
 
 model DrawingVersion {

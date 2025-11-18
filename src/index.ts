@@ -2895,7 +2895,9 @@ app.get(
   requireAdmin,
   async (req: AuthRequest, res) => {
     try {
-      const stats = await getSecurityStats();
+      // Filtrar por tenant si está disponible
+      const tenantId = (req as any).tenant?.id;
+      const stats = await getSecurityStats(tenantId);
       res.json(stats);
     } catch (error) {
       logger.error("Error obteniendo estadísticas de seguridad", {
@@ -7046,6 +7048,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
       // Drawings no tienen tenantId en el schema actual, pero podemos filtrar si se agrega en el futuro
       // Por ahora, obtener todos (puede que drawings sean compartidos entre tenants o no implementados aún)
       prisma.drawing.findMany({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { code: "asc" },
         take: 20,
         include: {
@@ -8113,9 +8116,12 @@ app.delete(
 );
 
 // --- RUTAS PARA PLANOS (DRAWINGS) ---
-app.get("/api/drawings", async (_req, res) => {
+app.get("/api/drawings", async (req, res) => {
   try {
+    // Filtrar por tenant si está disponible
+    const where = withTenantFilter(req);
     const drawings = await prisma.drawing.findMany({
+      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { createdAt: "desc" },
       include: {
         versions: {
@@ -8167,8 +8173,10 @@ app.get("/api/drawings", async (_req, res) => {
 app.get("/api/drawings/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const drawing = await prisma.drawing.findUnique({
-      where: { id },
+    // Verificar que el drawing pertenezca al tenant
+    const where = withTenantFilter(req, { id } as any);
+    const drawing = await prisma.drawing.findFirst({
+      where: Object.keys(where).length > 1 ? (where as any) : { id },
       include: {
         versions: {
           orderBy: { versionNumber: "desc" },
@@ -8182,6 +8190,11 @@ app.get("/api/drawings/:id", async (req, res) => {
     });
 
     if (!drawing) {
+      return res.status(404).json({ error: "Plano no encontrado." });
+    }
+    
+    // Verificar que el tenant coincida si hay tenant
+    if ((req as any).tenant && (drawing as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Plano no encontrado." });
     }
 
@@ -8235,12 +8248,20 @@ app.post(
 
       const prismaDiscipline = drawingDisciplineMap[discipline] || "OTHER";
 
+      // Asignar tenantId si está disponible
+      const tenantId = (req as any).tenant?.id;
+      if (!tenantId) {
+        return res.status(400).json({ error: "No se pudo determinar el tenant." });
+      }
+
       const newDrawing = await prisma.drawing.create({
         data: {
           code,
           title,
           discipline: prismaDiscipline,
           status: "VIGENTE",
+          tenantId,
+        } as any,
           versions: {
             create: [
               {
@@ -8295,12 +8316,19 @@ app.post(
           .json({ error: "Faltan los datos de la nueva versión." });
       }
 
-      const existingDrawing = await prisma.drawing.findUnique({
-        where: { id },
+      // Verificar que el drawing pertenezca al tenant
+      const where = withTenantFilter(req, { id } as any);
+      const existingDrawing = await prisma.drawing.findFirst({
+        where: Object.keys(where).length > 1 ? (where as any) : { id },
         include: { versions: { orderBy: { versionNumber: "desc" } } },
       });
 
       if (!existingDrawing) {
+        return res.status(404).json({ error: "El plano no fue encontrado." });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (existingDrawing as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "El plano no fue encontrado." });
       }
 
@@ -8360,6 +8388,21 @@ app.post(
         return res
           .status(400)
           .json({ error: "El contenido y el autor son obligatorios." });
+      }
+
+      // Verificar que el drawing pertenezca al tenant antes de comentar
+      const drawingWhere = withTenantFilter(req, { id } as any);
+      const drawing = await prisma.drawing.findFirst({
+        where: Object.keys(drawingWhere).length > 1 ? (drawingWhere as any) : { id },
+      });
+
+      if (!drawing) {
+        return res.status(404).json({ error: "Plano no encontrado." });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (drawing as any).tenantId !== (req as any).tenant.id) {
+        return res.status(404).json({ error: "Plano no encontrado." });
       }
 
       const newComment = await prisma.comment.create({
