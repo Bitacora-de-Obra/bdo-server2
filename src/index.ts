@@ -3487,6 +3487,7 @@ app.post(
         isConfidential,
         projectId,
         assigneeIds = [],
+        scheduleDay,
       } = req.body ?? {};
 
       // Leer requiredSignatories directamente de req.body (no del destructuring)
@@ -3618,6 +3619,24 @@ app.post(
       console.log("✅ uniqueSignerIds final (incluyendo autor):", uniqueSignerIds);
       console.log("═══════════════════════════════════════════════════════");
 
+      // Procesar scheduleDay
+      let parsedScheduleDay: number | null = null;
+      if (scheduleDay !== undefined && scheduleDay !== null && scheduleDay !== "") {
+        if (typeof scheduleDay === "string") {
+          // Extraer el número del string "Día X del proyecto" o similar
+          const match = scheduleDay.match(/Día\s+(\d+)/i);
+          if (match) {
+            parsedScheduleDay = parseInt(match[1], 10);
+          } else {
+            // Si no coincide con el patrón, intentar parsear directamente
+            const directParse = parseInt(scheduleDay, 10);
+            parsedScheduleDay = isNaN(directParse) ? null : directParse;
+          }
+        } else if (typeof scheduleDay === "number") {
+          parsedScheduleDay = scheduleDay;
+        }
+      }
+
       console.log("DEBUG: Intentando crear LogEntry en Prisma...");
       let logEntry;
       try {
@@ -3633,6 +3652,7 @@ app.post(
           activityStartDate: activityStartValue,
           activityEndDate: activityEndValue,
           isConfidential: parseBooleanInput(isConfidential),
+          scheduleDay: parsedScheduleDay,
           author: { connect: { id: userId } },
           project: { connect: { id: projectId } },
           assignees: {
@@ -4539,9 +4559,19 @@ app.put(
           }
           // Si currentScheduleDay es 0, no hacemos nada (no actualizamos)
         } else {
-          const parsed = typeof scheduleDayValue === "string" 
-            ? parseInt(scheduleDayValue, 10) 
-            : scheduleDayValue;
+          let parsed: number;
+          if (typeof scheduleDayValue === "string") {
+            // Extraer el número del string "Día X del proyecto" o similar
+            const match = scheduleDayValue.match(/Día\s+(\d+)/i);
+            if (match) {
+              parsed = parseInt(match[1], 10);
+            } else {
+              // Si no coincide con el patrón, intentar parsear directamente
+              parsed = parseInt(scheduleDayValue, 10);
+            }
+          } else {
+            parsed = scheduleDayValue;
+          }
           const finalValue = isNaN(parsed) ? null : parsed;
           
           // Solo actualizar si el valor es diferente al actual

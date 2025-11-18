@@ -295,8 +295,8 @@ export const generateLogEntryPdf = async ({
       .moveDown();
 
     const formatScheduleDay = (value: number | null | undefined) => {
-      if (typeof value === "number" && Number.isFinite(value)) {
-        return String(value);
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+        return `Día ${value} del proyecto`;
       }
       return "—";
     };
@@ -380,8 +380,8 @@ export const generateLogEntryPdf = async ({
     const generalInfoItems = [
       project ? `Identificación del proyecto: ${project.name}` : null,
       project?.contractId ? `Contrato: ${project.contractId}` : null,
-      typeof entry.scheduleDay === "number" && Number.isFinite(entry.scheduleDay)
-        ? `Día del plazo: ${entry.scheduleDay}`
+      typeof entry.scheduleDay === "number" && Number.isFinite(entry.scheduleDay) && entry.scheduleDay > 0
+        ? `Día del plazo: Día ${entry.scheduleDay} del proyecto`
         : null,
       entry.locationDetails && entry.locationDetails.trim()
         ? `Localización / Tramo: ${entry.locationDetails.trim()}`
