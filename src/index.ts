@@ -647,17 +647,24 @@ const sanitizeFileName = (value: string) =>
     .slice(0, 120);
 
 /**
- * Crea una clave de almacenamiento organizada por tipo, año y mes
- * Estructura: {type}/{category}/{year}/{month}/{uniqueId}-{filename}
+ * Crea una clave de almacenamiento organizada igual que el expediente exportado
+ * Estructura: {seccion}/{year}/{month}/{uniqueId}-{filename}
  * 
- * @param type - Tipo principal: 'attachments', 'photos', 'signatures', 'generated'
- * @param category - Categoría específica: 'log-entries', 'actas', 'communications', 'control-points', etc.
+ * Secciones principales (igual que el ZIP del expediente):
+ * - bitacora/ - Archivos de bitácoras (adjuntos, PDFs generados, firmas)
+ * - actas/ - Archivos de actas de comité
+ * - comunicaciones/ - Archivos de comunicaciones
+ * - informes/ - Archivos de informes (adjuntos, PDFs generados)
+ * - puntos-fijos/ - Fotos de puntos fijos
+ * - firmas/ - Firmas de usuarios y documentos firmados
+ * - planos/ - Planos de obra
+ * 
+ * @param seccion - Sección principal: 'bitacora', 'actas', 'comunicaciones', 'informes', 'puntos-fijos', 'firmas', 'planos'
  * @param originalName - Nombre original del archivo
  * @returns Ruta organizada para almacenamiento
  */
 const createStorageKey = (
-  type: string,
-  category: string,
+  seccion: string,
   originalName: string
 ) => {
   const now = new Date();
@@ -668,17 +675,13 @@ const createStorageKey = (
   const baseName = sanitizeFileName(path.basename(originalName, ext)) || "file";
   const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
   
-  // Normalizar tipo y categoría para evitar caracteres inválidos
-  const normalizedType = type
-    .replace(/[^a-zA-Z0-9_-]/g, "")
-    .toLowerCase();
-  const normalizedCategory = category
+  // Normalizar sección para evitar caracteres inválidos
+  const normalizedSeccion = seccion
     .replace(/[^a-zA-Z0-9_-]/g, "")
     .toLowerCase();
   
   return path.posix.join(
-    normalizedType,
-    normalizedCategory,
+    normalizedSeccion,
     year,
     month,
     `${uniqueSuffix}-${baseName}${ext}`
@@ -700,19 +703,17 @@ const createStorageKeyLegacy = (folder: string, originalName: string) => {
 };
 
 /**
- * Persiste un archivo subido con organización por tipo y categoría
+ * Persiste un archivo subido con organización igual que el expediente exportado
  * @param file - Archivo subido
- * @param type - Tipo principal: 'attachments', 'photos', 'signatures', 'generated'
- * @param category - Categoría específica: 'log-entries', 'actas', 'communications', 'control-points', etc.
+ * @param seccion - Sección principal: 'bitacora', 'actas', 'comunicaciones', 'informes', 'puntos-fijos', 'firmas', 'planos'
  * @returns Objeto con la clave de almacenamiento y URL pública
  */
 const persistUploadedFile = async (
   file: Express.Multer.File,
-  type: string,
-  category: string
+  seccion: string
 ) => {
   const storage = getStorage();
-  const key = createStorageKey(type, category, file.originalname);
+  const key = createStorageKey(seccion, file.originalname);
   await storage.save({ path: key, content: file.buffer });
   return {
     key,
@@ -2247,8 +2248,7 @@ app.post(
       const parsedFileName = path.parse(attachment.fileName || "documento.pdf");
       const signedFileName = `${parsedFileName.name}-firmado-${Date.now()}.pdf`;
       const signedKey = createStorageKey(
-        "signatures",
-        "signed-documents",
+        "firmas",
         signedFileName
       );
       await storage.save({ path: signedKey, content: signedBuffer });
@@ -3558,8 +3558,7 @@ app.post(
       if (req.files && Array.isArray(req.files)) {
         for (const file of req.files as Express.Multer.File[]) {
           const key = createStorageKey(
-            "attachments",
-            "log-entries",
+            "bitacora",
             file.originalname
           );
           await storage.save({ path: key, content: file.buffer });
@@ -4642,7 +4641,7 @@ app.put(
 
       if (req.files && Array.isArray(req.files)) {
         for (const file of req.files as Express.Multer.File[]) {
-          const key = createStorageKey("attachments", "log-entries", file.originalname);
+          const key = createStorageKey("bitacora", file.originalname);
           await storage.save({ path: key, content: file.buffer });
           newAttachments.push({
             fileName: file.originalname,
@@ -5351,10 +5350,10 @@ app.post(
               });
               continue;
             }
+            // Comentarios de bitácoras van en la sección bitacora
             const stored = await persistUploadedFile(
               file,
-              "attachments",
-              "log-entry-comments"
+              "bitacora"
             );
             const attachment = await prisma.attachment.create({
               data: {
@@ -5839,9 +5838,9 @@ app.post(
             const baseName = parsedFileName.name.replace(/-firmado(-\d+)?$/, '');
             // Usar sufijo -firmado con timestamp para crear versiones únicas
             const signedFileName = `${baseName}-firmado-${Date.now()}.pdf`;
+            // Firmas de bitácoras van en la sección bitacora
             const signedKey = createStorageKey(
-              "signatures",
-              "log-entry-signatures",
+              "bitacora",
               signedFileName
             );
             
@@ -7389,8 +7388,7 @@ app.post(
 
       const storage = getStorage();
       const key = createStorageKey(
-        "signatures",
-        "user-signatures",
+        "firmas",
         file.originalname
       );
       await storage.save({ path: key, content: file.buffer });
@@ -7767,23 +7765,42 @@ app.post(
           .json({ error: "No se subió ningún archivo válido." });
       }
 
-      // Determinar el tipo de archivo basado en el tipo enviado
+      // Determinar la sección basada en el tipo de archivo y contexto (igual que el expediente exportado)
       const fileType = req.body?.type || "document"; // 'document', 'photo', 'drawing'
-      let storageType: string;
-      let storageCategory: string;
+      const context = req.body?.context || req.body?.section; // 'bitacora', 'actas', 'comunicaciones', 'informes', etc.
+      
+      let seccion: string;
       
       if (fileType === "photo") {
-        storageType = "photos";
-        storageCategory = "control-points";
+        seccion = "puntos-fijos";
       } else if (fileType === "drawing") {
-        storageType = "attachments";
-        storageCategory = "drawings";
+        seccion = "planos";
+      } else if (context) {
+        // Si se especifica un contexto, usarlo (normalizado)
+        const normalizedContext = context
+          .replace(/[^a-zA-Z0-9_-]/g, "")
+          .toLowerCase();
+        // Mapear nombres comunes a secciones del expediente
+        const contextMap: Record<string, string> = {
+          "acta": "actas",
+          "actas": "actas",
+          "comunicacion": "comunicaciones",
+          "comunicaciones": "comunicaciones",
+          "informe": "informes",
+          "informes": "informes",
+          "report": "informes",
+          "reports": "informes",
+          "bitacora": "bitacora",
+          "logentry": "bitacora",
+          "log-entry": "bitacora",
+        };
+        seccion = contextMap[normalizedContext] || normalizedContext;
       } else {
-        storageType = "attachments";
-        storageCategory = "general";
+        // Por defecto, archivos generales van a bitacora
+        seccion = "bitacora";
       }
       
-      const stored = await persistUploadedFile(file, storageType, storageCategory);
+      const stored = await persistUploadedFile(file, seccion);
 
       const attachment = await prisma.attachment.create({
         data: {
