@@ -8362,9 +8362,11 @@ app.patch(
   }
 );
 
-app.get("/api/work-actas", async (_req, res) => {
+app.get("/api/work-actas", async (req, res) => {
   try {
+    const where = withTenantFilter(req);
     const actas = await prisma.workActa.findMany({
+      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { date: "desc" },
       include: {
         items: { include: { contractItem: true } },
@@ -8393,6 +8395,11 @@ app.get("/api/work-actas/:id", async (req, res) => {
     });
 
     if (!acta) {
+      return res.status(404).json({ error: "Acta de avance no encontrada." });
+    }
+    
+    // Verificar que el tenant coincida si hay tenant
+    if ((req as any).tenant && (acta as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Acta de avance no encontrada." });
     }
 
@@ -9120,6 +9127,11 @@ app.get("/api/cost-actas/:id", async (req, res) => {
     });
 
     if (!acta) {
+      return res.status(404).json({ error: "Acta de costo no encontrada." });
+    }
+    
+    // Verificar que el tenant coincida si hay tenant
+    if ((req as any).tenant && (acta as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Acta de costo no encontrada." });
     }
 
