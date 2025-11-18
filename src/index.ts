@@ -2934,8 +2934,15 @@ app.get("/health", (req, res) => {
 // Endpoint público para obtener usuarios de demostración
 app.get("/api/public/demo-users", async (req, res) => {
   try {
+    // Filtrar por tenant si está disponible
+    const tenantId = (req as any).tenant?.id;
+    const whereClause: any = { status: "active" };
+    if (tenantId) {
+      whereClause.tenantId = tenantId;
+    }
+    
     const users = await prisma.user.findMany({
-      where: { status: "active" },
+      where: whereClause,
       select: {
         id: true,
         fullName: true,
