@@ -6367,42 +6367,48 @@ app.post("/api/communications", async (req, res) => {
       radicado,
       subject,
       description,
-        senderEntity: senderDetails?.entity,
-        senderName: senderDetails?.personName,
-        senderTitle: senderDetails?.personTitle,
-        recipientEntity: recipientDetails?.entity,
-        recipientName: recipientDetails?.personName,
-        recipientTitle: recipientDetails?.personTitle,
-        signerName,
-        sentDate: new Date(sentDate),
-        dueDate: dueDate ? new Date(dueDate) : null,
-        deliveryMethod: prismaDeliveryMethod,
-        notes,
-        status: "PENDIENTE",
-        direction: prismaDirection,
-        requiresResponse: normalizedRequiresResponse,
-        responseDueDate:
-          normalizedRequiresResponse && responseDueDate
-            ? new Date(responseDueDate)
-            : null,
-        uploader: { connect: { id: uploaderId } },
-        assignee: assigneeId ? { connect: { id: assigneeId } } : undefined,
-        assignedAt: assigneeId ? new Date() : null,
-        parent: parentId ? { connect: { id: parentId } } : undefined,
-        attachments: Array.isArray(attachments)
-          ? {
-              connect: attachments
-                .filter((att: any) => att?.id)
-                .map((att: any) => ({ id: att.id })),
-            }
-          : undefined,
-        statusHistory: {
-          create: {
-            status: communicationStatusMap["Pendiente"] || "PENDIENTE",
-            user: { connect: { id: uploaderId } },
-          },
+      senderEntity: senderDetails?.entity,
+      senderName: senderDetails?.personName,
+      senderTitle: senderDetails?.personTitle,
+      recipientEntity: recipientDetails?.entity,
+      recipientName: recipientDetails?.personName,
+      recipientTitle: recipientDetails?.personTitle,
+      signerName,
+      sentDate: new Date(sentDate),
+      dueDate: dueDate ? new Date(dueDate) : null,
+      deliveryMethod: prismaDeliveryMethod,
+      notes,
+      status: "PENDIENTE",
+      direction: prismaDirection,
+      requiresResponse: normalizedRequiresResponse,
+      responseDueDate:
+        normalizedRequiresResponse && responseDueDate
+          ? new Date(responseDueDate)
+          : null,
+      uploader: { connect: { id: uploaderId } },
+      assignee: assigneeId ? { connect: { id: assigneeId } } : undefined,
+      assignedAt: assigneeId ? new Date() : null,
+      parent: parentId ? { connect: { id: parentId } } : undefined,
+      attachments: Array.isArray(attachments)
+        ? {
+            connect: attachments
+              .filter((att: any) => att?.id)
+              .map((att: any) => ({ id: att.id })),
+          }
+        : undefined,
+      statusHistory: {
+        create: {
+          status: communicationStatusMap["Pendiente"] || "PENDIENTE",
+          user: { connect: { id: uploaderId } },
         },
       },
+    };
+    if (tenantId) {
+      commData.tenantId = tenantId;
+    }
+
+    const newComm = await prisma.communication.create({
+      data: commData,
       include: {
         uploader: true,
         assignee: true,
