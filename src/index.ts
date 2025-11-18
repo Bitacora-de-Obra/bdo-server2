@@ -5398,9 +5398,10 @@ app.delete(
         return res.status(401).json({ error: "Usuario no autenticado." });
       }
 
-      // Buscar la anotación
-      const entry = await prisma.logEntry.findUnique({
-        where: { id },
+      // Verificar que el log entry pertenezca al tenant
+      const where = withTenantFilter(req, { id } as any);
+      const entry = await prisma.logEntry.findFirst({
+        where: Object.keys(where).length > 1 ? (where as any) : { id },
         include: {
           attachments: true,
           author: {
@@ -5414,6 +5415,11 @@ app.delete(
       });
 
       if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -5531,10 +5537,12 @@ app.post(
         }
 
         // Verificar acceso al log entry antes de permitir comentar
+        const tenantId = (req as any).tenant?.id;
         const { entry: logEntry, hasAccess, reason } = await verifyLogEntryAccess(
           id,
           userId,
-          false // Solo lectura necesaria para comentar
+          false, // Solo lectura necesaria para comentar
+          tenantId
         );
 
         if (!hasAccess || !logEntry) {
@@ -5681,9 +5689,10 @@ app.post(
         return res.status(401).json({ error: "Usuario no autenticado." });
       }
 
-      // Obtener la anotación
-      const entry = await prisma.logEntry.findUnique({
-        where: { id },
+      // Verificar que el log entry pertenezca al tenant
+      const where = withTenantFilter(req, { id } as any);
+      const entry = await prisma.logEntry.findFirst({
+        where: Object.keys(where).length > 1 ? (where as any) : { id },
         include: {
           reviewTasks: { include: { reviewer: true } },
           assignees: true,
@@ -5691,6 +5700,11 @@ app.post(
       });
 
       if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -5820,8 +5834,10 @@ app.post(
         });
       }
 
-      const entry = await prisma.logEntry.findUnique({
-        where: { id },
+      // Verificar que el log entry pertenezca al tenant
+      const where = withTenantFilter(req, { id } as any);
+      const entry = await prisma.logEntry.findFirst({
+        where: Object.keys(where).length > 1 ? (where as any) : { id },
         include: {
           signatureTasks: { include: { signer: true } },
           attachments: true,
@@ -5829,6 +5845,11 @@ app.post(
       });
 
       if (!entry) {
+        return res.status(404).json({ error: "Anotación no encontrada." });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -6506,6 +6527,21 @@ app.put(
           communicationStatusReverseMap[status] || "Pendiente"
         ] ||
         "PENDIENTE";
+
+      // Verificar que la comunicación pertenezca al tenant
+      const where = withTenantFilter(req, { id } as any);
+      const existingComm = await prisma.communication.findFirst({
+        where: Object.keys(where).length > 1 ? (where as any) : { id },
+      });
+
+      if (!existingComm) {
+        return res.status(404).json({ error: "Comunicación no encontrada." });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (existingComm as any).tenantId !== (req as any).tenant.id) {
+        return res.status(404).json({ error: "Comunicación no encontrada." });
+      }
 
       const updated = await prisma.communication.update({
         where: { id },
@@ -9386,12 +9422,20 @@ app.post(
         });
       }
 
-      // Verificar que el acta existe
-      const costActa = await prisma.costActa.findUnique({
-        where: { id },
+      // Verificar que el acta pertenezca al tenant
+      const where = withTenantFilter(req, { id } as any);
+      const costActa = await prisma.costActa.findFirst({
+        where: Object.keys(where).length > 1 ? (where as any) : { id },
       });
 
       if (!costActa) {
+        return res.status(404).json({
+          error: "Acta de cobro no encontrada.",
+        });
+      }
+      
+      // Verificar que el tenant coincida si hay tenant
+      if ((req as any).tenant && (costActa as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({
           error: "Acta de cobro no encontrada.",
         });
