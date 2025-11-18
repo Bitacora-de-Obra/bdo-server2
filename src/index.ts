@@ -1894,7 +1894,41 @@ app.get("/api/attachments/:id/download", async (req, res) => {
         return res.redirect(attachment.url);
       }
       
-      const storagePath = attachment.storagePath || resolveStorageKeyFromUrl(attachment.url);
+      // Intentar múltiples estrategias para obtener el storagePath (similar a como lo hace el PDF)
+      let storagePath = attachment.storagePath;
+      
+      if (!storagePath && attachment.url) {
+        // Estrategia 1: Extraer desde URL de R2
+        storagePath = resolveStorageKeyFromUrl(attachment.url);
+        
+        // Estrategia 2: Si la URL contiene /uploads/, extraer el path (como hace el PDF)
+        if (!storagePath && attachment.url.includes("/uploads/")) {
+          storagePath = attachment.url.replace(/^.*\/uploads\//, "");
+        }
+        
+        // Estrategia 3: Si tenemos el fileName, intentar buscar en paths comunes
+        // Nota: Esto puede ser lento si hay muchos archivos, pero es necesario para attachments antiguos
+        if (!storagePath && attachment.fileName) {
+          // Los paths comunes donde se guardan los archivos
+          const commonPaths = [
+            `log-entries/${attachment.fileName}`,
+            attachment.fileName,
+          ];
+          
+          // Probar cada path hasta encontrar uno que funcione
+          for (const candidatePath of commonPaths) {
+            try {
+              // Intentar cargar para verificar que existe
+              await storage.load(candidatePath);
+              storagePath = candidatePath;
+              console.log(`✅ Encontrado archivo en R2: ${candidatePath} para attachment ${attachment.id}`);
+              break;
+            } catch (loadError) {
+              // Continuar con el siguiente path
+            }
+          }
+        }
+      }
       
       if (storagePath) {
         try {
@@ -1910,6 +1944,7 @@ app.get("/api/attachments/:id/download", async (req, res) => {
           return res.send(fileBuffer);
         } catch (storageError) {
           console.error("Error cargando archivo desde storage:", storageError);
+          console.error("StoragePath intentado:", storagePath);
           // Si estamos usando R2 y falla, no intentar fallback local
           return res.status(404).json({ 
             error: "Archivo no disponible en el almacenamiento.",
@@ -1918,6 +1953,9 @@ app.get("/api/attachments/:id/download", async (req, res) => {
         }
       } else {
         // Si no podemos determinar el storagePath y estamos usando R2, devolver error
+        console.error("No se pudo determinar storagePath para attachment:", attachment.id);
+        console.error("URL:", attachment.url);
+        console.error("FileName:", attachment.fileName);
         return res.status(404).json({ 
           error: "No se pudo determinar la ubicación del archivo en el almacenamiento."
         });
@@ -1996,7 +2034,41 @@ app.get("/api/attachments/:id/view", async (req, res) => {
         return res.redirect(attachment.url);
       }
       
-      const storagePath = attachment.storagePath || resolveStorageKeyFromUrl(attachment.url);
+      // Intentar múltiples estrategias para obtener el storagePath (similar a como lo hace el PDF)
+      let storagePath = attachment.storagePath;
+      
+      if (!storagePath && attachment.url) {
+        // Estrategia 1: Extraer desde URL de R2
+        storagePath = resolveStorageKeyFromUrl(attachment.url);
+        
+        // Estrategia 2: Si la URL contiene /uploads/, extraer el path (como hace el PDF)
+        if (!storagePath && attachment.url.includes("/uploads/")) {
+          storagePath = attachment.url.replace(/^.*\/uploads\//, "");
+        }
+        
+        // Estrategia 3: Si tenemos el fileName, intentar buscar en paths comunes
+        // Nota: Esto puede ser lento si hay muchos archivos, pero es necesario para attachments antiguos
+        if (!storagePath && attachment.fileName) {
+          // Los paths comunes donde se guardan los archivos
+          const commonPaths = [
+            `log-entries/${attachment.fileName}`,
+            attachment.fileName,
+          ];
+          
+          // Probar cada path hasta encontrar uno que funcione
+          for (const candidatePath of commonPaths) {
+            try {
+              // Intentar cargar para verificar que existe
+              await storage.load(candidatePath);
+              storagePath = candidatePath;
+              console.log(`✅ Encontrado archivo en R2: ${candidatePath} para attachment ${attachment.id}`);
+              break;
+            } catch (loadError) {
+              // Continuar con el siguiente path
+            }
+          }
+        }
+      }
       
       if (storagePath) {
         try {
@@ -2012,6 +2084,7 @@ app.get("/api/attachments/:id/view", async (req, res) => {
           return res.send(fileBuffer);
         } catch (storageError) {
           console.error("Error cargando archivo desde storage:", storageError);
+          console.error("StoragePath intentado:", storagePath);
           // Si estamos usando R2 y falla, no intentar fallback local
           return res.status(404).json({ 
             error: "Archivo no disponible en el almacenamiento.",
@@ -2020,6 +2093,9 @@ app.get("/api/attachments/:id/view", async (req, res) => {
         }
       } else {
         // Si no podemos determinar el storagePath y estamos usando R2, devolver error
+        console.error("No se pudo determinar storagePath para attachment:", attachment.id);
+        console.error("URL:", attachment.url);
+        console.error("FileName:", attachment.fileName);
         return res.status(404).json({ 
           error: "No se pudo determinar la ubicación del archivo en el almacenamiento."
         });
