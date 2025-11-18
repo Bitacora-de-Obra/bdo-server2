@@ -655,24 +655,26 @@ const sanitizeFileName = (value: string) =>
 
 /**
  * Crea una clave de almacenamiento organizada igual que el expediente exportado
- * Estructura: {seccion}/{year}/{month}/{uniqueId}-{filename}
+ * Estructura: {seccion}/{subfolder?}/{year}/{month}/{uniqueId}-{filename}
  * 
  * Secciones principales (igual que el ZIP del expediente):
  * - bitacora/ - Archivos de bitácoras (adjuntos, PDFs generados, firmas)
  * - actas/ - Archivos de actas de comité
  * - comunicaciones/ - Archivos de comunicaciones
  * - informes/ - Archivos de informes (adjuntos, PDFs generados)
- * - puntos-fijos/ - Fotos de puntos fijos
+ * - puntos-fijos/{controlPointId}/ - Fotos de puntos fijos (organizadas por punto fijo)
  * - firmas/ - Firmas de usuarios y documentos firmados
  * - planos/ - Planos de obra
  * 
  * @param seccion - Sección principal: 'bitacora', 'actas', 'comunicaciones', 'informes', 'puntos-fijos', 'firmas', 'planos'
  * @param originalName - Nombre original del archivo
+ * @param subfolder - Subcarpeta opcional (ej: ID del punto fijo para puntos-fijos)
  * @returns Ruta organizada para almacenamiento
  */
 const createStorageKey = (
   seccion: string,
-  originalName: string
+  originalName: string,
+  subfolder?: string
 ) => {
   const now = new Date();
   const year = now.getFullYear().toString();
@@ -687,12 +689,18 @@ const createStorageKey = (
     .replace(/[^a-zA-Z0-9_-]/g, "")
     .toLowerCase();
   
-  return path.posix.join(
-    normalizedSeccion,
-    year,
-    month,
-    `${uniqueSuffix}-${baseName}${ext}`
-  );
+  // Normalizar subfolder si existe
+  const normalizedSubfolder = subfolder
+    ? subfolder.replace(/[^a-zA-Z0-9_-]/g, "").toLowerCase()
+    : undefined;
+  
+  const pathParts = [normalizedSeccion];
+  if (normalizedSubfolder) {
+    pathParts.push(normalizedSubfolder);
+  }
+  pathParts.push(year, month, `${uniqueSuffix}-${baseName}${ext}`);
+  
+  return path.posix.join(...pathParts);
 };
 
 /**
@@ -713,14 +721,16 @@ const createStorageKeyLegacy = (folder: string, originalName: string) => {
  * Persiste un archivo subido con organización igual que el expediente exportado
  * @param file - Archivo subido
  * @param seccion - Sección principal: 'bitacora', 'actas', 'comunicaciones', 'informes', 'puntos-fijos', 'firmas', 'planos'
+ * @param subfolder - Subcarpeta opcional (ej: ID del punto fijo para puntos-fijos)
  * @returns Objeto con la clave de almacenamiento y URL pública
  */
 const persistUploadedFile = async (
   file: Express.Multer.File,
-  seccion: string
+  seccion: string,
+  subfolder?: string
 ) => {
   const storage = getStorage();
-  const key = createStorageKey(seccion, file.originalname);
+  const key = createStorageKey(seccion, file.originalname, subfolder);
   await storage.save({ path: key, content: file.buffer });
   return {
     key,
@@ -7964,11 +7974,17 @@ app.post(
       // Determinar la sección basada en el tipo de archivo y contexto (igual que el expediente exportado)
       const fileType = req.body?.type || "document"; // 'document', 'photo', 'drawing'
       const context = req.body?.context || req.body?.section; // 'bitacora', 'actas', 'comunicaciones', 'informes', etc.
+      const controlPointId = req.body?.controlPointId; // ID del punto fijo para fotos
       
       let seccion: string;
+      let subfolder: string | undefined;
       
       if (fileType === "photo") {
         seccion = "puntos-fijos";
+        // Si hay controlPointId, usarlo como subcarpeta
+        if (controlPointId && typeof controlPointId === "string") {
+          subfolder = controlPointId;
+        }
       } else if (fileType === "drawing") {
         seccion = "planos";
       } else if (context) {
@@ -7996,7 +8012,13 @@ app.post(
         seccion = "bitacora";
       }
       
-      const stored = await persistUploadedFile(file, seccion);
+      const storage = getStorage();
+      const key = createStorageKey(seccion, file.originalname, subfolder);
+      await storage.save({ path: key, content: file.buffer });
+      const stored = {
+        key,
+        url: storage.getPublicUrl(key),
+      };
 
       const attachment = await prisma.attachment.create({
         data: {
