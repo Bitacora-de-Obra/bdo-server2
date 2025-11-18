@@ -6794,6 +6794,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         take: 10,
       }),
       prisma.logEntry.findMany({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { createdAt: "desc" },
         take: 10,
         include: {
