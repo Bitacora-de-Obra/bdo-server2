@@ -13,6 +13,7 @@ interface PdfExportOptions {
   uploadsDir: string;
   baseUrl: string;
   template?: string;
+  tenantId?: string; // Para filtrar por tenant en queries internas
 }
 
 const sanitizeFileName = (value: string) =>
@@ -60,6 +61,7 @@ export const generateReportPdf = async ({
   reportId,
   uploadsDir,
   baseUrl,
+  tenantId,
 }: PdfExportOptions) => {
   const report = await prisma.report.findUnique({
     where: { id: reportId },
@@ -74,7 +76,16 @@ export const generateReportPdf = async ({
     throw new Error("Informe no encontrado.");
   }
 
-  const project = await prisma.project.findFirst();
+  // Validar tenant si está disponible
+  if (tenantId && (report as any).tenantId !== tenantId) {
+    throw new Error("Informe no encontrado.");
+  }
+
+  // Filtrar proyecto por tenant si está disponible
+  const projectWhere: any = tenantId ? { tenantId } : undefined;
+  const project = await prisma.project.findFirst({
+    where: projectWhere,
+  });
 
   const generatedDir = path.join(uploadsDir, GENERATED_SUBDIR);
   await fs.mkdir(generatedDir, { recursive: true });

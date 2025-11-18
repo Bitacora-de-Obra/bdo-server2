@@ -5952,11 +5952,13 @@ app.post(
           try {
             const baseUrl =
               process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+            const tenantId = (req as any).tenant?.id;
             await generateLogEntryPdf({
               prisma,
               logEntryId: id,
               uploadsDir: process.env.UPLOADS_DIR || "./uploads",
               baseUrl,
+              tenantId,
             });
             console.log("PDF regenerado exitosamente con el estado actualizado");
 
@@ -6265,6 +6267,7 @@ app.post(
         // si no hay, generar
         if (!pdfAttachment) {
           try {
+            const tenantId = (req as any).tenant?.id;
             await generateLogEntryPdf({
               prisma,
               logEntryId: entry.id,
@@ -6272,6 +6275,7 @@ app.post(
               baseUrl:
                 process.env.SERVER_PUBLIC_URL ||
                 `http://localhost:${port}`,
+              tenantId,
             });
             // buscar de nuevo
             const refreshed = await prisma.logEntry.findUnique({
@@ -9006,11 +9010,13 @@ app.post(
       const baseUrl =
         process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
 
+      const tenantId = (req as any).tenant?.id;
       const result = await generateWeeklyReportExcel({
         prisma,
         reportId: id,
         uploadsDir,
         baseUrl,
+        tenantId,
       });
 
       const updated = await prisma.report.findUnique({
@@ -9072,11 +9078,13 @@ app.post(
       const baseUrl =
         process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
 
+      const tenantId = (req as any).tenant?.id;
       const result = await generateReportPdf({
         prisma,
         reportId: id,
         uploadsDir,
         baseUrl,
+        tenantId,
       });
 
       const updated = await prisma.report.findUnique({
@@ -9131,11 +9139,13 @@ app.post(
       const baseUrl =
         process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
 
+      const tenantId = (req as any).tenant?.id;
       const result = await generateLogEntryPdf({
         prisma,
         logEntryId: id,
         uploadsDir: process.env.UPLOADS_DIR || "./uploads",
         baseUrl,
+        tenantId,
       });
 
       const updated = await prisma.logEntry.findUnique({

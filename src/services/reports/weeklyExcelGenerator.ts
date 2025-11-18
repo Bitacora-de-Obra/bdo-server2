@@ -8,6 +8,7 @@ interface GenerateWeeklyReportOptions {
   reportId: string;
   uploadsDir: string;
   baseUrl: string;
+  tenantId?: string; // Para filtrar por tenant en queries internas
 }
 
 const GENERATED_SUBDIR = "generated";
@@ -41,6 +42,7 @@ export async function generateWeeklyReportExcel({
   reportId,
   uploadsDir,
   baseUrl,
+  tenantId,
 }: GenerateWeeklyReportOptions) {
   const report = await prisma.report.findUnique({
     where: { id: reportId },
@@ -55,11 +57,20 @@ export async function generateWeeklyReportExcel({
     throw new Error("Informe no encontrado.");
   }
 
+  // Validar tenant si está disponible
+  if (tenantId && (report as any).tenantId !== tenantId) {
+    throw new Error("Informe no encontrado.");
+  }
+
   if (report.type !== "Weekly") {
     throw new Error("Solo se pueden generar informes semanales en Excel.");
   }
 
-  const project = await prisma.project.findFirst();
+  // Filtrar proyecto por tenant si está disponible
+  const projectWhere: any = tenantId ? { tenantId } : undefined;
+  const project = await prisma.project.findFirst({
+    where: projectWhere,
+  });
 
   const weekEnd = new Date(report.submissionDate);
   weekEnd.setHours(0, 0, 0, 0);
@@ -69,11 +80,15 @@ export async function generateWeeklyReportExcel({
   const weekEndInclusive = new Date(weekEnd);
   weekEndInclusive.setHours(23, 59, 59, 999);
 
+  // Filtrar por tenant en todas las queries
+  const tenantFilter = tenantId ? { tenantId } : {};
+  
   const tasks = await prisma.projectTask.findMany({
     where: {
       AND: [
         { startDate: { lte: weekEndInclusive } },
         { endDate: { gte: weekStart } },
+        ...(tenantId ? [tenantFilter as any] : []),
       ],
     },
     orderBy: [{ startDate: "asc" }],
@@ -84,6 +99,7 @@ export async function generateWeeklyReportExcel({
       AND: [
         { activityStartDate: { lte: weekEndInclusive } },
         { activityEndDate: { gte: weekStart } },
+        ...(tenantId ? [tenantFilter as any] : []),
       ],
     },
     include: {
@@ -96,14 +112,28 @@ export async function generateWeeklyReportExcel({
 
   const communications = await prisma.communication.findMany({
     where: {
-      sentDate: { gte: weekStart, lte: weekEndInclusive },
+      AND: [
+        { sentDate: { gte: weekStart, lte: weekEndInclusive } },
+        ...(tenantId ? [tenantFilter as any] : []),
+      ],
     },
     orderBy: { sentDate: "asc" },
   });
 
+  // Primero obtener los actas del tenant si hay tenant
+  const actaIds = tenantId 
+    ? (await prisma.acta.findMany({
+        where: { tenantId } as any,
+        select: { id: true },
+      })).map(a => a.id)
+    : undefined;
+
   const commitments = await prisma.commitment.findMany({
     where: {
-      dueDate: { gte: weekStart, lte: weekEndInclusive },
+      AND: [
+        { dueDate: { gte: weekStart, lte: weekEndInclusive } },
+        ...(actaIds ? [{ actaId: { in: actaIds } }] : []),
+      ],
     },
     include: {
       acta: true,
