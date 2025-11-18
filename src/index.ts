@@ -6663,10 +6663,12 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         include: { keyPersonnel: true } 
       }),
       prisma.contractModification.findMany({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { date: "desc" },
         take: 10,
       }),
       prisma.logEntry.findFirst({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { createdAt: "desc" },
         include: { author: { select: { fullName: true } } },
       }),
@@ -6683,6 +6685,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         orderBy: { itemCode: "asc" },
       }),
       prisma.workActa.findMany({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         include: {
           items: {
             include: {
@@ -6702,14 +6705,17 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         take: 10,
       }),
       prisma.projectTask.findMany({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { startDate: "asc" },
         take: 20,
       }),
       prisma.communication.findMany({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { sentDate: "desc" },
         take: 10,
       }),
       prisma.acta.findMany({
+        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { date: "desc" },
         take: 10,
         include: {
