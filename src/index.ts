@@ -1713,9 +1713,14 @@ const corsOptions: CorsOptions = {
     "x-xsrf-token",
     "X-CSRF-Token",
     "x-csrf-token",
+    "Accept",
+    "Origin",
+    "X-Requested-With",
   ],
   exposedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
   credentials: true,
+  preflightContinue: false, // Responder inmediatamente al preflight
+  optionsSuccessStatus: 200, // Algunos navegadores antiguos requieren 200
 };
 
 const mapReportVersionSummary = (report: any): ReportVersion => ({
@@ -1732,12 +1737,42 @@ const mapReportVersionSummary = (report: any): ReportVersion => ({
       : report.createdAt,
 });
 
+// Log de orígenes permitidos al iniciar (solo en desarrollo o si hay problemas)
+if (!isProduction || process.env.LOG_CORS === "true") {
+  logger.info("CORS configuration", {
+    allowedOrigins: allowedOrigins,
+    defaultOrigins: DEFAULT_ALLOWED_ORIGINS,
+    envOrigins: envAllowedOrigins,
+    inferredOrigins: inferredOrigins.filter((value): value is string => Boolean(value)),
+  });
+}
+
+// Aplicar CORS antes que cualquier otro middleware para asegurar que los preflight requests se manejen correctamente
 app.use(cors(corsOptions));
+
+// Manejar preflight requests explícitamente para asegurar que siempre respondan
+// Esto es crítico porque algunos navegadores fallan si el preflight no responde correctamente
+app.options("*", (req, res) => {
+  const origin = req.headers.origin;
+  const normalizedOrigin = normalizeOrigin(origin);
+  
+  if (origin && normalizedOrigin && allowedOrigins.includes(normalizedOrigin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-XSRF-TOKEN, x-xsrf-token, X-CSRF-Token, x-csrf-token, Accept, Origin, X-Requested-With");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Max-Age", "86400"); // 24 horas
+    res.sendStatus(200);
+  } else {
+    res.sendStatus(403);
+  }
+});
 
 // Configuración mejorada de Helmet para seguridad
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginEmbedderPolicy: false, // Permitir recursos embebidos desde otros orígenes
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
