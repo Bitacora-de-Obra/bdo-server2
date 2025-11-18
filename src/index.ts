@@ -4033,6 +4033,15 @@ app.post(
         
         console.log("DEBUG: tenantId detectado:", tenantId);
         
+        // Generar folioNumber: obtener el máximo folioNumber del tenant y sumar 1
+        const maxFolioResult = await prisma.$queryRawUnsafe<Array<{ maxFolio: bigint | null }>>(
+          `SELECT MAX(folioNumber) as maxFolio FROM LogEntry WHERE tenantId = ?`,
+          tenantId
+        );
+        const maxFolio = maxFolioResult[0]?.maxFolio;
+        const nextFolioNumber = maxFolio ? Number(maxFolio) + 1 : 1;
+        console.log("DEBUG: folioNumber generado:", nextFolioNumber);
+        
         const logEntryData: any = {
           title,
           description,
@@ -4045,6 +4054,7 @@ app.post(
           activityEndDate: activityEndValue,
           isConfidential: parseBooleanInput(isConfidential),
           scheduleDay: parsedScheduleDay,
+          folioNumber: nextFolioNumber, // Generado automáticamente por tenant
           tenantId: tenantId, // Siempre requerido
           author: { connect: { id: userId } },
           project: { connect: { id: projectId } },
