@@ -834,7 +834,12 @@ export const generateLogEntryPdf = async ({
   });
 
   const stats = await fs.stat(filePath);
-  const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
+  
+  // Organizar PDFs generados por año y mes
+  const now = new Date();
+  const year = now.getFullYear().toString();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const storagePath = path.posix.join("generated", "log-entries", year, month, fileName);
   
   // Upload file to storage
   const storage = getStorage();

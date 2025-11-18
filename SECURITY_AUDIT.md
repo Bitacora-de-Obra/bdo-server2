@@ -338,3 +338,4 @@ app.use(helmet({
 **Nota:** Esta auditoría es una evaluación inicial. Se recomienda una auditoría de seguridad profesional antes del despliegue en producción con datos reales.
 
 
+

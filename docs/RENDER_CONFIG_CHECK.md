@@ -80,3 +80,4 @@ Revisa los logs de Render para ver:
 - Si hay errores específicos durante la instalación
 
 
+

@@ -281,3 +281,4 @@ Si algo sale mal después del merge:
 **¿Quieres que te guíe paso a paso en el primer merge? Puedo ayudarte a hacerlo de forma segura.**
 
 
+

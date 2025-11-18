@@ -226,7 +226,11 @@ export const generateReportPdf = async ({
   
   // Subir a Cloudflare R2 (o almacenamiento configurado)
   const storage = getStorage();
-  const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
+  // Organizar PDFs generados por año y mes
+  const now = new Date();
+  const year = now.getFullYear().toString();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const storagePath = path.posix.join("generated", "reports", year, month, fileName);
   await storage.save({
     path: storagePath,
     content: pdfBuffer,

@@ -646,7 +646,50 @@ const sanitizeFileName = (value: string) =>
     .replace(/^_+|_+$/g, "")
     .slice(0, 120);
 
-const createStorageKey = (folder: string, originalName: string) => {
+/**
+ * Crea una clave de almacenamiento organizada por tipo, año y mes
+ * Estructura: {type}/{category}/{year}/{month}/{uniqueId}-{filename}
+ * 
+ * @param type - Tipo principal: 'attachments', 'photos', 'signatures', 'generated'
+ * @param category - Categoría específica: 'log-entries', 'actas', 'communications', 'control-points', etc.
+ * @param originalName - Nombre original del archivo
+ * @returns Ruta organizada para almacenamiento
+ */
+const createStorageKey = (
+  type: string,
+  category: string,
+  originalName: string
+) => {
+  const now = new Date();
+  const year = now.getFullYear().toString();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  
+  const ext = path.extname(originalName);
+  const baseName = sanitizeFileName(path.basename(originalName, ext)) || "file";
+  const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+  
+  // Normalizar tipo y categoría para evitar caracteres inválidos
+  const normalizedType = type
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .toLowerCase();
+  const normalizedCategory = category
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .toLowerCase();
+  
+  return path.posix.join(
+    normalizedType,
+    normalizedCategory,
+    year,
+    month,
+    `${uniqueSuffix}-${baseName}${ext}`
+  );
+};
+
+/**
+ * Función de compatibilidad para mantener la estructura antigua si es necesario
+ * @deprecated Usar createStorageKey con type y category en su lugar
+ */
+const createStorageKeyLegacy = (folder: string, originalName: string) => {
   const ext = path.extname(originalName);
   const baseName = sanitizeFileName(path.basename(originalName, ext)) || "file";
   const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
@@ -656,12 +699,20 @@ const createStorageKey = (folder: string, originalName: string) => {
   return path.posix.join(normalizedFolder, `${uniqueSuffix}-${baseName}${ext}`);
 };
 
+/**
+ * Persiste un archivo subido con organización por tipo y categoría
+ * @param file - Archivo subido
+ * @param type - Tipo principal: 'attachments', 'photos', 'signatures', 'generated'
+ * @param category - Categoría específica: 'log-entries', 'actas', 'communications', 'control-points', etc.
+ * @returns Objeto con la clave de almacenamiento y URL pública
+ */
 const persistUploadedFile = async (
   file: Express.Multer.File,
-  folder: string
+  type: string,
+  category: string
 ) => {
   const storage = getStorage();
-  const key = createStorageKey(folder, file.originalname);
+  const key = createStorageKey(type, category, file.originalname);
   await storage.save({ path: key, content: file.buffer });
   return {
     key,
@@ -2196,7 +2247,8 @@ app.post(
       const parsedFileName = path.parse(attachment.fileName || "documento.pdf");
       const signedFileName = `${parsedFileName.name}-firmado-${Date.now()}.pdf`;
       const signedKey = createStorageKey(
-        `signed-documents/${userId}`,
+        "signatures",
+        "signed-documents",
         signedFileName
       );
       await storage.save({ path: signedKey, content: signedBuffer });
@@ -3506,8 +3558,9 @@ app.post(
       if (req.files && Array.isArray(req.files)) {
         for (const file of req.files as Express.Multer.File[]) {
           const key = createStorageKey(
+            "attachments",
             "log-entries",
-            `${Date.now()}-${file.originalname}`
+            file.originalname
           );
           await storage.save({ path: key, content: file.buffer });
           attachmentRecords.push({
@@ -4589,7 +4642,7 @@ app.put(
 
       if (req.files && Array.isArray(req.files)) {
         for (const file of req.files as Express.Multer.File[]) {
-          const key = createStorageKey("log-entries", `${Date.now()}-${file.originalname}`);
+          const key = createStorageKey("attachments", "log-entries", file.originalname);
           await storage.save({ path: key, content: file.buffer });
           newAttachments.push({
             fileName: file.originalname,
@@ -5300,6 +5353,7 @@ app.post(
             }
             const stored = await persistUploadedFile(
               file,
+              "attachments",
               "log-entry-comments"
             );
             const attachment = await prisma.attachment.create({
@@ -5786,6 +5840,7 @@ app.post(
             // Usar sufijo -firmado con timestamp para crear versiones únicas
             const signedFileName = `${baseName}-firmado-${Date.now()}.pdf`;
             const signedKey = createStorageKey(
+              "signatures",
               "log-entry-signatures",
               signedFileName
             );
@@ -7334,7 +7389,8 @@ app.post(
 
       const storage = getStorage();
       const key = createStorageKey(
-        `user-signatures/${userId}`,
+        "signatures",
+        "user-signatures",
         file.originalname
       );
       await storage.save({ path: key, content: file.buffer });
@@ -7711,7 +7767,23 @@ app.post(
           .json({ error: "No se subió ningún archivo válido." });
       }
 
-      const stored = await persistUploadedFile(file, "attachments");
+      // Determinar el tipo de archivo basado en el tipo enviado
+      const fileType = req.body?.type || "document"; // 'document', 'photo', 'drawing'
+      let storageType: string;
+      let storageCategory: string;
+      
+      if (fileType === "photo") {
+        storageType = "photos";
+        storageCategory = "control-points";
+      } else if (fileType === "drawing") {
+        storageType = "attachments";
+        storageCategory = "drawings";
+      } else {
+        storageType = "attachments";
+        storageCategory = "general";
+      }
+      
+      const stored = await persistUploadedFile(file, storageType, storageCategory);
 
       const attachment = await prisma.attachment.create({
         data: {
