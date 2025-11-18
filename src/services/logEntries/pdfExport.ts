@@ -9,7 +9,6 @@ import {
   normalizePersonnelEntries,
   normalizeWeatherReport,
 } from "../../utils/logEntryNormalization";
-import { getStorage } from "../../storage";
 
 const GENERATED_SUBDIR = "generated";
 
@@ -562,60 +561,30 @@ export const generateLogEntryPdf = async ({
               .text(`${i + 1}. ${image.fileName}`);
             doc.moveDown(0.2);
 
-            // Intentar cargar la imagen desde Cloudflare R2 o sistema local
-            let imageBuffer: Buffer | null = null;
-            
-            try {
-              const storage = getStorage();
-              const storagePath = image.storagePath || image.url?.replace(/^.*\/uploads\//, "") || "";
-              
-              if (storagePath) {
-                // Intentar cargar desde Cloudflare R2 primero
-                try {
-                  imageBuffer = await storage.load(storagePath);
-                } catch (r2Error) {
-                  // Si falla R2, intentar desde sistema de archivos local
-                  const imagePath = path.join(uploadsDir, storagePath);
-                  if (fsSync.existsSync(imagePath)) {
-                    imageBuffer = await fs.readFile(imagePath);
-                  }
-                }
-              } else {
-                // Fallback: intentar desde URL o path local
-                const imagePath = path.join(uploadsDir, image.url?.replace(/^.*\/uploads\//, "") || "");
-                if (fsSync.existsSync(imagePath)) {
-                  imageBuffer = await fs.readFile(imagePath);
-                }
+            // Intentar cargar la imagen
+            const imagePath = path.join(uploadsDir, image.storagePath || "");
+            if (fsSync.existsSync(imagePath)) {
+              const imageBuffer = await fs.readFile(imagePath);
+
+              // Verificar si necesitamos nueva página
+              const imageHeight = 150;
+              if (doc.y + imageHeight > doc.page.height - 100) {
+                doc.addPage();
               }
 
-              if (imageBuffer) {
-                // Verificar si necesitamos nueva página
-                const imageHeight = 150;
-                if (doc.y + imageHeight > doc.page.height - 100) {
-                  doc.addPage();
-                }
+              // Agregar imagen con posición fija
+              const startY = doc.y;
+              doc.image(imageBuffer, 50, startY, {
+                fit: [250, imageHeight],
+              });
 
-                // Agregar imagen con posición fija
-                const startY = doc.y;
-                doc.image(imageBuffer, 50, startY, {
-                  fit: [250, imageHeight],
-                });
-
-                // Mover cursor después de la imagen
-                doc.y = startY + imageHeight + 20;
-              } else {
-                doc
-                  .font("Helvetica")
-                  .fontSize(10)
-                  .text(`[Imagen no encontrada: ${image.fileName}]`);
-                doc.moveDown(0.3);
-              }
-            } catch (loadError) {
-              // Si hay error al cargar, mostrar mensaje
+              // Mover cursor después de la imagen
+              doc.y = startY + imageHeight + 20;
+            } else {
               doc
                 .font("Helvetica")
                 .fontSize(10)
-                .text(`[Error cargando imagen: ${image.fileName}]`);
+                .text(`[Imagen no encontrada: ${image.fileName}]`);
               doc.moveDown(0.3);
             }
           } catch (error) {
@@ -848,25 +817,11 @@ export const generateLogEntryPdf = async ({
   });
 
   const stats = await fs.stat(filePath);
-  
-  // Leer el PDF generado
-  const pdfBuffer = await fs.readFile(filePath);
-  
-  // Subir a Cloudflare R2 (o almacenamiento configurado)
-  const storage = getStorage();
   const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
-  await storage.save({
-    path: storagePath,
-    content: pdfBuffer,
-  });
-  
-  // Obtener la URL pública del almacenamiento
-  const publicUrl = storage.getPublicUrl(storagePath);
-  
   const attachment = await prisma.attachment.create({
     data: {
       fileName,
-      url: publicUrl,
+      url: `${baseUrl}/uploads/${GENERATED_SUBDIR}/${fileName}`,
       storagePath,
       size: stats.size,
       type: "application/pdf",
