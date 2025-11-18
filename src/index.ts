@@ -2743,6 +2743,47 @@ app.get(
   authMiddleware,
   async (req: AuthRequest, res) => {
     try {
+      // Si se solicita el summary, calcular y retornar el resumen
+      if (req.query.summary === "1") {
+        const project = await prisma.project.findFirst();
+        if (!project) {
+          return res.status(404).json({
+            error: "No se encontró ningún proyecto.",
+          });
+        }
+
+        const modifications = await prisma.contractModification.findMany({
+          orderBy: { date: "desc" },
+        });
+
+        // El tope del 50% se calcula sobre el valor inicial del contrato
+        const baseValue = project.initialValue || 0;
+        const cap = baseValue * 0.5;
+
+        // Por ahora, todas las adiciones afectan el 50% (hasta que se agregue el campo en la BD)
+        // Las incorporaciones por mayores cantidades no afectan, pero no tenemos forma de distinguirlas aún
+        const additionsAffecting = modifications
+          .filter((mod) => mod.type === "ADDITION" && mod.value !== null)
+          .reduce((sum, mod) => sum + (mod.value || 0), 0);
+
+        // Por ahora, las incorporaciones que no afectan son 0
+        // TODO: Agregar campo en BD para distinguir incorporaciones por mayores cantidades
+        const additionsNonAffecting = 0;
+
+        const usedPercent = baseValue > 0 ? (additionsAffecting / baseValue) * 100 : 0;
+        const remainingCap = Math.max(cap - additionsAffecting, 0);
+
+        return res.json({
+          baseValue,
+          cap,
+          additionsAffecting,
+          additionsNonAffecting,
+          usedPercent,
+          remainingCap,
+        });
+      }
+
+      // Si no es summary, retornar la lista normal
       const modifications = await prisma.contractModification.findMany({
         orderBy: { date: "desc" },
         include: {
