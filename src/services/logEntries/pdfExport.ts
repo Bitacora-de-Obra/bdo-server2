@@ -97,12 +97,8 @@ const formatDateTime = (input: Date) =>
     minute: "2-digit",
   }).format(input);
 
-export const generateLogEntryPdf = async ({
-  prisma,
-  logEntryId,
-  uploadsDir,
-  baseUrl,
-}: LogEntryPdfOptions) => {
+export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
+  const { prisma, logEntryId, uploadsDir, baseUrl, tenantId } = options;
   const entry = await prisma.logEntry.findUnique({
     where: { id: logEntryId },
     include: {
@@ -836,11 +832,20 @@ export const generateLogEntryPdf = async ({
 
   const stats = await fs.stat(filePath);
   
-  // Organizar PDFs generados por año y mes
+  // Organizar PDFs generados por tenant, año y mes
   const now = new Date();
   const year = now.getFullYear().toString();
   const month = String(now.getMonth() + 1).padStart(2, '0');
-  const storagePath = path.posix.join("generated", "log-entries", year, month, fileName);
+  
+  // Construir path con tenant si está disponible
+  const pathParts: string[] = [];
+  if (options.tenantId) {
+    const normalizedTenantId = options.tenantId.replace(/[^a-zA-Z0-9_-]/g, "");
+    pathParts.push('tenants', normalizedTenantId);
+  }
+  pathParts.push("generated", "log-entries", year, month, fileName);
+  
+  const storagePath = path.posix.join(...pathParts);
   
   // Upload file to storage
   const storage = getStorage();
