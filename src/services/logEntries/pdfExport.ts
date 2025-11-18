@@ -562,11 +562,26 @@ export const generateLogEntryPdf = async ({
               .text(`${i + 1}. ${image.fileName}`);
             doc.moveDown(0.2);
 
-            // Intentar cargar la imagen
-            const imagePath = path.join(uploadsDir, image.storagePath || "");
-            if (fsSync.existsSync(imagePath)) {
-              const imageBuffer = await fs.readFile(imagePath);
+            // Intentar cargar la imagen desde storage
+            let imageBuffer: Buffer | null = null;
+            
+            if (image.storagePath) {
+              try {
+                // Primero intentar desde storage (Cloudflare R2)
+                const storage = getStorage();
+                imageBuffer = await storage.load(image.storagePath);
+              } catch (storageError) {
+                console.warn(`No se pudo cargar imagen desde storage: ${image.storagePath}`, storageError);
+                
+                // Fallback: intentar desde filesystem local
+                const imagePath = path.join(uploadsDir, image.storagePath);
+                if (fsSync.existsSync(imagePath)) {
+                  imageBuffer = await fs.readFile(imagePath);
+                }
+              }
+            }
 
+            if (imageBuffer) {
               // Verificar si necesitamos nueva página
               const imageHeight = 150;
               if (doc.y + imageHeight > doc.page.height - 100) {
@@ -589,6 +604,7 @@ export const generateLogEntryPdf = async ({
               doc.moveDown(0.3);
             }
           } catch (error) {
+            console.error(`Error procesando imagen ${image.fileName}:`, error);
             doc
               .font("Helvetica")
               .fontSize(10)
