@@ -11170,7 +11170,19 @@ app.post(
 
       console.log("Refresh token cookie set");
 
-      return res.json({ accessToken });
+      // Devolver accessToken y datos del usuario para mantener la sesión
+      return res.json({ 
+        accessToken,
+        user: {
+          id: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          appRole: user.appRole,
+          projectRole: user.projectRole,
+          status: user.status,
+          avatarUrl: user.avatarUrl,
+        }
+      });
     } catch (error) {
       console.error("Error en refresh token:", error);
       res.status(500).json({ error: "Error al refrescar el token" });
