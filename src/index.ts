@@ -5100,10 +5100,37 @@ app.delete(
         }
       }
 
-      // Eliminar la anotación (Prisma manejará las relaciones en cascada si están configuradas)
-      await prisma.logEntry.delete({
-        where: { id },
-      });
+      // Eliminar relaciones manualmente antes de eliminar la anotación
+      await prisma.$transaction([
+        // Eliminar tareas de revisión
+        prisma.logEntryReviewTask.deleteMany({
+          where: { logEntryId: id },
+        }),
+        // Eliminar tareas de firma
+        prisma.logEntrySignatureTask.deleteMany({
+          where: { logEntryId: id },
+        }),
+        // Eliminar historial
+        prisma.logEntryHistory.deleteMany({
+          where: { logEntryId: id },
+        }),
+        // Eliminar comentarios (y sus attachments)
+        prisma.comment.deleteMany({
+          where: { logEntryId: id },
+        }),
+        // Eliminar firmas
+        prisma.signature.deleteMany({
+          where: { logEntryId: id },
+        }),
+        // Eliminar attachments
+        prisma.attachment.deleteMany({
+          where: { logEntryId: id },
+        }),
+        // Finalmente, eliminar la anotación
+        prisma.logEntry.delete({
+          where: { id },
+        }),
+      ]);
 
       // Registrar evento de seguridad
       recordSecurityEvent('LOG_ENTRY_DELETED', 'high', req, {
