@@ -17,7 +17,8 @@ export type SecurityEventType =
   | 'SUSPICIOUS_ACTIVITY'
   | 'PASSWORD_CHANGE'
   | 'TOKEN_INVALID'
-  | 'TOKEN_EXPIRED';
+  | 'TOKEN_EXPIRED'
+  | 'LOG_ENTRY_DELETED';
 
 export interface SecurityEvent {
   type: SecurityEventType;
