@@ -4,6 +4,11 @@ import {
   isResendConfigured,
   sendEmailWithResend,
 } from "./resendClient";
+import {
+  getEmailBaseTemplate,
+  getEmailButton,
+  getEmailInfoBox,
+} from "./templates";
 
 interface SendEmailOptions {
   to: string;
@@ -234,12 +239,16 @@ export const sendEmailVerificationEmail = async ({
     "Si no solicitaste esta verificación, puedes ignorar este mensaje.",
   ].join("\n");
 
-  const html = `
-    <p>Hola ${displayName},</p>
-    <p>Hemos recibido una solicitud para verificar tu cuenta. Completa el proceso haciendo clic en el siguiente enlace:</p>
-    <p><a href="${verificationUrl}" target="_blank" rel="noopener noreferrer">Verificar correo</a></p>
-    <p>Si no solicitaste esta verificación, puedes ignorar este mensaje.</p>
+  const content = `
+    <h1>Verifica tu correo electrónico</h1>
+    <p>Hola <strong>${displayName}</strong>,</p>
+    <p>Hemos recibido una solicitud para verificar tu cuenta en Bitácora Digital de Obra. Para completar el proceso, haz clic en el siguiente botón:</p>
+    ${getEmailButton("Verificar correo electrónico", verificationUrl)}
+    <p>O copia y pega este enlace en tu navegador:</p>
+    <p style="word-break: break-all; color: #0D47A1;">${verificationUrl}</p>
+    ${getEmailInfoBox("Si no solicitaste esta verificación, puedes ignorar este mensaje de forma segura.", "warning")}
   `;
+  const html = getEmailBaseTemplate(content);
 
   await sendEmail({ to, subject, html, text });
 };
@@ -267,12 +276,17 @@ export const sendPasswordResetEmail = async ({
     "Si no solicitaste este cambio, ignora este correo.",
   ].join("\n");
 
-  const html = `
-    <p>Hola ${displayName},</p>
-    <p>Recibimos una solicitud para restablecer tu contraseña. Si fuiste tú, utiliza el enlace a continuación:</p>
-    <p><a href="${resetUrl}" target="_blank" rel="noopener noreferrer">Restablecer contraseña</a></p>
-    <p>Si no solicitaste este cambio, ignora este correo.</p>
+  const content = `
+    <h1>Restablece tu contraseña</h1>
+    <p>Hola <strong>${displayName}</strong>,</p>
+    <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta en Bitácora Digital de Obra.</p>
+    <p>Si fuiste tú quien solicitó este cambio, haz clic en el siguiente botón para crear una nueva contraseña:</p>
+    ${getEmailButton("Restablecer contraseña", resetUrl)}
+    <p>O copia y pega este enlace en tu navegador:</p>
+    <p style="word-break: break-all; color: #0D47A1;">${resetUrl}</p>
+    ${getEmailInfoBox("Este enlace expirará en 1 hora por seguridad. Si no solicitaste este cambio, ignora este correo de forma segura.", "warning")}
   `;
+  const html = getEmailBaseTemplate(content);
 
   await sendEmail({ to, subject, html, text });
 };
@@ -395,15 +409,18 @@ export const sendCommitmentReminderEmail = async ({
     "Gracias."
   );
 
-  const html = `
-    <p>Hola ${displayName},</p>
+  const content = `
+    <h1>Recordatorio de Compromisos</h1>
+    <p>Hola <strong>${displayName}</strong>,</p>
     <p>${summaryLine}${introDays}:</p>
-    <ul>
-      ${htmlItems.join("")}
+    <ul style="list-style: none; padding: 0;">
+      ${htmlItems.map(item => `<li style="background-color: #f9fafb; padding: 16px; margin: 12px 0; border-radius: 6px; border-left: 4px solid #0D47A1;">${item}</li>`).join("")}
     </ul>
-    <p>Ingresa a Bitácora Digital para actualizar el estado de estos compromisos.</p>
-    <p>Gracias.</p>
+    <p>Por favor ingresa a Bitácora Digital para actualizar el estado de estos compromisos.</p>
+    ${getEmailButton("Ver Mis Pendientes", `${getAppBaseUrl()}#/pending_tasks`)}
+    <p>Gracias por tu atención.</p>
   `;
+  const html = getEmailBaseTemplate(content);
 
   await sendEmail({
     to,
@@ -448,16 +465,16 @@ export const sendTestEmail = async (to: string, initiatedBy?: string) => {
     ? `Este mensaje fue solicitado por ${initiatedBy}.`
     : "Este mensaje fue generado desde la herramienta de diagnóstico.";
 
-  const html = `
+  const content = `
+    <h1>Correo de Prueba</h1>
     <p>Hola,</p>
     <p>${intro}</p>
-    <p>El envío confirma que la configuración SMTP de Bitácora Digital está operativa.</p>
-    <p>Fecha y hora: <strong>${new Date().toLocaleString("es-CO", {
+    ${getEmailInfoBox(`El envío confirma que la configuración SMTP de Bitácora Digital está operativa.<br/><br/><strong>Fecha y hora:</strong> ${new Date().toLocaleString("es-CO", {
       timeZone: process.env.REMINDER_TIMEZONE || "America/Bogota",
-    })}</strong></p>
-    <hr/>
-    <p>Si tú no solicitaste esta prueba, puedes ignorar este correo.</p>
+    })}`, "info")}
+    <p>Si tú no solicitaste esta prueba, puedes ignorar este correo de forma segura.</p>
   `;
+  const html = getEmailBaseTemplate(content);
 
   const text = [
     "Hola,",
@@ -523,26 +540,21 @@ export const sendCommunicationAssignmentEmail = async ({
     "Gracias."
   );
 
-  const html = `
-    <p>Hola ${displayRecipient},</p>
-    <p>${assignerDisplay} te asignó el seguimiento de la comunicación con radicado <strong>${communication.radicado}</strong>.</p>
-    <ul>
-      <li><strong>Asunto:</strong> ${communication.subject}</li>
-      ${
-        sentDateLabel
-          ? `<li><strong>Fecha de envío:</strong> ${sentDateLabel}</li>`
-          : ""
-      }
-      ${
-        dueDateLabel
-          ? `<li><strong>Fecha límite para respuesta:</strong> ${dueDateLabel}</li>`
-          : "<li><strong>Fecha límite:</strong> No registrada</li>"
-      }
-    </ul>
-    <p>Ingresa a la Bitácora Digital para gestionar la comunicación:</p>
-    <p><a href="${communicationsLink}" target="_blank" rel="noopener noreferrer">${communicationsLink}</a></p>
+  const content = `
+    <h1>Nueva Comunicación Asignada</h1>
+    <p>Hola <strong>${displayRecipient}</strong>,</p>
+    <p>${assignerDisplay} te asignó el seguimiento de una comunicación oficial.</p>
+    ${getEmailInfoBox(`
+      <strong>Radicado:</strong> ${communication.radicado}<br/>
+      <strong>Asunto:</strong> ${communication.subject}<br/>
+      ${sentDateLabel ? `<strong>Fecha de envío:</strong> ${sentDateLabel}<br/>` : ""}
+      ${dueDateLabel ? `<strong>Fecha límite para respuesta:</strong> ${dueDateLabel}` : "<strong>Fecha límite:</strong> No registrada"}
+    `, "info")}
+    <p>Ingresa a la Bitácora Digital para gestionar esta comunicación:</p>
+    ${getEmailButton("Ver Comunicación", communicationsLink)}
     <p>Gracias.</p>
   `;
+  const html = getEmailBaseTemplate(content);
 
   await sendEmail({
     to,
@@ -587,22 +599,20 @@ export const sendSignatureAssignmentEmail = async ({
     "Gracias."
   );
 
-  const html = `
-    <p>Hola ${displayRecipient},</p>
+  const content = `
+    <h1>Bitácora Asignada para Firma</h1>
+    <p>Hola <strong>${displayRecipient}</strong>,</p>
     <p>${assignerDisplay} te asignó una bitácora para su revisión y firma.</p>
-    <ul>
-      <li><strong>Folio:</strong> #${logEntry.folioNumber}</li>
-      <li><strong>Título:</strong> ${logEntry.title}</li>
-      ${
-        entryDateLabel
-          ? `<li><strong>Fecha de la bitácora:</strong> ${entryDateLabel}</li>`
-          : ""
-      }
-    </ul>
+    ${getEmailInfoBox(`
+      <strong>Folio:</strong> #${logEntry.folioNumber}<br/>
+      <strong>Título:</strong> ${logEntry.title}<br/>
+      ${entryDateLabel ? `<strong>Fecha de la bitácora:</strong> ${entryDateLabel}` : ""}
+    `, "info")}
     <p>Ingresa a la Bitácora Digital para revisar y firmar la bitácora:</p>
-    <p><a href="${logEntryLink}" target="_blank" rel="noopener noreferrer">${logEntryLink}</a></p>
+    ${getEmailButton("Revisar y Firmar Bitácora", logEntryLink)}
     <p>Gracias.</p>
   `;
+  const html = getEmailBaseTemplate(content);
 
   await sendEmail({
     to,
@@ -656,26 +666,34 @@ export const sendSecurityAlertEmail = async ({
     detailLines.push("", "Detalles adicionales:", JSON.stringify(event.details, null, 2));
   }
 
-  const html = `
-    <h2>Bitácora Digital · Alerta de Seguridad</h2>
-    <p><strong>Tipo:</strong> ${event.type}</p>
-    <p><strong>Severidad:</strong> ${event.severity}</p>
-    <p><strong>Fecha/Hora:</strong> ${formattedDate} (${timezone})</p>
-    <p><strong>IP:</strong> ${event.ipAddress || "desconocida"}</p>
-    <p><strong>Usuario:</strong> ${event.userId || "N/A"}</p>
-    <p><strong>Correo asociado:</strong> ${event.email || "N/A"}</p>
-    <p><strong>Ruta:</strong> ${event.path || "N/A"} (${event.method || "N/A"})</p>
+  const severityColor = event.severity === 'critical' ? '#C62828' : event.severity === 'high' ? '#F9A825' : '#0D47A1';
+  const content = `
+    <h1 style="color: ${severityColor};">Alerta de Seguridad</h1>
+    <p>Se ha detectado un evento de seguridad que requiere tu atención:</p>
+    ${getEmailInfoBox(`
+      <strong>Tipo:</strong> ${event.type}<br/>
+      <strong>Severidad:</strong> <span style="color: ${severityColor}; font-weight: 600;">${event.severity.toUpperCase()}</span><br/>
+      <strong>Fecha/Hora:</strong> ${formattedDate} (${timezone})<br/>
+      <strong>IP:</strong> ${event.ipAddress || "desconocida"}<br/>
+      <strong>Usuario:</strong> ${event.userId || "N/A"}<br/>
+      <strong>Correo asociado:</strong> ${event.email || "N/A"}<br/>
+      <strong>Ruta:</strong> ${event.path || "N/A"} (${event.method || "N/A"})
+    `, event.severity === 'critical' || event.severity === 'high' ? 'warning' : 'info')}
     ${
       event.details && Object.keys(event.details).length
-        ? `<pre style="background:#f5f5f5;padding:12px;border-radius:4px;">${JSON.stringify(
-            event.details,
-            null,
-            2
-          )}</pre>`
+        ? `<div style="background-color: #f9fafb; padding: 16px; margin: 24px 0; border-radius: 6px; border: 1px solid #e5e7eb;">
+            <strong>Detalles adicionales:</strong>
+            <pre style="background: #ffffff; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 12px; margin: 8px 0 0 0;">${JSON.stringify(
+              event.details,
+              null,
+              2
+            )}</pre>
+          </div>`
         : ""
     }
     <p>Este mensaje se generó automáticamente. Revisa el panel de monitoreo para obtener más contexto.</p>
   `;
+  const html = getEmailBaseTemplate(content);
 
   await sendEmail({
     to: to.join(","),
