@@ -71,6 +71,17 @@ interface SendSignatureAssignmentParams {
   };
 }
 
+interface SendUserInvitationParams {
+  to: string;
+  temporaryPassword: string;
+  fullName?: string | null;
+  invitedByName?: string | null;
+  invitedByEmail?: string | null;
+  tenantName?: string | null;
+  appRole?: string | null;
+  projectRole?: string | null;
+}
+
 const smtpHost = process.env.SMTP_HOST;
 const smtpPort = Number(process.env.SMTP_PORT || 587);
 const smtpSecure = process.env.SMTP_SECURE === "true";
@@ -293,6 +304,65 @@ export const sendPasswordResetEmail = async ({
   const html = getEmailBaseTemplate(content);
 
   await sendEmail({ to, subject, html, text });
+};
+
+export const sendUserInvitationEmail = async ({
+  to,
+  temporaryPassword,
+  fullName,
+  invitedByName,
+  invitedByEmail,
+  tenantName,
+  appRole,
+  projectRole,
+}: SendUserInvitationParams): Promise<boolean> => {
+  const displayName = fullName || "Bienvenido";
+  const inviter =
+    invitedByName ||
+    invitedByEmail ||
+    "Un administrador de Bitácora Digital de Obra";
+  const loginUrl = `${getAppBaseUrl()}/auth/login`;
+  const contextLine = tenantName
+    ? `para el proyecto o tenant <strong>${tenantName}</strong>`
+    : "en la plataforma de Bitácora Digital de Obra";
+  const subject = `${inviter} te invitó a Bitácora Digital`;
+
+  const text = [
+    `Hola ${displayName},`,
+    "",
+    `${inviter} te invitó a unirte ${tenantName ? `a ${tenantName}` : "a Bitácora Digital de Obra"}.`,
+    appRole ? `Rol en la aplicación: ${appRole}` : undefined,
+    projectRole ? `Rol en proyecto: ${projectRole}` : undefined,
+    `Contraseña temporal: ${temporaryPassword}`,
+    `Ingresa en: ${loginUrl}`,
+    "Por seguridad se te pedirá cambiar la contraseña en tu primer ingreso.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const content = `
+    <h1>Acceso a Bitácora Digital</h1>
+    <p>Hola <strong>${displayName}</strong>,</p>
+    <p>${inviter} te invitó ${contextLine}.</p>
+    ${
+      appRole || projectRole
+        ? `<p><strong>Roles asignados:</strong><br/>
+            ${appRole ? `Aplicación: ${appRole}<br/>` : ""}
+            ${projectRole ? `Proyecto: ${projectRole}` : ""}
+          </p>`
+        : ""
+    }
+    ${getEmailInfoBox(
+      `Tu contraseña temporal es: <strong>${temporaryPassword}</strong><br/>
+       Guárdala en un lugar seguro. El sistema te pedirá cambiarla en tu primer inicio de sesión.`,
+      "warning"
+    )}
+    ${getEmailButton("Ingresar a Bitácora Digital", loginUrl)}
+    <p>Si no esperabas este correo, comunícate con tu administrador.</p>
+  `;
+  const html = getEmailBaseTemplate(content);
+
+  return sendEmail({ to, subject, html, text });
 };
 
 const formatDateLabel = (value?: Date | string | null) => {

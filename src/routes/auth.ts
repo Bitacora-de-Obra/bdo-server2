@@ -257,7 +257,8 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
       
       return res.json({ 
         accessToken,
-        user: userWithoutPassword
+        user: userWithoutPassword,
+        forcePasswordChange: Boolean(user.mustUpdatePassword),
       });
 
     } catch (error) {
@@ -448,6 +449,7 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
             password: hashedPassword,
             tokenVersion: resetToken.user.tokenVersion + 1,
             emailVerifiedAt: resetToken.user.emailVerifiedAt ?? new Date(),
+            mustUpdatePassword: false,
           },
         }),
         prisma.passwordResetToken.update({
@@ -527,6 +529,7 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
           data: {
             password: hashedPassword,
             tokenVersion: user.tokenVersion + 1,
+            mustUpdatePassword: false,
           },
         });
 

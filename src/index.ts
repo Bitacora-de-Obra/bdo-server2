@@ -106,6 +106,7 @@ import {
   sendCommunicationAssignmentEmail,
   sendSignatureAssignmentEmail,
   sendTestEmail,
+  sendUserInvitationEmail,
 } from "./services/email";
 import { buildUserNotifications } from "./services/notifications";
 import {
@@ -439,6 +440,7 @@ const formatAdminUser = (user: any) => {
     avatarUrl: user.avatarUrl,
     status: user.status,
     canDownload: user.canDownload ?? true,
+  mustUpdatePassword: Boolean(user.mustUpdatePassword),
     lastLoginAt:
       user.lastLoginAt instanceof Date
         ? user.lastLoginAt.toISOString()
@@ -470,16 +472,19 @@ const createDiff = (
 
 const resolveActorInfo = async (req: AuthRequest) => {
   if (!req.user?.userId) {
-    return { actorId: undefined, actorEmail: null };
+    return { actorId: undefined, actorEmail: null, actorName: null };
   }
-  if (req.user.email) {
-    return { actorId: req.user.userId, actorEmail: req.user.email };
-  }
+
   const actor = await prisma.user.findUnique({
     where: { id: req.user.userId },
-    select: { email: true },
+    select: { email: true, fullName: true },
   });
-  return { actorId: req.user.userId, actorEmail: actor?.email ?? null };
+
+  return {
+    actorId: req.user.userId,
+    actorEmail: actor?.email ?? req.user.email ?? null,
+    actorName: actor?.fullName ?? null,
+  };
 };
 
 const recordAuditEvent = async ({
@@ -10384,6 +10389,7 @@ app.post(
         entity: entity ? entity.toUpperCase() : null,
         status: "active",
         canDownload: true, // Por defecto todos pueden descargar
+        mustUpdatePassword: true,
       };
       
       // Asignar tenantId si está disponible
@@ -10397,6 +10403,37 @@ app.post(
 
       // Registrar en auditoría
       const actorInfo = await resolveActorInfo(req);
+      const tenantName = (req as any).tenant?.name || null;
+      const emailChannelConfigured =
+        isEmailServiceConfigured() ||
+        Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM);
+      let invitationEmailSent = false;
+
+      if (emailChannelConfigured) {
+        try {
+          invitationEmailSent = await sendUserInvitationEmail({
+            to: newUser.email,
+            fullName: newUser.fullName,
+            temporaryPassword,
+            invitedByName: actorInfo.actorName || undefined,
+            invitedByEmail: actorInfo.actorEmail || undefined,
+            tenantName: tenantName || undefined,
+            appRole: newUser.appRole,
+            projectRole: newUser.projectRole,
+          });
+        } catch (mailError) {
+          logger.error("No se pudo enviar el correo de invitación", {
+            error: mailError instanceof Error ? mailError.message : String(mailError),
+            userId: newUser.id,
+            email: newUser.email,
+          });
+        }
+      } else {
+        logger.warn("Servicio de correo no configurado para invitaciones", {
+          userId: newUser.id,
+          email: newUser.email,
+        });
+      }
       const userDiff = createDiff(
         {},
         {
@@ -10420,6 +10457,7 @@ app.post(
       res.status(201).json({
         user: formatAdminUser(newUser),
         temporaryPassword,
+        invitationEmailSent,
       });
     } catch (error) {
       console.error("Error al invitar usuario:", error);
@@ -11009,12 +11047,14 @@ app.post("/api/auth/login", async (req, res) => {
     res.cookie("jid", refreshToken, buildRefreshCookieOptions());
 
     const { password: _, ...userWithoutPassword } = user;
+    const forcePasswordChange = Boolean(user.mustUpdatePassword);
 
     console.log("Login successful, sending response");
 
     return res.json({
       accessToken,
       user: userWithoutPassword,
+      forcePasswordChange,
     });
   } catch (error) {
     console.error("Error en login:", error);
@@ -11159,6 +11199,7 @@ app.post("/api/auth/reset-password/:token", async (req, res) => {
           password: hashedPassword,
           tokenVersion: resetToken.user.tokenVersion + 1,
           emailVerifiedAt: resetToken.user.emailVerifiedAt ?? new Date(),
+          mustUpdatePassword: false,
         },
       }),
       prisma.passwordResetToken.update({
@@ -11238,7 +11279,9 @@ app.post(
           projectRole: user.projectRole,
           status: user.status,
           avatarUrl: user.avatarUrl,
-        }
+          mustUpdatePassword: user.mustUpdatePassword,
+        },
+        forcePasswordChange: Boolean(user.mustUpdatePassword),
       });
     } catch (error) {
       console.error("Error en refresh token:", error);
@@ -11267,6 +11310,7 @@ app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
         avatarUrl: true,
         status: true,
         canDownload: true,
+        mustUpdatePassword: true,
         lastLoginAt: true,
         emailVerifiedAt: true,
         createdAt: true,
@@ -11347,6 +11391,7 @@ app.post(
         data: {
           password: hashedNewPassword,
           tokenVersion: user.tokenVersion + 1,
+          mustUpdatePassword: false,
         },
       });
 
