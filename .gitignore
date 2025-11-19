@@ -15,6 +15,7 @@ pnpm-lock.yaml
 .env.test
 .env.production
 .env*.local
+.env.backup*
 
 # Build output
 dist/
@@ -146,4 +147,3 @@ local-*
 # Documentation (opcional - descomentar si no quieres versionar docs)
 # *.md
 # docs/*.md
-
