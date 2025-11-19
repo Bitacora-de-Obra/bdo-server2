@@ -5957,7 +5957,7 @@ app.post(
           isSigner = logEntry.signatureTasks.some((task: any) => task.signerId === userId);
         } else {
           // Si no está incluido, consultar directamente
-          const signatureTask = await prisma.signatureTask.findFirst({
+          const signatureTask = await prisma.logEntrySignatureTask.findFirst({
             where: {
               logEntryId: id,
               signerId: userId,
