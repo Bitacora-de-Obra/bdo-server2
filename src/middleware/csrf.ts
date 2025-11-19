@@ -76,6 +76,8 @@ export const csrfProtection = (
   ];
 
   const excludedRegex = [
+    /^\/api\/auth\/reset-password\/.+$/, // Endpoint público para reset de contraseña con token
+    /^\/api\/auth\/verify-email\/.+$/, // Endpoint público para verificación de email con token
     /^\/api\/log-entries\/[^/]+\/export-pdf$/, // Exportación protegida con JWT
     /^\/api\/reports\/[^/]+\/export-pdf$/, // Exportación protegida con JWT
   ];
