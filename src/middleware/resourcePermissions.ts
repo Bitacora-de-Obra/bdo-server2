@@ -70,8 +70,8 @@ export const verifyLogEntryAccess = async (
       return { entry: null, hasAccess: false, reason: 'Usuario no activo' };
     }
 
-    // Admins siempre tienen acceso
-    if (user.appRole === 'admin') {
+    // Admins y editores siempre tienen acceso
+    if (user.appRole === 'admin' || user.appRole === 'editor') {
       return { entry, hasAccess: true };
     }
 
@@ -90,16 +90,13 @@ export const verifyLogEntryAccess = async (
       return { entry, hasAccess: true };
     }
 
-    // Los asignados pueden editar según el estado
-    if (isAssignee) {
-      // Lógica específica según el estado del log entry
-      // Por ejemplo, contratistas solo pueden editar en estado SUBMITTED
-      if (entry.status === 'SUBMITTED' && user.projectRole === 'CONTRACTOR_REP') {
-        return { entry, hasAccess: true };
-      }
+    // En estado SUBMITTED, permitir acceso de escritura a asignados y firmantes
+    // (la lógica específica de qué campos pueden editar se maneja en el endpoint)
+    if (entry.status === 'SUBMITTED' && (isAssignee || isSigner)) {
+      return { entry, hasAccess: true };
     }
 
-    // Los firmantes pueden firmar pero no editar
+    // Los firmantes pueden firmar pero no editar (para otros estados)
     if (isSigner && !requireWriteAccess) {
       return { entry, hasAccess: true };
     }
