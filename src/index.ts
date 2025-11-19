@@ -5874,14 +5874,7 @@ app.post(
         // 1. Admins y editores siempre pueden comentar
         const isAdminOrEditor = currentUser.appRole === 'admin' || currentUser.appRole === 'editor';
         
-        // 2. Contratistas pueden comentar cuando la bitácora está en estado SUBMITTED
-        const isContractor = 
-          currentUser.projectRole === 'CONTRACTOR_REP' || 
-          currentUser.projectRole === 'Contratista' ||
-          currentUser.entity === 'CONTRATISTA';
-        const isSubmitted = logEntry.status === 'SUBMITTED';
-        
-        // 3. Cualquier usuario asignado o firmante puede comentar
+        // 2. Verificar si el usuario está asignado a la bitácora
         const isAssignee = logEntry.assignees?.some((a: any) => a.id === userId);
         const isAuthor = logEntry.authorId === userId;
         
@@ -5900,12 +5893,14 @@ app.post(
           isSigner = !!signatureTask;
         }
 
+        const isSubmitted = logEntry.status === 'SUBMITTED';
+
         // Permitir comentarios si:
         // - Es admin o editor, O
-        // - Es contratista y la bitácora está en SUBMITTED, O
-        // - Es autor, asignado o firmante de la bitácora
+        // - Es autor de la bitácora, O
+        // - Está asignado a la bitácora (especialmente importante cuando está en SUBMITTED), O
+        // - Es firmante de la bitácora
         const canComment = isAdminOrEditor || 
-                          (isContractor && isSubmitted) || 
                           isAuthor || 
                           isAssignee || 
                           isSigner;
