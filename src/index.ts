@@ -6396,60 +6396,66 @@ app.post(
 
       if (userSignature) {
         try {
-          // Regenerar el PDF para que muestre el estado actualizado ("Firmado" con fecha)
-          console.log("Regenerando PDF para reflejar el estado actualizado de las firmas...");
-          let basePdf: any = null;
-          try {
-            const baseUrl =
-              process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
-            const tenantId = (req as any).tenant?.id;
-            await generateLogEntryPdf({
-              prisma,
+          // Primero buscar si existe un PDF con firmas aplicadas (el más reciente)
+          let basePdf: any = await prisma.attachment.findFirst({
+            where: {
               logEntryId: id,
-              uploadsDir: process.env.UPLOADS_DIR || "./uploads",
-              baseUrl,
-              tenantId,
-            });
-            console.log("PDF regenerado exitosamente con el estado actualizado");
+              type: "application/pdf",
+              fileName: { contains: "firmado" },
+            },
+            orderBy: { createdAt: "desc" },
+          });
 
-            // Buscar el PDF recién regenerado (el más reciente sin "firmado" en el nombre)
-            basePdf = await prisma.attachment.findFirst({
-              where: {
+          // Si no existe un PDF con firmas, regenerar el PDF base
+          if (!basePdf) {
+            console.log("No se encontró PDF con firmas previas, regenerando PDF base...");
+            try {
+              const baseUrl =
+                process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+              const tenantId = (req as any).tenant?.id;
+              await generateLogEntryPdf({
+                prisma,
                 logEntryId: id,
-                type: "application/pdf",
-                fileName: { not: { contains: "firmado" } },
-              },
-              orderBy: { createdAt: "desc" },
-            });
-          } catch (regenerateError) {
-            console.warn("No se pudo regenerar el PDF, usando PDF existente:", regenerateError);
-            // Fallback: buscar PDF existente
-            basePdf = await prisma.attachment.findFirst({
-              where: {
-                logEntryId: id,
-                type: "application/pdf",
-                fileName: { not: { contains: "firmado" } },
-              },
-              orderBy: { createdAt: "desc" },
-            });
+                uploadsDir: process.env.UPLOADS_DIR || "./uploads",
+                baseUrl,
+                tenantId,
+              });
+              console.log("PDF regenerado exitosamente con el estado actualizado");
+
+              // Buscar el PDF recién regenerado (el más reciente sin "firmado" en el nombre)
+              basePdf = await prisma.attachment.findFirst({
+                where: {
+                  logEntryId: id,
+                  type: "application/pdf",
+                  fileName: { not: { contains: "firmado" } },
+                },
+                orderBy: { createdAt: "desc" },
+              });
+            } catch (regenerateError) {
+              console.warn("No se pudo regenerar el PDF, usando PDF existente:", regenerateError);
+              // Fallback: buscar PDF existente sin firmas
+              basePdf = await prisma.attachment.findFirst({
+                where: {
+                  logEntryId: id,
+                  type: "application/pdf",
+                  fileName: { not: { contains: "firmado" } },
+                },
+                orderBy: { createdAt: "desc" },
+              });
+            }
+          } else {
+            console.log(`Usando PDF existente con firmas previas: ${basePdf.fileName} (ID: ${basePdf.id})`);
           }
 
           if (basePdf) {
             console.log(
-              `Aplicando TODAS las firmas manuscritas al PDF regenerado: ${basePdf.fileName} (ID: ${basePdf.id})`
+              `Aplicando la nueva firma manuscrita al PDF: ${basePdf.fileName} (ID: ${basePdf.id})`
             );
 
-            // Cargar el PDF base regenerado
+            // Cargar el PDF base (que puede tener firmas previas o no)
             let currentPdfBuffer = await loadAttachmentBuffer(basePdf);
             const originalPdfSize = currentPdfBuffer.length;
             
-            // Obtener todas las firmas que ya están firmadas (incluyendo la nueva)
-            const allSignatures = await prisma.signature.findMany({
-              where: { logEntryId: id },
-              include: { signer: true },
-              orderBy: { signedAt: "asc" },
-            });
-
             // Obtener tareas de firma ordenadas para calcular posiciones
             const logEntryWithTasks = await prisma.logEntry.findUnique({
               where: { id },
@@ -6478,62 +6484,60 @@ app.post(
             const SIGNATURE_SECTION_START_Y = PAGE_MARGIN + 17.5;
             const LINE_X = PAGE_MARGIN + 70;
 
-            // Aplicar todas las firmas manuscritas en orden
-            console.log(`Aplicando ${allSignatures.length} firma(s) manuscrita(s) al PDF...`);
-            for (const signature of allSignatures) {
-              const signerId = signature.signerId || signature.signer?.id;
-              if (!signerId) continue;
+            // Aplicar solo la nueva firma (la del firmante actual)
+            const newSignature = await prisma.signature.findFirst({
+              where: { logEntryId: id, signerId },
+              include: { signer: true },
+            });
 
+            if (newSignature) {
               const userSig = await prisma.userSignature.findUnique({
                 where: { userId: signerId },
               });
 
-              if (!userSig) {
-                console.warn(`No se encontró firma manuscrita para el usuario ${signerId}`);
-                continue;
-              }
+              if (userSig) {
+                // Calcular índice del firmante
+                let signerIndex = orderedTasks.findIndex(
+                  (t: any) => t.signer?.id === signerId
+                );
+                if (signerIndex < 0) signerIndex = 0;
 
-              // Calcular índice del firmante
-              let signerIndex = orderedTasks.findIndex(
-                (t: any) => t.signer?.id === signerId
-              );
-              if (signerIndex < 0) signerIndex = 0;
+                const currentY = SIGNATURE_SECTION_START_Y + signerIndex * (SIGNATURE_BOX_HEIGHT + SIGNATURE_BOX_GAP);
+                const yPos = currentY + SIGNATURE_LINE_OFFSET;
 
-              const currentY = SIGNATURE_SECTION_START_Y + signerIndex * (SIGNATURE_BOX_HEIGHT + SIGNATURE_BOX_GAP);
-              const yPos = currentY + SIGNATURE_LINE_OFFSET;
-
-              console.log(`Aplicando firma de ${signature.signer?.fullName} en posición:`, {
-                signerIndex,
-                y: yPos,
-                x: LINE_X,
-              });
-
-              try {
-                // Usar la contraseña del firmante para desencriptar su firma
-                // Nota: esto solo funciona si el firmante actual es quien está firmando
-                // Para otros firmantes, sus firmas se aplicarán cuando ellos firmen con su contraseña
-                const signaturePassword = signature.signer?.id === signerId ? password : undefined;
-                const signatureBuffer = await loadUserSignatureBuffer(userSig, signaturePassword);
-                currentPdfBuffer = await applySignatureToPdf({
-                  originalPdf: currentPdfBuffer,
-                  signature: {
-                    buffer: signatureBuffer,
-                    mimeType: userSig.mimeType || "image/png",
-                  },
-                  position: {
-                    page: undefined, // última página
-                    x: LINE_X,
-                    y: yPos,
-                    width: 220,
-                    height: 28,
-                    baseline: true,
-                    baselineRatio: 0.25,
-                    fromTop: true,
-                  },
+                console.log(`Aplicando firma de ${newSignature.signer?.fullName} en posición:`, {
+                  signerIndex,
+                  y: yPos,
+                  x: LINE_X,
                 });
-                console.log(`✅ Firma de ${signature.signer?.fullName} aplicada exitosamente`);
-              } catch (sigError) {
-                console.error(`❌ Error aplicando firma de ${signature.signer?.fullName}:`, sigError);
+
+                try {
+                  // Usar la contraseña del firmante actual para desencriptar su firma
+                  const signatureBuffer = await loadUserSignatureBuffer(userSig, password);
+                  currentPdfBuffer = await applySignatureToPdf({
+                    originalPdf: currentPdfBuffer,
+                    signature: {
+                      buffer: signatureBuffer,
+                      mimeType: userSig.mimeType || "image/png",
+                    },
+                    position: {
+                      page: undefined, // última página
+                      x: LINE_X,
+                      y: yPos,
+                      width: 220,
+                      height: 28,
+                      baseline: true,
+                      baselineRatio: 0.25,
+                      fromTop: true,
+                    },
+                  });
+                  console.log(`✅ Firma de ${newSignature.signer?.fullName} aplicada exitosamente`);
+                } catch (sigError) {
+                  console.error(`❌ Error aplicando firma de ${newSignature.signer?.fullName}:`, sigError);
+                  throw sigError;
+                }
+              } else {
+                console.warn(`No se encontró firma manuscrita para el usuario ${signerId}`);
               }
             }
             
