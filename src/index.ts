@@ -4924,7 +4924,6 @@ app.post(
 app.put(
   "/api/log-entries/:id",
   authMiddleware,
-  requireEditor,
   (req, res, next) => {
     // Solo usar multer si el Content-Type es multipart/form-data
     const contentType = req.headers["content-type"] || "";
@@ -4948,6 +4947,24 @@ app.put(
 
       if (!userId) {
         return res.status(401).json({ error: "Usuario no autenticado." });
+      }
+
+      // Obtener información del usuario primero para verificar permisos
+      const currentUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          fullName: true,
+          appRole: true,
+          projectRole: true,
+          entity: true,
+        },
+      });
+
+      if (!currentUser) {
+        return res.status(404).json({
+          error: "Usuario no encontrado.",
+        });
       }
 
       // Verificar acceso al recurso usando el middleware de permisos
@@ -4993,28 +5010,19 @@ app.put(
             : existingEntry.status;
       }
 
-      const currentUser = await prisma.user.findUnique({
-        where: { id: userId },
-        select: {
-          id: true,
-          fullName: true,
-          appRole: true,
-          projectRole: true,
-        },
-      });
-
-      if (!currentUser) {
-        return res.status(404).json({
-          error: "Usuario no encontrado.",
-        });
-      }
-
       const isAdmin = currentUser.appRole === "admin";
+      const isEditor = currentUser.appRole === "editor";
       const isAuthor = existingEntry.authorId === userId;
-      const isContractorUser = currentUser.projectRole === "CONTRACTOR_REP";
+      // Verificar si es contratista: por projectRole o por entity
+      const isContractorUser = 
+        currentUser.projectRole === "CONTRACTOR_REP" || 
+        currentUser.projectRole === "Contratista" ||
+        currentUser.entity === "CONTRATISTA";
       const status = existingEntry.status;
 
+      // Verificar permisos según el estado de la anotación
       if (status === "DRAFT") {
+        // Solo autor o admin pueden editar borradores
         if (!isAuthor && !isAdmin) {
           return res.status(403).json({
             error:
@@ -5023,15 +5031,34 @@ app.put(
           });
         }
       } else if (status === "SUBMITTED") {
-        if (!isContractorUser && !isAdmin) {
+        // Permitir que contratistas asignados o firmantes actualicen campos permitidos
+        // También permitir a admins y editores
+        const isAssignee = existingEntry.assignees?.some((a: any) => a.id === userId);
+        let isSigner = false;
+        if (existingEntry.signatureTasks) {
+          isSigner = existingEntry.signatureTasks.some((task: any) => task.signerId === userId);
+        } else {
+          // Si no está incluido, consultar directamente
+          const signatureTask = await prisma.logEntrySignatureTask.findFirst({
+            where: {
+              logEntryId: id,
+              signerId: userId,
+            },
+          });
+          isSigner = !!signatureTask;
+        }
+        
+        // Permitir si es admin, editor, contratista asignado o firmante
+        if (!isAdmin && !isEditor && !isContractorUser && !isAssignee && !isSigner) {
           return res.status(403).json({
             error:
-              "Solo el contratista asignado puede agregar observaciones durante su fase de revisión.",
+              "Solo el contratista asignado o firmante puede agregar observaciones durante su fase de revisión.",
             code: "CONTRACTOR_REVIEW_ONLY",
           });
         }
       } else if (status === "NEEDS_REVIEW") {
-        if (!isAuthor && !isAdmin) {
+        // Solo autor, admin o editor pueden editar durante revisión final
+        if (!isAuthor && !isAdmin && !isEditor) {
           return res.status(403).json({
             error:
               "Solo la interventoría puede ajustar la anotación durante la revisión final.",
@@ -5039,11 +5066,14 @@ app.put(
           });
         }
       } else {
-        return res.status(403).json({
-          error: `No se puede editar una anotación en estado '${entryStatusReverseMap[status] || status}'.`,
-          code: "ENTRY_NOT_EDITABLE",
-          currentStatus: status,
-        });
+        // Para otros estados, solo admin o editor pueden editar
+        if (!isAdmin && !isEditor) {
+          return res.status(403).json({
+            error: `No se puede editar una anotación en estado '${entryStatusReverseMap[status] || status}'.`,
+            code: "ENTRY_NOT_EDITABLE",
+            currentStatus: status,
+          });
+        }
       }
 
       if (
@@ -5261,7 +5291,9 @@ app.put(
         (key) => key !== "attachments"
       );
 
-      if (status === "SUBMITTED") {
+      // Si el estado es SUBMITTED y el usuario es contratista (no admin ni editor),
+      // solo permitir actualizar campos específicos del contratista
+      if (status === "SUBMITTED" && !isAdmin && !isEditor) {
         const contractorAllowedFields = new Set([
           "contractorObservations",
           "safetyContractorResponse",
