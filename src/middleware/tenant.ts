@@ -87,6 +87,26 @@ export async function detectTenantMiddleware(
   next: NextFunction
 ): Promise<void> {
   try {
+    // Excluir endpoints públicos que no requieren tenant
+    // Estos endpoints usan tokens que ya identifican al usuario
+    const publicEndpoints = [
+      '/api/auth/forgot-password',
+      '/api/auth/reset-password',
+      '/api/auth/verify-email',
+    ];
+    
+    const isPublicEndpoint = publicEndpoints.some(endpoint => 
+      req.path.startsWith(endpoint)
+    );
+    
+    if (isPublicEndpoint) {
+      // Permitir continuar sin validar tenant para endpoints públicos
+      logger.debug("Endpoint público detectado, continuando sin validar tenant", {
+        path: req.path,
+      });
+      return next();
+    }
+
     // Obtener el hostname del request
     const host = Array.isArray(req.headers.host) 
       ? req.headers.host[0] 
