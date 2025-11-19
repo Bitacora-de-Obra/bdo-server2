@@ -6541,11 +6541,16 @@ app.post(
               }
             }
             
+            // Obtener el total de firmas para el log
+            const totalSignatures = await prisma.signature.count({
+              where: { logEntryId: id },
+            });
+            
             const signedBuffer = currentPdfBuffer;
             console.log(`PDF con todas las firmas generado:`, {
               originalSize: originalPdfSize,
               signedSize: signedBuffer.length,
-              totalSignatures: allSignatures.length,
+              totalSignatures: totalSignatures,
             });
 
             // Crear nuevo PDF firmado para acumular firmas
