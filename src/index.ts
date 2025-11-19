@@ -6616,6 +6616,176 @@ app.post(
               storagePath: newAttachment.storagePath,
               size: newAttachment.size,
             });
+
+            // Regenerar el PDF una vez más para actualizar los estados después de aplicar la firma
+            // Esto asegura que el PDF tenga los estados correctos ("Firmado" en lugar de "Pendiente de firma")
+            // Luego aplicaremos todas las firmas al PDF regenerado
+            try {
+              console.log("Regenerando PDF final para actualizar los estados después de aplicar la firma...");
+              const baseUrl =
+                process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+              const tenantId = (req as any).tenant?.id;
+              await generateLogEntryPdf({
+                prisma,
+                logEntryId: id,
+                uploadsDir: process.env.UPLOADS_DIR || "./uploads",
+                baseUrl,
+                tenantId,
+              });
+              console.log("PDF final regenerado exitosamente con estados actualizados");
+              
+              // Buscar el PDF regenerado
+              const finalPdf = await prisma.attachment.findFirst({
+                where: {
+                  logEntryId: id,
+                  type: "application/pdf",
+                  fileName: { not: { contains: "firmado" } },
+                },
+                orderBy: { createdAt: "desc" },
+              });
+
+              if (finalPdf) {
+                // Cargar el PDF previo con firmas para copiar las firmas previas
+                const previousSignedPdfBuffer = previousSignedPdf 
+                  ? await loadAttachmentBuffer(previousSignedPdf)
+                  : null;
+                
+                let finalPdfBuffer = await loadAttachmentBuffer(finalPdf);
+                
+                // Obtener todas las firmas (incluyendo la nueva)
+                const allSignatures = await prisma.signature.findMany({
+                  where: { logEntryId: id },
+                  include: { signer: true },
+                  orderBy: { signedAt: "asc" },
+                });
+
+                const logEntryWithTasks = await prisma.logEntry.findUnique({
+                  where: { id },
+                  include: {
+                    signatureTasks: {
+                      include: { signer: true },
+                      orderBy: { assignedAt: "asc" },
+                    },
+                  },
+                });
+
+                const orderedTasks =
+                  (logEntryWithTasks?.signatureTasks || [])
+                    .filter((t: any) => t?.signer?.id)
+                    .sort(
+                      (a: any, b: any) =>
+                        new Date(a.assignedAt || 0).getTime() -
+                        new Date(b.assignedAt || 0).getTime()
+                    ) || [];
+
+                const PAGE_MARGIN = 48;
+                const SIGNATURE_BOX_HEIGHT = 110;
+                const SIGNATURE_BOX_GAP = 16;
+                const SIGNATURE_LINE_OFFSET = 72;
+                const SIGNATURE_SECTION_START_Y = PAGE_MARGIN + 17.5;
+                const LINE_X = PAGE_MARGIN + 70;
+
+                // Si tenemos un PDF previo con firmas, copiar las firmas previas del PDF previo al nuevo PDF
+                // Usando pdf-lib para copiar la página completa con las firmas
+                if (previousSignedPdfBuffer) {
+                  try {
+                    const { PDFDocument } = await import("pdf-lib");
+                    const previousPdfDoc = await PDFDocument.load(previousSignedPdfBuffer);
+                    const finalPdfDoc = await PDFDocument.load(finalPdfBuffer);
+                    
+                    // Obtener la última página del PDF previo (donde están las firmas)
+                    const previousPageCount = previousPdfDoc.getPageCount();
+                    const previousLastPage = previousPdfDoc.getPage(previousPageCount - 1);
+                    
+                    // Obtener la última página del PDF final
+                    const finalPageCount = finalPdfDoc.getPageCount();
+                    const finalLastPage = finalPdfDoc.getPage(finalPageCount - 1);
+                    
+                    // Copiar el contenido de la página previa (incluyendo las firmas) a la página final
+                    // Esto copiará las firmas previas al PDF regenerado
+                    const [copiedPage] = await finalPdfDoc.copyPages(previousPdfDoc, [previousPageCount - 1]);
+                    // Reemplazar la última página del PDF final con la página copiada (que tiene las firmas previas)
+                    finalPdfDoc.removePage(finalPageCount - 1);
+                    finalPdfDoc.addPage(copiedPage);
+                    
+                    finalPdfBuffer = Buffer.from(await finalPdfDoc.save());
+                    console.log("✅ Firmas previas copiadas del PDF anterior al PDF regenerado");
+                  } catch (copyError) {
+                    console.warn("No se pudieron copiar las firmas previas, aplicando solo la nueva firma:", copyError);
+                  }
+                }
+
+                // Aplicar la nueva firma al PDF regenerado (que ahora tiene las firmas previas si se copiaron)
+                const newSignature = allSignatures.find(s => (s.signerId || s.signer?.id) === signerId);
+                if (newSignature) {
+                  const userSig = await prisma.userSignature.findUnique({
+                    where: { userId: signerId },
+                  });
+
+                  if (userSig) {
+                    let signerIndex = orderedTasks.findIndex(
+                      (t: any) => t.signer?.id === signerId
+                    );
+                    if (signerIndex < 0) signerIndex = 0;
+
+                    const currentY = SIGNATURE_SECTION_START_Y + signerIndex * (SIGNATURE_BOX_HEIGHT + SIGNATURE_BOX_GAP);
+                    const yPos = currentY + SIGNATURE_LINE_OFFSET;
+
+                    try {
+                      const signatureBuffer = await loadUserSignatureBuffer(userSig, password);
+                      finalPdfBuffer = await applySignatureToPdf({
+                        originalPdf: finalPdfBuffer,
+                        signature: {
+                          buffer: signatureBuffer,
+                          mimeType: userSig.mimeType || "image/png",
+                        },
+                        position: {
+                          page: undefined,
+                          x: LINE_X,
+                          y: yPos,
+                          width: 220,
+                          height: 28,
+                          baseline: true,
+                          baselineRatio: 0.25,
+                          fromTop: true,
+                        },
+                      });
+                      console.log(`✅ Firma de ${newSignature.signer?.fullName} aplicada al PDF final con estados actualizados`);
+                    } catch (sigError) {
+                      console.error(`❌ Error aplicando firma al PDF final:`, sigError);
+                    }
+                  }
+                }
+
+                // Guardar el PDF final con estados actualizados y la nueva firma
+                const finalBaseName = path.parse(finalPdf.fileName || "documento.pdf").name.replace(/-firmado(-\d+)?$/, '');
+                const finalSignedFileName = `${finalBaseName}-firmado-${Date.now()}.pdf`;
+                const finalSignedKey = createStorageKey(
+                  "bitacora",
+                  finalSignedFileName,
+                  undefined,
+                  tenantId
+                );
+
+                await storage.save({ path: finalSignedKey, content: finalPdfBuffer });
+                const finalSignedUrl = storage.getPublicUrl(finalSignedKey);
+
+                await prisma.attachment.create({
+                  data: {
+                    fileName: finalSignedFileName,
+                    url: finalSignedUrl,
+                    storagePath: finalSignedKey,
+                    size: finalPdfBuffer.length,
+                    type: "application/pdf",
+                    logEntry: { connect: { id } },
+                  },
+                });
+
+                console.log(`✅ PDF final con estados actualizados y firma aplicada: ${finalSignedFileName}`);
+              }
+            } catch (finalRegenError) {
+              console.warn("No se pudo regenerar el PDF final, pero la firma ya fue aplicada:", finalRegenError);
+            }
           } else {
             console.warn(
               "No se pudo encontrar o generar un PDF base para aplicar la firma."
