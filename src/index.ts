@@ -4111,11 +4111,26 @@ app.post(
       let logEntry;
       try {
         // Asignar tenantId (obligatorio para multi-tenancy)
-        const tenantId = (req as any).tenant?.id;
+        // Primero intentar obtener desde req.tenant (detectado por middleware)
+        let tenantId = (req as any).tenant?.id;
+        
+        // Si no está disponible en req.tenant, obtener desde el usuario autenticado
+        if (!tenantId) {
+          console.log("DEBUG: Tenant no detectado en req.tenant, obteniendo desde usuario...");
+          const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { tenantId: true },
+          });
+          
+          if (user?.tenantId) {
+            tenantId = user.tenantId;
+            console.log("DEBUG: tenantId obtenido desde usuario:", tenantId);
+          }
+        }
         
         // Validar que existe tenantId antes de crear
         if (!tenantId) {
-          console.error("❌ ERROR: No se pudo detectar el tenant del request");
+          console.error("❌ ERROR: No se pudo detectar el tenant del request ni del usuario");
           return res.status(400).json({ 
             error: "No se pudo determinar el cliente (tenant). Por favor, verifica tu acceso." 
           });
