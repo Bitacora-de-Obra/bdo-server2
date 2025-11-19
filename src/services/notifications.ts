@@ -252,17 +252,57 @@ export const buildUserNotifications = async (
       take: 50, // Limitar a las últimas 50 notificaciones de menciones
     });
 
+    const mentionedIds = new Set<string>();
+
+    mentionNotifications.forEach((notification) => {
+      const rawContent = notification.comment?.content || "";
+      let match;
+      const regex = /@\[([a-f0-9-]{36})\]/g;
+      while ((match = regex.exec(rawContent)) !== null) {
+        mentionedIds.add(match[1]);
+      }
+    });
+
+    const mentionedUsers = mentionedIds.size
+      ? await prisma.user.findMany({
+          where: {
+            id: {
+              in: Array.from(mentionedIds),
+            },
+          },
+          select: {
+            id: true,
+            fullName: true,
+          },
+        })
+      : [];
+
+    const mentionedUserMap = new Map<string, string>();
+    mentionedUsers.forEach((user) => mentionedUserMap.set(user.id, user.fullName));
+
+    const formatMentionContent = (content: string | null | undefined) => {
+      if (!content) return "";
+      const replacePattern = /@\[([a-f0-9-]{36})\]/g;
+      return content.replace(replacePattern, (_match, userId: string) => {
+        const fullName = mentionedUserMap.get(userId);
+        return fullName ? `@${fullName}` : "@usuario";
+      });
+    };
+
     mentionNotifications.forEach((notification) => {
       const comment = notification.comment;
       if (comment) {
+        const formattedContent = formatMentionContent(comment.content);
+        const preview =
+          formattedContent.length > 50
+            ? `${formattedContent.substring(0, 50)}...`
+            : formattedContent || "Comentario";
         notifications.push({
           id: notification.id,
           type: "mention",
           urgency: "info",
           message: notification.message,
-          sourceDescription: comment.content && comment.content.length > 50 
-            ? `${comment.content.substring(0, 50)}...` 
-            : (comment.content || "Comentario"),
+          sourceDescription: preview,
           relatedView: (notification.relatedView as any) || "logbook",
           relatedItemType: (notification.relatedItemType as any) || "logEntry",
           relatedItemId: notification.relatedItemId || "",
