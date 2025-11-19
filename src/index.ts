@@ -5016,7 +5016,6 @@ app.put(
       // Verificar si es contratista: por projectRole o por entity
       const isContractorUser = 
         currentUser.projectRole === "CONTRACTOR_REP" || 
-        currentUser.projectRole === "Contratista" ||
         currentUser.entity === "CONTRATISTA";
       const status = existingEntry.status;
 
