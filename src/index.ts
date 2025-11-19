@@ -5805,7 +5805,6 @@ app.delete(
 app.post(
   "/api/log-entries/:id/comments",
   authMiddleware,
-  requireEditor,
   (req: AuthRequest, res) => {
     const uploadMiddleware = upload.array("attachments", 5);
 
@@ -5853,6 +5852,68 @@ app.post(
           return res.status(403).json({
             error: reason || "No tienes acceso a este recurso",
             code: "ACCESS_DENIED",
+          });
+        }
+
+        // Validar permisos para comentar
+        const currentUser = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { appRole: true, projectRole: true, status: true, entity: true },
+        });
+
+        if (!currentUser || currentUser.status !== 'active') {
+          return res.status(403).json({
+            error: "Usuario no activo.",
+            code: "USER_INACTIVE",
+          });
+        }
+
+        // Si verifyLogEntryAccess retornó hasAccess: true, el usuario tiene acceso básico
+        // Ahora validamos permisos específicos para comentar:
+        
+        // 1. Admins y editores siempre pueden comentar
+        const isAdminOrEditor = currentUser.appRole === 'admin' || currentUser.appRole === 'editor';
+        
+        // 2. Contratistas pueden comentar cuando la bitácora está en estado SUBMITTED
+        const isContractor = 
+          currentUser.projectRole === 'CONTRACTOR_REP' || 
+          currentUser.projectRole === 'Contratista' ||
+          currentUser.entity === 'CONTRATISTA';
+        const isSubmitted = logEntry.status === 'SUBMITTED';
+        
+        // 3. Cualquier usuario asignado o firmante puede comentar
+        const isAssignee = logEntry.assignees?.some((a: any) => a.id === userId);
+        const isAuthor = logEntry.authorId === userId;
+        
+        // Verificar si es firmante (consultar directamente si no está incluido)
+        let isSigner = false;
+        if (logEntry.signatureTasks) {
+          isSigner = logEntry.signatureTasks.some((task: any) => task.signerId === userId);
+        } else {
+          // Si no está incluido, consultar directamente
+          const signatureTask = await prisma.signatureTask.findFirst({
+            where: {
+              logEntryId: id,
+              signerId: userId,
+            },
+          });
+          isSigner = !!signatureTask;
+        }
+
+        // Permitir comentarios si:
+        // - Es admin o editor, O
+        // - Es contratista y la bitácora está en SUBMITTED, O
+        // - Es autor, asignado o firmante de la bitácora
+        const canComment = isAdminOrEditor || 
+                          (isContractor && isSubmitted) || 
+                          isAuthor || 
+                          isAssignee || 
+                          isSigner;
+
+        if (!canComment) {
+          return res.status(403).json({
+            error: "No tienes permisos para agregar comentarios en esta bitácora.",
+            code: "COMMENT_PERMISSION_DENIED",
           });
         }
 
