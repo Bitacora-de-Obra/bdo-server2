@@ -2071,7 +2071,7 @@ app.get("/api/attachments/:id/download", async (req, res) => {
     if (storageDriver === "s3" && attachment.storagePath) {
       try {
         const storage = getStorage();
-        const fileBuffer = await storage.load(attachment.storagePath);
+        const fileBuffer = await storage.read(attachment.storagePath);
         
         const mimeType =
           attachment.type || mime.lookup(attachment.fileName) || "application/octet-stream";
@@ -6560,7 +6560,7 @@ app.post(
         }
 
         try {
-          const buffer = await storage.load(pdfAttachment.storagePath);
+          const buffer = await storage.read(pdfAttachment.storagePath);
           const safeTitle = (entry.title || "Anotacion")
             .replace(/[^a-zA-Z0-9 _.-]/g, "")
             .substring(0, 80)
@@ -8028,7 +8028,7 @@ app.post(
 
       // Cargar la firma encriptada desde storage
       const storage = getStorage();
-      const encryptedBuffer = await storage.load(signature.storagePath);
+      const encryptedBuffer = await storage.read(signature.storagePath);
 
       // Desencriptar usando la contraseña del usuario
       const encryptedData = unpackEncryptedSignature(encryptedBuffer);
