@@ -187,6 +187,7 @@ model User {
   canDownload     Boolean   @default(true) // Permiso para descargar archivos
   lastLoginAt     DateTime?
   tokenVersion    Int       @default(0) // Para invalidar tokens
+  mustUpdatePassword Boolean @default(false)
   emailVerifiedAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
