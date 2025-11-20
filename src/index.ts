@@ -10016,14 +10016,14 @@ app.post(
       // Primero verificar si ya existe un PDF firmado
       const existingEntry = await prisma.logEntry.findUnique({
         where: { id },
-        include: { signedPdfAttachment: true }
+        include: { signedPdf: true }
       });
 
-      if (existingEntry?.signedPdfAttachment) {
+      if (existingEntry?.signedPdf) {
         console.log(`📄 Sirviendo PDF firmado existente para anotación ${id}`);
         return res.json({
           entry: formatLogEntry(existingEntry),
-          attachment: buildAttachmentResponse(existingEntry.signedPdfAttachment),
+          attachment: buildAttachmentResponse(existingEntry.signedPdf),
         });
       }
 
