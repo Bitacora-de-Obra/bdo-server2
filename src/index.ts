@@ -1178,8 +1178,8 @@ const overlaySignatureStatuses = async (
     const statusTextWidth = signatureBoxWidth - 32;
     const fontSize = 10;
     const backgroundHeight = 18;
-    const backgroundOffsetFromTop = 34;
-    const textBaselineOffset = backgroundOffsetFromTop + 12;
+    const backgroundOffsetFromTop = 44;
+    const textBaselineOffset = backgroundOffsetFromTop + 8;
 
     const convertTopToPdfLibY = (topValue: number) =>
       pageHeight - topValue;
