@@ -1177,9 +1177,9 @@ const overlaySignatureStatuses = async (
     const statusTextX = SIGNATURE_OVERLAY_CONSTANTS.PAGE_MARGIN + 16;
     const statusTextWidth = signatureBoxWidth - 32;
     const fontSize = 10;
-    const backgroundHeight = 16;
-    const backgroundOffsetFromTop = 34;
-    const textBaselineOffset = backgroundOffsetFromTop + 8;
+    const backgroundHeight = 24;
+    const backgroundOffsetFromTop = 30;
+    const textBaselineOffset = backgroundOffsetFromTop + 10;
 
     const convertTopToPdfLibY = (topValue: number) =>
       pageHeight - topValue;
@@ -1196,9 +1196,9 @@ const overlaySignatureStatuses = async (
       const rectY = convertTopToPdfLibY(rectTop + backgroundHeight);
 
       page.drawRectangle({
-        x: statusTextX - 2,
+        x: statusTextX - 6,
         y: rectY,
-        width: statusTextWidth + 4,
+        width: statusTextWidth + 12,
         height: backgroundHeight,
         color: rgb(1, 1, 1),
       });
