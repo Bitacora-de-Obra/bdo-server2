@@ -6708,8 +6708,8 @@ app.post(
           // Si existe un PDF con firmas previas, usarlo como base para mantener las firmas manuscritas
           // Si no existe, regenerar el PDF para tener los estados actualizados
           if (previousSignedPdf) {
-            console.log(`Encontrado PDF con firmas previas: ${previousSignedPdf.fileName}`);
-            console.log(`Usando PDF previo como base para mantener las firmas previas, agregando solo la nueva firma...`);
+            console.log(`✅ Encontrado PDF con firmas previas: ${previousSignedPdf.fileName} (ID: ${previousSignedPdf.id})`);
+            console.log(`📄 Usando PDF previo como base para mantener las firmas previas, agregando solo la nueva firma...`);
             basePdf = previousSignedPdf;
           } else {
             // No hay PDF previo con firmas, regenerar el PDF para tener los estados actualizados
@@ -6758,6 +6758,7 @@ app.post(
             // Cargar el PDF base (que puede tener firmas previas o no)
             let currentPdfBuffer = await loadAttachmentBuffer(basePdf);
             const originalPdfSize = currentPdfBuffer.length;
+            console.log(`📦 PDF base cargado: ${basePdf.fileName}, tamaño: ${originalPdfSize} bytes`);
             
             // Obtener tareas de firma ordenadas para calcular posiciones
             const logEntryWithTasks = await prisma.logEntry.findUnique({
