@@ -1268,11 +1268,17 @@ const overlaySignatureStatuses = async (
       const statusTextTop = currentY + statusOffsetFromTop;
       const statusTextY = convertTopToPdfLibY(statusTextTop + fontSize);
 
+      // Limitar el ancho del texto para evitar traslape con la firma manuscrita
+      // La firma empieza en PAGE_MARGIN + 100, el texto en PAGE_MARGIN + 16
+      // Dejamos un margen de seguridad de ~14px antes de la firma
+      const maxStatusTextWidth = 70;
+
       page.drawText(statusLabel, {
         x: textX,
         y: statusTextY,
         size: fontSize,
         color: statusColor,
+        maxWidth: maxStatusTextWidth,
       });
     });
 
