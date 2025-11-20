@@ -6801,8 +6801,7 @@ app.post(
             if (entryWithLatestStatus) {
               signedBuffer = await overlaySignatureStatuses(
                 signedBuffer,
-                entryWithLatestStatus,
-                signerId
+                entryWithLatestStatus
               );
             }
 
