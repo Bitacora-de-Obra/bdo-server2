@@ -6691,8 +6691,16 @@ app.post(
       if (userSignature) {
         try {
           // Buscar si existe un PDF con firmas previas
+          // Primero intentar usar el PDF referenciado en signedPdfAttachmentId
           let previousSignedPdf: any = entry.signedPdf;
+          if (!previousSignedPdf && entry.signedPdfAttachmentId) {
+            // Si entry.signedPdf no está cargado pero existe el ID, cargarlo explícitamente
+            previousSignedPdf = await prisma.attachment.findUnique({
+              where: { id: entry.signedPdfAttachmentId },
+            });
+          }
           if (!previousSignedPdf) {
+            // Fallback: buscar por nombre
             previousSignedPdf = await prisma.attachment.findFirst({
               where: {
                 logEntryId: id,
