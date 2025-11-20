@@ -1140,11 +1140,29 @@ const buildSignatureParticipantsForOverlay = (entry: any) => {
 
 const overlaySignatureStatuses = async (
   pdfBuffer: Buffer,
-  entry: any
+  entry: any,
+  focusSignerIds?: string | string[]
 ): Promise<Buffer> => {
   try {
     const participants = buildSignatureParticipantsForOverlay(entry);
     if (!participants.length) {
+      return pdfBuffer;
+    }
+
+    const focusSet = focusSignerIds
+      ? new Set(Array.isArray(focusSignerIds) ? focusSignerIds : [focusSignerIds])
+      : null;
+
+    const participantsIndexMap = new Map<string, number>();
+    participants.forEach((participant, index) => {
+      participantsIndexMap.set(participant.id, index);
+    });
+
+    const participantsToOverlay = focusSet
+      ? participants.filter((participant) => focusSet.has(participant.id))
+      : participants;
+
+    if (!participantsToOverlay.length) {
       return pdfBuffer;
     }
 
@@ -1163,7 +1181,8 @@ const overlaySignatureStatuses = async (
     const convertTopToPdfLibY = (topValue: number) =>
       pageHeight - topValue;
 
-    participants.forEach((participant, index) => {
+    participantsToOverlay.forEach((participant) => {
+      const index = participantsIndexMap.get(participant.id) ?? 0;
       const currentY =
         SIGNATURE_OVERLAY_CONSTANTS.SIGNATURE_SECTION_START_Y +
         index *
@@ -6777,7 +6796,8 @@ app.post(
             if (entryWithLatestStatus) {
               signedBuffer = await overlaySignatureStatuses(
                 signedBuffer,
-                entryWithLatestStatus
+                entryWithLatestStatus,
+                signerId
               );
             }
 
