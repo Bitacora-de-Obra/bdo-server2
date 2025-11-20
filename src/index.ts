@@ -6513,6 +6513,7 @@ app.post(
         include: {
           signatureTasks: { include: { signer: true } },
           attachments: true,
+          signedPdf: true,
         },
       });
 
@@ -6608,14 +6609,17 @@ app.post(
       if (userSignature) {
         try {
           // Buscar si existe un PDF con firmas previas
-          const previousSignedPdf: any = await prisma.attachment.findFirst({
-            where: {
-              logEntryId: id,
-              type: "application/pdf",
-              fileName: { contains: "firmado" },
-            },
-            orderBy: { createdAt: "desc" },
-          });
+          let previousSignedPdf: any = entry.signedPdf;
+          if (!previousSignedPdf) {
+            previousSignedPdf = await prisma.attachment.findFirst({
+              where: {
+                logEntryId: id,
+                type: "application/pdf",
+                fileName: { contains: "firmado" },
+              },
+              orderBy: { createdAt: "desc" },
+            });
+          }
 
           let basePdf: any = null;
 
@@ -6845,6 +6849,11 @@ app.post(
               url: newAttachment.url,
               storagePath: newAttachment.storagePath,
               size: newAttachment.size,
+            });
+
+            await prisma.logEntry.update({
+              where: { id },
+              data: { signedPdfAttachmentId: newAttachment.id },
             });
           } else {
             console.warn(
