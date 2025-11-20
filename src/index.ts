@@ -1038,6 +1038,27 @@ const formatSignatureDateTime = (date: Date) =>
     timeStyle: "short",
   }).format(date);
 
+const getDisplayRole = (cargo: string | null | undefined, projectRole: string | null | undefined, entity: string | null | undefined): string => {
+  if (cargo) {
+    return cargo;
+  }
+  
+  if (entity) {
+    if (entity === 'IDU') return 'IDU';
+    if (entity === 'INTERVENTORIA') return 'Interventoría';
+    if (entity === 'CONTRATISTA') return 'Contratista';
+  }
+  
+  const projectRoleLabels: Record<string, string> = {
+    ADMIN: 'Administrador',
+    RESIDENT: 'Residente',
+    SUPERVISOR: 'Supervisor',
+    CONTRACTOR_REP: 'Representante del Contratista',
+  };
+  
+  return projectRoleLabels[projectRole || ''] || projectRole || 'Cargo / Rol';
+};
+
 const buildSignatureStatusLabel = (participant: SignatureOverlayParticipant) => {
   if (participant.status === "SIGNED") {
     return participant.signedAt
@@ -1203,12 +1224,13 @@ const overlaySignatureStatuses = async (
       SIGNATURE_OVERLAY_CONSTANTS.PAGE_MARGIN * 2;
     const overlayPaddingX = 12;
     const overlayWidth = signatureBoxWidth - overlayPaddingX * 2;
-    const statusTextX =
+    const textX =
       SIGNATURE_OVERLAY_CONSTANTS.PAGE_MARGIN + overlayPaddingX + 4;
     const fontSize = 10;
-    const backgroundHeight = 28;
-    const backgroundOffsetFromTop = 28;
-    const textBaselineOffset = backgroundOffsetFromTop + fontSize + 4;
+    const cargoFontSize = 10;
+    const statusBackgroundHeight = 16;
+    const statusOffsetFromTop = 46; // Estado se dibuja en currentY + 46
+    const cargoOffsetFromTop = 30; // Cargo se dibuja en currentY + 30
 
     const convertTopToPdfLibY = (topValue: number) =>
       pageHeight - topValue;
@@ -1221,32 +1243,50 @@ const overlaySignatureStatuses = async (
           (SIGNATURE_OVERLAY_CONSTANTS.SIGNATURE_BOX_HEIGHT +
             SIGNATURE_OVERLAY_CONSTANTS.SIGNATURE_BOX_GAP);
 
-      const rectTop = currentY + backgroundOffsetFromTop;
-      const rectY = convertTopToPdfLibY(rectTop + backgroundHeight);
+      // Dibujar rectángulo blanco solo para el área del estado (no el cargo)
+      const statusRectTop = currentY + statusOffsetFromTop;
+      const statusRectY = convertTopToPdfLibY(statusRectTop + statusBackgroundHeight);
 
       page.drawRectangle({
         x:
           SIGNATURE_OVERLAY_CONSTANTS.PAGE_MARGIN + overlayPaddingX,
-        y: rectY,
+        y: statusRectY,
         width: overlayWidth,
-        height: backgroundHeight,
+        height: statusBackgroundHeight,
         color: rgb(1, 1, 1),
       });
 
-      const label = buildSignatureStatusLabel(participant);
-      const color =
+      // Dibujar el cargo
+      const roleLabel = getDisplayRole(
+        participant.cargo,
+        participant.projectRole,
+        participant.entity
+      );
+      const cargoTextTop = currentY + cargoOffsetFromTop;
+      const cargoTextY = convertTopToPdfLibY(cargoTextTop + cargoFontSize);
+
+      page.drawText(roleLabel, {
+        x: textX,
+        y: cargoTextY,
+        size: cargoFontSize,
+        color: rgb(75 / 255, 85 / 255, 99 / 255), // #4B5563
+      });
+
+      // Dibujar el estado
+      const statusLabel = buildSignatureStatusLabel(participant);
+      const statusColor =
         SIGNATURE_STATUS_COLORS[
           participant.status as keyof typeof SIGNATURE_STATUS_COLORS
         ] || SIGNATURE_STATUS_COLORS.DEFAULT;
 
-      const textBaselineTop = currentY + textBaselineOffset;
-      const textY = convertTopToPdfLibY(textBaselineTop + fontSize);
+      const statusTextTop = currentY + statusOffsetFromTop;
+      const statusTextY = convertTopToPdfLibY(statusTextTop + fontSize);
 
-      page.drawText(label, {
-        x: statusTextX,
-        y: textY,
+      page.drawText(statusLabel, {
+        x: textX,
+        y: statusTextY,
         size: fontSize,
-        color,
+        color: statusColor,
       });
     });
 
