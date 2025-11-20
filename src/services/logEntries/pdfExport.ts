@@ -148,7 +148,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
             }
           }
         },
-        orderBy: { assignedAt: "asc" },
+        orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }],
       },
     },
   });
