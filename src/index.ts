@@ -1268,6 +1268,19 @@ const overlaySignatureStatuses = async (
       const statusTextTop = currentY + statusOffsetFromTop;
       const statusTextY = convertTopToPdfLibY(statusTextTop + fontSize);
 
+      // Limpiar el área del estado antes de dibujar el nuevo texto
+      // para evitar que se monte encima del texto anterior
+      const statusBackgroundHeight = 16;
+      const statusBackgroundY = convertTopToPdfLibY(statusTextTop + statusBackgroundHeight);
+      
+      page.drawRectangle({
+        x: SIGNATURE_OVERLAY_CONSTANTS.PAGE_MARGIN + overlayPaddingX,
+        y: statusBackgroundY,
+        width: overlayWidth,
+        height: statusBackgroundHeight,
+        color: rgb(1, 1, 1), // Blanco para limpiar
+      });
+
       // Limitar el ancho del texto para evitar traslape con la firma manuscrita
       // La firma empieza en PAGE_MARGIN + 100, el texto en PAGE_MARGIN + 16
       // Dejamos un margen de seguridad de ~14px antes de la firma

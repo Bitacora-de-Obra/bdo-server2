@@ -125,7 +125,8 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
               entity: true,
             }
           }
-        }
+        },
+        orderBy: { signedAt: "asc" },
       },
       assignees: {
         select: {
