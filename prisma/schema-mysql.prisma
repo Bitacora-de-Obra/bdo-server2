@@ -477,6 +477,8 @@ model LogEntry {
   assignees                     User[]                  @relation("Assignees")
   comments                      Comment[]
   attachments                   Attachment[]
+  signedPdf                     Attachment?              @relation("LogEntrySignedPdf", fields: [signedPdfAttachmentId], references: [id])
+  signedPdfAttachmentId         String?
   signatures                    Signature[]
   history                       LogEntryHistory[]
   signatureTasks                LogEntrySignatureTask[]
@@ -658,6 +660,7 @@ model Attachment {
   weeklyReport      WeeklyReport?          @relation(fields: [weeklyReportId], references: [id])
   weeklyReportId    String?
   photoEntry        PhotoEntry?            @relation("PhotoAttachment")
+  signedLogEntries  LogEntry[]             @relation("LogEntrySignedPdf")
   createdAt         DateTime               @default(now())
 
   @@index([workActaId])
