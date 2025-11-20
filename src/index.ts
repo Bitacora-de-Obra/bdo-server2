@@ -2760,7 +2760,7 @@ app.post(
             signatures: { include: { signer: true } },
             signatureTasks: {
               include: { signer: true },
-              orderBy: { assignedAt: "asc" },
+              orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }],
             },
           },
         });
@@ -2769,9 +2769,16 @@ app.post(
           const orderedTasks = (logEntry.signatureTasks || [])
             .filter((t: any) => t?.signer?.id)
             .sort(
-              (a: any, b: any) =>
-                new Date(a.assignedAt || 0).getTime() -
-                new Date(b.assignedAt || 0).getTime()
+              (a: any, b: any) => {
+                const timeA = new Date(a.assignedAt || 0).getTime();
+                const timeB = new Date(b.assignedAt || 0).getTime();
+                if (timeA !== timeB) return timeA - timeB;
+                // Tie-breaker
+                const createdA = new Date(a.createdAt || 0).getTime();
+                const createdB = new Date(b.createdAt || 0).getTime();
+                if (createdA !== createdB) return createdA - createdB;
+                return a.id.localeCompare(b.id);
+              }
             );
           let signerIndex = orderedTasks.findIndex(
             (t: any) => t.signer?.id === userId
@@ -2935,7 +2942,7 @@ app.post(
             assignees: true,
             signatureTasks: {
               include: { signer: true },
-              orderBy: { assignedAt: "asc" },
+              orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }],
             },
             history: {
               include: { user: true },
@@ -6699,7 +6706,7 @@ app.post(
               include: {
                 signatureTasks: {
                   include: { signer: true },
-                  orderBy: { assignedAt: "asc" },
+                  orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }],
                 },
               },
             });
@@ -6708,9 +6715,16 @@ app.post(
               (logEntryWithTasks?.signatureTasks || [])
                 .filter((t: any) => t?.signer?.id)
                 .sort(
-                  (a: any, b: any) =>
-                    new Date(a.assignedAt || 0).getTime() -
-                    new Date(b.assignedAt || 0).getTime()
+                  (a: any, b: any) => {
+                    const timeA = new Date(a.assignedAt || 0).getTime();
+                    const timeB = new Date(b.assignedAt || 0).getTime();
+                    if (timeA !== timeB) return timeA - timeB;
+                    // Tie-breaker using createdAt if available, or id for stability
+                    const createdA = new Date(a.createdAt || 0).getTime();
+                    const createdB = new Date(b.createdAt || 0).getTime();
+                    if (createdA !== createdB) return createdA - createdB;
+                    return a.id.localeCompare(b.id);
+                  }
                 ) || [];
 
             // Valores que coinciden con pdfExport.ts
