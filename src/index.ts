@@ -1063,12 +1063,27 @@ const buildSignatureParticipantsForOverlay = (entry: any) => {
     }
     const existing = participantsById.get(participant.id);
     if (existing) {
+      const incomingSignedAt = participant.signedAt
+        ? new Date(participant.signedAt)
+        : undefined;
+      const existingSignedAt = existing.signedAt
+        ? new Date(existing.signedAt)
+        : undefined;
+
       if (participant.status === "SIGNED" && existing.status !== "SIGNED") {
         existing.status = "SIGNED";
-        existing.signedAt = participant.signedAt || existing.signedAt || null;
+        existing.signedAt = incomingSignedAt || existing.signedAt || null;
       } else if (existing.status !== "SIGNED") {
         existing.status = participant.status;
-        existing.signedAt = participant.signedAt || existing.signedAt || null;
+        existing.signedAt = incomingSignedAt || existing.signedAt || null;
+      } else if (participant.status === "SIGNED") {
+        // When both are signed, keep the latest timestamp so PDFs show the actual signing order
+        if (
+          incomingSignedAt &&
+          (!existingSignedAt || incomingSignedAt > existingSignedAt)
+        ) {
+          existing.signedAt = incomingSignedAt;
+        }
       }
       return;
     }
@@ -1077,7 +1092,19 @@ const buildSignatureParticipantsForOverlay = (entry: any) => {
     participantsById.set(participant.id, stored);
   };
 
-  (entry.signatureTasks || []).forEach((task: any) => {
+  const sortedSignatureTasks = [...(entry.signatureTasks || [])].sort(
+    (a, b) => {
+      const timeA = new Date(a.assignedAt || 0).getTime();
+      const timeB = new Date(b.assignedAt || 0).getTime();
+      if (timeA !== timeB) return timeA - timeB;
+      const createdA = new Date(a.createdAt || 0).getTime();
+      const createdB = new Date(b.createdAt || 0).getTime();
+      if (createdA !== createdB) return createdA - createdB;
+      return (a.id || "").localeCompare(b.id || "");
+    }
+  );
+
+  sortedSignatureTasks.forEach((task: any) => {
     if (!task?.signer?.id) return;
     registerParticipant({
       id: task.signer.id,
