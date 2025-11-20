@@ -1228,7 +1228,6 @@ const overlaySignatureStatuses = async (
       SIGNATURE_OVERLAY_CONSTANTS.PAGE_MARGIN + overlayPaddingX + 4;
     const fontSize = 10;
     const cargoFontSize = 10;
-    const statusBackgroundHeight = 16;
     const statusOffsetFromTop = 46; // Estado se dibuja en currentY + 46
     const cargoOffsetFromTop = 30; // Cargo se dibuja en currentY + 30
 
@@ -1242,19 +1241,6 @@ const overlaySignatureStatuses = async (
         index *
           (SIGNATURE_OVERLAY_CONSTANTS.SIGNATURE_BOX_HEIGHT +
             SIGNATURE_OVERLAY_CONSTANTS.SIGNATURE_BOX_GAP);
-
-      // Dibujar rectángulo blanco solo para el área del estado (no el cargo)
-      const statusRectTop = currentY + statusOffsetFromTop;
-      const statusRectY = convertTopToPdfLibY(statusRectTop + statusBackgroundHeight);
-
-      page.drawRectangle({
-        x:
-          SIGNATURE_OVERLAY_CONSTANTS.PAGE_MARGIN + overlayPaddingX,
-        y: statusRectY,
-        width: overlayWidth,
-        height: statusBackgroundHeight,
-        color: rgb(1, 1, 1),
-      });
 
       // Dibujar el cargo
       const roleLabel = getDisplayRole(
@@ -6800,7 +6786,7 @@ app.post(
             const SIGNATURE_BOX_GAP = 16;
             const SIGNATURE_LINE_OFFSET = 72;
             const SIGNATURE_SECTION_START_Y = PAGE_MARGIN + 17.5;
-            const LINE_X = PAGE_MARGIN + 70;
+            const LINE_X = PAGE_MARGIN + 100; // Movido a la derecha para evitar que se corte
 
             // Aplicar solo la nueva firma (la del firmante actual)
             const newSignature = await prisma.signature.findFirst({
