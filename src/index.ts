@@ -2760,7 +2760,7 @@ app.post(
             signatures: { include: { signer: true } },
             signatureTasks: {
               include: { signer: true },
-              orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }],
+              orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
             },
           },
         });
@@ -2942,7 +2942,7 @@ app.post(
             assignees: true,
             signatureTasks: {
               include: { signer: true },
-              orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }],
+              orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
             },
             history: {
               include: { user: true },
@@ -6706,7 +6706,7 @@ app.post(
               include: {
                 signatureTasks: {
                   include: { signer: true },
-                  orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }],
+                  orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
                 },
               },
             });
