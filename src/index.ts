@@ -1020,9 +1020,9 @@ interface SignatureOverlayParticipant {
 
 const SIGNATURE_OVERLAY_CONSTANTS = {
   PAGE_MARGIN: 48,
-  SIGNATURE_BOX_HEIGHT: 150,
+  SIGNATURE_BOX_HEIGHT: 140,
   SIGNATURE_BOX_GAP: 16,
-  SIGNATURE_LINE_OFFSET: 122,
+  SIGNATURE_LINE_OFFSET: 118,
   SIGNATURE_SECTION_START_Y: 48 + 17.5,
 };
 
@@ -2864,9 +2864,9 @@ app.post(
           }
           if (signerIndex < 0) signerIndex = 0; // último recurso
           const MARGIN = 48; // Debe coincidir con pdfExport
-          const BOX_H = 150;
+          const BOX_H = 140;
           const GAP = 16;
-          const LINE_Y = 122; // línea de firma relativa al inicio del box
+          const LINE_Y = 118; // línea de firma relativa al inicio del box
           const LINE_X = 90; // desplazamiento respecto al margen izquierdo
           y =
             y === undefined ? MARGIN + signerIndex * (BOX_H + GAP) + LINE_Y : y;

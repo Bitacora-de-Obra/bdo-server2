@@ -802,7 +802,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
       }
     }
 
-    const signatureBoxHeight = 150;
+    const signatureBoxHeight = 140;
     const signatureBoxWidth =
       pageWidth - doc.page.margins.left - doc.page.margins.right;
 
@@ -870,20 +870,24 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         .fontSize(10)
         .text("Firma:", doc.page.margins.left + 16, currentY + 58);
 
-      const signatureAreaTop = currentY + 78;
-      const signatureAreaHeight = 50;
+      const signatureAreaTop = currentY + 90;
+      const signatureAreaHeight = 36;
       const signatureBuffer = participant.id
         ? signatureImages.get(participant.id)
         : null;
 
       if (signatureBuffer) {
-        const maxSignatureWidth = signatureBoxWidth - 140;
+        const maxSignatureWidth = signatureBoxWidth - 160;
         const maxSignatureHeight = signatureAreaHeight;
         try {
-          doc
-            .image(signatureBuffer, doc.page.margins.left + 90, signatureAreaTop, {
+          doc.image(
+            signatureBuffer,
+            doc.page.margins.left + 90,
+            signatureAreaTop,
+            {
               fit: [maxSignatureWidth, maxSignatureHeight],
-            });
+            }
+          );
         } catch (error) {
           console.warn("No se pudo renderizar la firma manuscrita en PDF", {
             signerId: participant.id,
