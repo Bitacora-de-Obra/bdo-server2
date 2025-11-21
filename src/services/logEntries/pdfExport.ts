@@ -870,19 +870,34 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         .fontSize(10)
         .text("Firma:", doc.page.margins.left + 16, currentY + 58);
 
-      const signatureAreaTop = currentY + 90;
+      const signatureLineY = currentY + signatureBoxHeight - 24;
       const signatureAreaHeight = 36;
+      const signatureAreaTop = signatureLineY - signatureAreaHeight + 8;
+      const signatureAreaX = doc.page.margins.left + 90;
+      const signatureAreaWidth = signatureBoxWidth - 106;
       const signatureBuffer = participant.id
         ? signatureImages.get(participant.id)
         : null;
 
       if (signatureBuffer) {
-        const maxSignatureWidth = signatureBoxWidth - 160;
+        const maxSignatureWidth = signatureAreaWidth - 14;
         const maxSignatureHeight = signatureAreaHeight;
         try {
+          // Limpiar el área para evitar que texto/estados se vean detrás
+          doc.save();
+          doc
+            .rect(
+              signatureAreaX - 6,
+              signatureAreaTop - 4,
+              signatureAreaWidth + 12,
+              signatureAreaHeight + 8
+            )
+            .fill("#FFFFFF");
+          doc.restore();
+
           doc.image(
             signatureBuffer,
-            doc.page.margins.left + 90,
+            signatureAreaX,
             signatureAreaTop,
             {
               fit: [maxSignatureWidth, maxSignatureHeight],
@@ -893,23 +908,13 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
             signerId: participant.id,
             error,
           });
-          doc
-            .moveTo(doc.page.margins.left + 90, signatureAreaTop + signatureAreaHeight - 8)
-            .lineTo(
-              doc.page.margins.left + signatureBoxWidth - 16,
-              signatureAreaTop + signatureAreaHeight - 8
-            )
-            .stroke();
         }
-      } else {
-        doc
-          .moveTo(doc.page.margins.left + 90, signatureAreaTop + signatureAreaHeight - 8)
-          .lineTo(
-            doc.page.margins.left + signatureBoxWidth - 16,
-            signatureAreaTop + signatureAreaHeight - 8
-          )
-          .stroke();
       }
+
+      doc
+        .moveTo(signatureAreaX, signatureLineY)
+        .lineTo(signatureAreaX + signatureAreaWidth, signatureLineY)
+        .stroke();
 
       doc.y = currentY + signatureBoxHeight + 16;
       if (index === signatureParticipants.length - 1) {
