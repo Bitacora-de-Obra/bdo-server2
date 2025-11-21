@@ -6859,12 +6859,14 @@ app.post(
             const PAGE_MARGIN = 48;
             const SIGNATURE_BOX_HEIGHT = 200;
             const SIGNATURE_BOX_GAP = 16;
-            // En el layout actual, la línea de firma queda ~176px debajo del inicio del recuadro
-            const SIGNATURE_LINE_OFFSET = 176;
             // El primer recuadro inicia justo debajo del título "Firmas requeridas"
             const SIGNATURE_SECTION_START_Y = PAGE_MARGIN + 17.5;
             // Alinear con el inicio del área de firma (margen + 24)
             const LINE_X = PAGE_MARGIN + 24;
+            // Coincidir con pdfExport: área de firma inicia ~78px debajo del recuadro y mide 110px
+            const SIGNATURE_AREA_TOP_OFFSET = 78;
+            const SIGNATURE_AREA_HEIGHT = 110;
+            const SIGNATURE_DRAW_HEIGHT = 60;
 
             // Aplicar solo la nueva firma (la del firmante actual)
             const newSignature = await prisma.signature.findFirst({
@@ -6885,7 +6887,9 @@ app.post(
                 if (signerIndex < 0) signerIndex = 0;
 
                 const currentY = SIGNATURE_SECTION_START_Y + signerIndex * (SIGNATURE_BOX_HEIGHT + SIGNATURE_BOX_GAP);
-                const yPos = currentY + SIGNATURE_LINE_OFFSET;
+                const signatureAreaTop = currentY + SIGNATURE_AREA_TOP_OFFSET;
+                // Ubicar la firma cerca de la línea inferior del área pero sin tocarla
+                const yPos = signatureAreaTop + SIGNATURE_AREA_HEIGHT - SIGNATURE_DRAW_HEIGHT - 12;
 
                 console.log(`Aplicando firma de ${newSignature.signer?.fullName} en posición:`, {
                   signerIndex,
@@ -6907,9 +6911,8 @@ app.post(
                       x: LINE_X,
                       y: yPos,
                       width: 260,
-                      height: 60,
-                      baseline: true,
-                      baselineRatio: 0.18,
+                      height: SIGNATURE_DRAW_HEIGHT,
+                      baseline: false,
                       fromTop: true,
                     },
                   });
