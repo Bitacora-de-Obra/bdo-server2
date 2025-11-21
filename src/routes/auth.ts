@@ -4,7 +4,12 @@ import bcrypt from "bcryptjs";
 import { randomBytes, createHash } from "crypto";
 import { CookieOptions } from "express";
 import { authMiddleware, refreshAuthMiddleware, createAccessToken, createRefreshToken, AuthRequest } from "../middleware/auth";
-import { sendEmailVerificationEmail, sendPasswordResetEmail, isEmailServiceConfigured } from "../services/email";
+import {
+  sendEmailVerificationEmail,
+  sendPasswordResetEmail,
+  isEmailServiceConfigured,
+} from "../services/email";
+import { getRequestBaseUrl } from "../utils/requestUrl";
 import { roleMap } from "../utils/enum-maps";
 // Shared constants - will be imported from utils if needed
 
@@ -376,6 +381,7 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
               to: user.email,
               token,
               fullName: user.fullName,
+              baseUrl: getRequestBaseUrl(req) ?? undefined,
             });
           } catch (mailError) {
             console.error(

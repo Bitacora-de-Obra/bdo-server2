@@ -25,7 +25,9 @@ interface SendVerificationParams {
   fullName?: string | null;
 }
 
-interface SendResetParams extends SendVerificationParams {}
+interface SendResetParams extends SendVerificationParams {
+  baseUrl?: string;
+}
 
 interface CommitmentReminder {
   id: string;
@@ -154,11 +156,12 @@ const getAppBaseUrl = () => {
 const buildLinkFromTemplate = (
   template: string | undefined,
   token: string,
-  fallbackPath: string
+  fallbackPath: string,
+  baseUrlOverride?: string
 ) => {
   const baseTemplate =
     template ||
-    `${getAppBaseUrl()}${fallbackPath}${
+    `${(baseUrlOverride || getAppBaseUrl())}${fallbackPath}${
       fallbackPath.includes("?") ? "&" : "?"
     }token={{token}}`;
 
@@ -272,11 +275,13 @@ export const sendPasswordResetEmail = async ({
   to,
   token,
   fullName,
-}: SendResetParams) => {
+  baseUrl,
+}: SendResetParams & { baseUrl?: string }) => {
   const resetUrl = buildLinkFromTemplate(
     process.env.PASSWORD_RESET_URL,
     token,
-    "/auth/reset-password"
+    "/auth/reset-password",
+    baseUrl
   );
 
   const displayName = fullName || "Usuario";
