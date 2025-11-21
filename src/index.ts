@@ -27,6 +27,10 @@ import {
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import "dotenv/config";
+// Fijar zona horaria de la app a Bogotá para evitar corrimientos de fecha
+if (!process.env.TZ) {
+  process.env.TZ = "America/Bogota";
+}
 import multer from "multer";
 import { randomUUID, randomBytes, createHash } from "crypto";
 import {
