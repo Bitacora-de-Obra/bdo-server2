@@ -522,18 +522,46 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
     doc.moveDown();
     doc.font("Helvetica-Bold").fontSize(13).text("Firmas registradas");
     doc.moveDown(0.25);
-    if (!entry.signatures?.length) {
+    const signatureTasks = entry.signatureTasks || [];
+    const signatures = entry.signatures || [];
+    const signatureByUser = new Map<string, any>();
+
+    // Primero cargar desde tareas (para incluir pendientes)
+    signatureTasks.forEach((task: any) => {
+      const signerId = task.signerId || task.signer?.id;
+      if (!signerId) return;
+      signatureByUser.set(signerId, {
+        signerName: task.signer?.fullName || "Firmante",
+        status: task.status || "PENDING",
+        signedAt: task.signedAt ? new Date(task.signedAt) : null,
+      });
+    });
+
+    // Sobrescribir con firmas efectivamente registradas (status SIGNED)
+    signatures.forEach((signature: any) => {
+      const signerId = signature.signerId || signature.signer?.id;
+      if (!signerId) return;
+      signatureByUser.set(signerId, {
+        signerName: signature.signer?.fullName || "Firmante",
+        status: "SIGNED",
+        signedAt: signature.signedAt ? new Date(signature.signedAt) : null,
+      });
+    });
+
+    const participantsList = Array.from(signatureByUser.values());
+
+    if (!participantsList.length) {
       doc.font("Helvetica").fontSize(11).text("No hay firmas registradas.");
     } else {
-      entry.signatures.forEach((signature: any, index: number) => {
-        const signerName = signature.signer?.fullName || "Firmante";
-        const signedAt = signature.signedAt
-          ? formatDateTime(new Date(signature.signedAt))
-          : "Pendiente";
+      participantsList.forEach((participant, index) => {
+        const statusLabel =
+          participant.status === "SIGNED"
+            ? formatDateTime(participant.signedAt || new Date())
+            : "Pendiente";
         doc
           .font("Helvetica")
           .fontSize(11)
-          .text(`${index + 1}. ${signerName} — ${signedAt}`);
+          .text(`${index + 1}. ${participant.signerName} — ${statusLabel}`);
       });
     }
 
@@ -894,9 +922,9 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
       const signatureLineY = signatureAreaTop + signatureAreaHeight - 12;
 
       doc
-        .font("Helvetica")
+        .font("Helvetica-Bold")
         .fontSize(10)
-        .text("Firma:", doc.page.margins.left + 16, signatureAreaTop - 18);
+        .text("Firma:", doc.page.margins.left + 16, signatureAreaTop - 12);
       const signatureBuffer = participant.id
         ? signatureImages.get(participant.id)
         : null;
