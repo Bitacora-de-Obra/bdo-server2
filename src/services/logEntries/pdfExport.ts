@@ -891,8 +891,8 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         .text("Firma:", doc.page.margins.left + 16, currentY + 58);
 
       const signatureLineY = currentY + signatureBoxHeight - 22;
-      const signatureAreaHeight = 56;
-      const signatureAreaTop = signatureLineY - signatureAreaHeight + 8;
+      const signatureAreaHeight = 70;
+      const signatureAreaTop = signatureLineY - signatureAreaHeight + 10;
       const signatureAreaX = doc.page.margins.left + 150;
       const signatureAreaWidth = signatureBoxWidth - (signatureAreaX - doc.page.margins.left) - 16;
       const signatureBuffer = participant.id
@@ -901,7 +901,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
 
       if (signatureBuffer) {
         const maxSignatureWidth = signatureAreaWidth - 14;
-        const maxSignatureHeight = signatureAreaHeight - 8;
+        const maxSignatureHeight = signatureAreaHeight - 6;
         try {
           const imageDimensions = getImageDimensions(doc, signatureBuffer);
           const naturalWidth = imageDimensions?.width || maxSignatureWidth;
@@ -920,8 +920,8 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
             signatureAreaX + Math.max(0, (maxSignatureWidth - renderWidth) / 2);
           const renderY = Math.max(
             signatureAreaTop,
-            signatureLineY - renderHeight - 2
-          ); // apoyar la firma justo encima de la línea
+            signatureLineY - renderHeight + 8
+          ); // apoyar la firma cerca de la línea (ligeramente sobrepuesta)
 
           // Limpiar el área para evitar fantasmas detrás
           doc.save();
