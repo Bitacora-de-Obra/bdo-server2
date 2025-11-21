@@ -8,3 +8,4 @@ ALTER TABLE `LogEntry`
   FOREIGN KEY (`signedPdfAttachmentId`) REFERENCES `Attachment`(`id`)
   ON DELETE SET NULL ON UPDATE CASCADE;
 
+

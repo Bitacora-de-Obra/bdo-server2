@@ -81,7 +81,10 @@ scripts/users-to-import.json
 scripts/*restore*.sql
 scripts/*backup*.sql
 uploads/extracted-project.json
+<<<<<<< HEAD
 RENDER_ENV_VARS.sh
+=======
+>>>>>>> restore-fix-routes
 
 # Generated files
 *.generated.*

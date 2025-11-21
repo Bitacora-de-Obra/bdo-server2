@@ -13,7 +13,6 @@ interface PdfExportOptions {
   uploadsDir: string;
   baseUrl: string;
   template?: string;
-  tenantId?: string; // Para filtrar por tenant en queries internas
 }
 
 const sanitizeFileName = (value: string) =>
@@ -56,8 +55,12 @@ const parseRequiredSignatories = (value?: string | null) => {
   return [] as Array<{ name?: string; role?: string }>;
 };
 
-export const generateReportPdf = async (options: PdfExportOptions) => {
-  const { prisma, reportId, uploadsDir, baseUrl, tenantId } = options;
+export const generateReportPdf = async ({
+  prisma,
+  reportId,
+  uploadsDir,
+  baseUrl,
+}: PdfExportOptions) => {
   const report = await prisma.report.findUnique({
     where: { id: reportId },
     include: {
@@ -71,16 +74,7 @@ export const generateReportPdf = async (options: PdfExportOptions) => {
     throw new Error("Informe no encontrado.");
   }
 
-  // Validar tenant si está disponible
-  if (tenantId && (report as any).tenantId !== tenantId) {
-    throw new Error("Informe no encontrado.");
-  }
-
-  // Filtrar proyecto por tenant si está disponible
-  const projectWhere: any = tenantId ? { tenantId } : undefined;
-  const project = await prisma.project.findFirst({
-    where: projectWhere,
-  });
+  const project = await prisma.project.findFirst();
 
   const generatedDir = path.join(uploadsDir, GENERATED_SUBDIR);
   await fs.mkdir(generatedDir, { recursive: true });
@@ -232,20 +226,7 @@ export const generateReportPdf = async (options: PdfExportOptions) => {
   
   // Subir a Cloudflare R2 (o almacenamiento configurado)
   const storage = getStorage();
-  // Organizar PDFs generados igual que el expediente (tenants/{tenantId}/informes/año/mes/)
-  const now = new Date();
-  const year = now.getFullYear().toString();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  
-  // Construir path con tenant si está disponible
-  const pathParts: string[] = [];
-  if (options.tenantId) {
-    const normalizedTenantId = options.tenantId.replace(/[^a-zA-Z0-9_-]/g, "");
-    pathParts.push('tenants', normalizedTenantId);
-  }
-  pathParts.push("informes", year, month, fileName);
-  
-  const storagePath = path.posix.join(...pathParts);
+  const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
   await storage.save({
     path: storagePath,
     content: pdfBuffer,

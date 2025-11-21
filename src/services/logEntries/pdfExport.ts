@@ -70,6 +70,7 @@ interface LogEntryPdfOptions {
   logEntryId: string;
   uploadsDir: string;
   baseUrl: string;
+  tenantId?: string; // Para validar tenant (el log entry ya debería estar validado, pero esto es una capa adicional)
 }
 
 const sanitizeFileName = (value: string) =>
@@ -96,12 +97,8 @@ const formatDateTime = (input: Date) =>
     minute: "2-digit",
   }).format(input);
 
-export const generateLogEntryPdf = async ({
-  prisma,
-  logEntryId,
-  uploadsDir,
-  baseUrl,
-}: LogEntryPdfOptions) => {
+export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
+  const { prisma, logEntryId, uploadsDir, baseUrl, tenantId } = options;
   const entry = await prisma.logEntry.findUnique({
     where: { id: logEntryId },
     include: {
@@ -128,7 +125,12 @@ export const generateLogEntryPdf = async ({
               entity: true,
             }
           }
+<<<<<<< HEAD
         }
+=======
+        },
+        orderBy: { signedAt: "asc" },
+>>>>>>> restore-fix-routes
       },
       assignees: {
         select: {
@@ -151,7 +153,11 @@ export const generateLogEntryPdf = async ({
             }
           }
         },
+<<<<<<< HEAD
         orderBy: { assignedAt: "asc" },
+=======
+        orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+>>>>>>> restore-fix-routes
       },
     },
   });
@@ -778,6 +784,10 @@ export const generateLogEntryPdf = async ({
         participant.projectRole,
         participant.entity
       );
+<<<<<<< HEAD
+=======
+
+>>>>>>> restore-fix-routes
       const statusLabelBase =
         signatureTaskStatusLabels[participant.status] || participant.status;
       const statusDetail =
@@ -857,7 +867,25 @@ export const generateLogEntryPdf = async ({
   });
 
   const stats = await fs.stat(filePath);
+<<<<<<< HEAD
   const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
+=======
+  
+  // Organizar PDFs generados por tenant, año y mes
+  const now = new Date();
+  const year = now.getFullYear().toString();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  
+  // Construir path con tenant si está disponible
+  const pathParts: string[] = [];
+  if (options.tenantId) {
+    const normalizedTenantId = options.tenantId.replace(/[^a-zA-Z0-9_-]/g, "");
+    pathParts.push('tenants', normalizedTenantId);
+  }
+  pathParts.push("generated", "log-entries", year, month, fileName);
+  
+  const storagePath = path.posix.join(...pathParts);
+>>>>>>> restore-fix-routes
   
   // Upload file to storage
   const storage = getStorage();
