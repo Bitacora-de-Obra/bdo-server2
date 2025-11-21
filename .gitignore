@@ -15,6 +15,7 @@ pnpm-lock.yaml
 .env.test
 .env.production
 .env*.local
+.env.backup*
 
 # Build output
 dist/
@@ -80,6 +81,7 @@ scripts/users-to-import.json
 scripts/*restore*.sql
 scripts/*backup*.sql
 uploads/extracted-project.json
+RENDER_ENV_VARS.sh
 
 # Generated files
 *.generated.*
@@ -111,8 +113,11 @@ Thumbs.db
 desktop.ini
 
 # Backup files
+backups/
 *.bak
 *.backup
+*.sql
+backup_*.json
 *~
 *.orig
 
@@ -143,4 +148,3 @@ local-*
 # Documentation (opcional - descomentar si no quieres versionar docs)
 # *.md
 # docs/*.md
-

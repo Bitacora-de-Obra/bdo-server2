@@ -1,0 +1,233 @@
+/**
+ * Middleware para detectar y validar el tenant desde el subdominio
+ */
+
+import { Request, Response, NextFunction } from "express";
+import { PrismaClient } from "@prisma/client";
+import { logger } from "../logger";
+
+const prisma = new PrismaClient();
+
+// Extender el tipo Request para incluir tenant
+declare global {
+  namespace Express {
+    interface Request {
+      tenant?: {
+        id: string;
+        subdomain: string;
+        name: string;
+        domain: string;
+        isActive: boolean;
+      };
+    }
+  }
+}
+
+/**
+ * Lista de hosts conocidos de deployment que deben ser ignorados
+ * Estos no son tenants válidos
+ */
+const DEPLOYMENT_HOSTS = [
+  'bdo-server2.onrender.com',
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+];
+
+/**
+ * Verifica si un hostname es un host de deployment conocido
+ */
+function isDeploymentHost(hostname: string | undefined): boolean {
+  if (!hostname) return false;
+  const host = hostname.split(":")[0].toLowerCase();
+  return DEPLOYMENT_HOSTS.some(deploymentHost => 
+    host === deploymentHost || host.endsWith(`.${deploymentHost}`)
+  );
+}
+
+/**
+ * Extrae el subdominio del hostname
+ * Ejemplos:
+ *   "mutis.bdigitales.com" -> "mutis"
+ *   "www.bdigitales.com" -> null
+ *   "localhost:3000" -> null
+ *   "bdo-server2.onrender.com" -> null (host de deployment)
+ */
+function extractSubdomain(hostname: string | undefined): string | null {
+  if (!hostname) return null;
+
+  // Ignorar hosts de deployment conocidos
+  if (isDeploymentHost(hostname)) {
+    return null;
+  }
+
+  // Remover puerto si existe
+  const host = hostname.split(":")[0];
+
+  // Dividir por puntos
+  const parts = host.split(".");
+
+  // Si tiene al menos 3 partes (subdomain.domain.tld), extraer el subdominio
+  if (parts.length >= 3) {
+    return parts[0]; // Primer elemento es el subdominio
+  }
+
+  // Si tiene 2 partes y no es "www", podría ser un subdominio
+  // Pero por seguridad, solo aceptamos subdominios explícitos
+  return null;
+}
+
+/**
+ * Middleware para detectar el tenant desde el subdominio
+ * Agrega req.tenant al request si se encuentra un tenant válido
+ */
+export async function detectTenantMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    // Excluir endpoints públicos que no requieren tenant
+    // Estos endpoints usan tokens que ya identifican al usuario
+    const publicEndpoints = [
+      '/api/auth/forgot-password',
+      '/api/auth/reset-password',
+      '/api/auth/verify-email',
+    ];
+    
+    const isPublicEndpoint = publicEndpoints.some(endpoint => 
+      req.path.startsWith(endpoint)
+    );
+    
+    if (isPublicEndpoint) {
+      // Permitir continuar sin validar tenant para endpoints públicos
+      logger.debug("Endpoint público detectado, continuando sin validar tenant", {
+        path: req.path,
+      });
+      return next();
+    }
+
+    // Obtener el hostname del request
+    const host = Array.isArray(req.headers.host) 
+      ? req.headers.host[0] 
+      : req.headers.host || "";
+    const forwardedHost = Array.isArray(req.headers["x-forwarded-host"])
+      ? req.headers["x-forwarded-host"][0]
+      : req.headers["x-forwarded-host"] || "";
+    const origin = Array.isArray(req.headers.origin)
+      ? req.headers.origin[0]
+      : req.headers.origin || "";
+    const referer = Array.isArray(req.headers.referer)
+      ? req.headers.referer[0]
+      : req.headers.referer || "";
+    
+    // Priorizar origin sobre host para detectar el tenant desde el frontend
+    // El origin contiene el dominio completo desde donde se hace la petición
+    const hostname = origin || forwardedHost || host;
+    
+    // Intentar extraer subdominio del origin, referer, host o forwardedHost
+    let refererHostname: string | undefined = undefined;
+    if (referer) {
+      try {
+        refererHostname = new URL(referer).hostname;
+      } catch {
+        // Si referer no es una URL válida, ignorar
+      }
+    }
+    
+    // Extraer subdominio, priorizando origin y referer (que vienen del frontend)
+    // sobre el host (que puede ser el host de deployment)
+    const subdomain = extractSubdomain(origin) || 
+                      extractSubdomain(refererHostname) ||
+                      (isDeploymentHost(host) ? null : extractSubdomain(hostname));
+
+    if (!subdomain) {
+      // Si no hay subdominio, no es un request multi-tenant
+      // Permitir continuar sin tenant (para desarrollo local, requests sin subdominio,
+      // o requests directos a hosts de deployment como downloads)
+      // Los endpoints que requieren tenant validarán a través del recurso relacionado
+      logger.debug("No se detectó subdominio, continuando sin tenant", {
+        host,
+        origin,
+        referer: refererHostname,
+        isDeploymentHost: isDeploymentHost(host),
+      });
+      return next();
+    }
+
+    // Buscar tenant por subdomain
+    // Nota: Prisma Client se generará después de aplicar la migración
+    // Por ahora usamos $queryRaw como fallback
+    const tenant = await prisma.$queryRawUnsafe<Array<{
+      id: string;
+      subdomain: string;
+      name: string;
+      domain: string;
+      isActive: boolean;
+    }>>(
+      `SELECT id, subdomain, name, domain, isActive FROM Tenant WHERE subdomain = ? LIMIT 1`,
+      subdomain
+    ).then(results => results[0] || null);
+
+    if (!tenant) {
+      logger.warn("Tenant no encontrado", { subdomain, host, origin });
+      res.status(404).json({
+        error: "Tenant no encontrado",
+        message: `El subdominio "${subdomain}" no está registrado.`,
+      });
+      return;
+    }
+
+    if (!tenant.isActive) {
+      logger.warn("Tenant inactivo", { subdomain, tenantId: tenant.id });
+      res.status(403).json({
+        error: "Tenant inactivo",
+        message: `El tenant "${tenant.name}" está inactivo.`,
+      });
+      return;
+    }
+
+    // Agregar tenant al request
+    req.tenant = {
+      id: tenant.id,
+      subdomain: tenant.subdomain,
+      name: tenant.name,
+      domain: tenant.domain,
+      isActive: tenant.isActive,
+    };
+
+    logger.debug("Tenant detectado", {
+      tenantId: tenant.id,
+      subdomain: tenant.subdomain,
+      name: tenant.name,
+    });
+
+    next();
+  } catch (error) {
+    logger.error("Error al detectar tenant", { error });
+    res.status(500).json({
+      error: "Error interno del servidor",
+      message: "No se pudo detectar el tenant.",
+    });
+  }
+}
+
+/**
+ * Middleware que requiere que el request tenga un tenant
+ * Útil para endpoints que siempre requieren multi-tenancy
+ */
+export function requireTenantMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  if (!req.tenant) {
+    res.status(400).json({
+      error: "Tenant requerido",
+      message: "Este endpoint requiere un tenant válido.",
+    });
+    return;
+  }
+  next();
+}
+

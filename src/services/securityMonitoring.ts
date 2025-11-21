@@ -111,12 +111,15 @@ export const recordSecurityEvent = (
 ): void => {
   const context = resolveEventContext(req, details);
 
+  // Extraer tenantId del request si está disponible
+  const tenantId = (req as any)?.tenant?.id || details?.tenantId || undefined;
+
   const event: SecurityEvent = {
     type,
     severity,
     timestamp: new Date(),
     ...context,
-    details,
+    details: { ...details, tenantId },
   };
 
   // Agregar evento a la lista (FIFO)
@@ -126,7 +129,7 @@ export const recordSecurityEvent = (
   }
 
   // Persistir en base de datos de forma asíncrona
-  void persistSecurityEvent(event);
+  void persistSecurityEvent(event, tenantId);
 
   // Log del evento
   logger.warn('Security event recorded', {
@@ -252,6 +255,7 @@ type SecurityEventFilters = {
   severity?: SecurityEvent['severity'];
   ipAddress?: string;
   userId?: string;
+  tenantId?: string;
   startDate?: Date;
   endDate?: Date;
   limit?: number;
@@ -282,7 +286,7 @@ export const getSecurityEvents = async (
 /**
  * Obtiene estadísticas de seguridad
  */
-export const getSecurityStats = async (): Promise<{
+export const getSecurityStats = async (tenantId?: string): Promise<{
   totalEvents: number;
   eventsByType: Record<SecurityEventType, number>;
   eventsBySeverity: Record<SecurityEvent['severity'], number>;
@@ -292,30 +296,35 @@ export const getSecurityStats = async (): Promise<{
   const now = new Date();
   const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
+  // Construir where clause con tenantId si está disponible
+  const baseWhere: any = tenantId ? { tenantId } : {};
+  const criticalWhere: any = tenantId 
+    ? { severity: 'critical', createdAt: { gte: last24Hours }, tenantId }
+    : { severity: 'critical', createdAt: { gte: last24Hours } };
+
   try {
     const [totalEvents, eventsByTypeRows, eventsBySeverityRows, topIPsRows, recentCriticalEvents] =
       await Promise.all([
-        prisma.securityEventLog.count(),
+        prisma.securityEventLog.count({ where: baseWhere }),
         prisma.securityEventLog.groupBy({
           by: ['type'],
+          where: baseWhere,
           _count: { _all: true },
         }),
         prisma.securityEventLog.groupBy({
           by: ['severity'],
+          where: baseWhere,
           _count: { _all: true },
         }),
         prisma.securityEventLog.groupBy({
           by: ['ipAddress'],
-          where: { ipAddress: { not: null } },
+          where: { ...baseWhere, ipAddress: { not: null } },
           _count: { id: true },
           orderBy: { _count: { id: 'desc' } },
           take: 10,
         }),
         prisma.securityEventLog.count({
-          where: {
-            severity: 'critical',
-            createdAt: { gte: last24Hours },
-          },
+          where: criticalWhere,
         }),
       ]);
 
@@ -395,8 +404,11 @@ export const cleanupOldEvents = async (maxAgeDays: number = 30): Promise<void> =
   }
 };
 
-const persistSecurityEvent = async (event: SecurityEvent): Promise<void> => {
+const persistSecurityEvent = async (event: SecurityEvent, tenantId?: string): Promise<void> => {
   try {
+    // Extraer tenantId de los details si no se pasó directamente
+    const resolvedTenantId = tenantId || event.details?.tenantId || undefined;
+    
     await prisma.securityEventLog.create({
       data: {
         type: event.type,
@@ -409,8 +421,9 @@ const persistSecurityEvent = async (event: SecurityEvent): Promise<void> => {
         method: event.method,
         details: event.details ? (event.details as Prisma.InputJsonValue) : undefined,
         metadata: event.metadata ? (event.metadata as Prisma.InputJsonValue) : undefined,
+        tenantId: resolvedTenantId,
         createdAt: event.timestamp,
-      },
+      } as any,
     });
   } catch (error) {
     logger.error('Failed to persist security event', {
@@ -458,6 +471,10 @@ const buildSecurityEventWhere = (
     where.userId = filters.userId;
   }
 
+  if (filters.tenantId) {
+    where.tenantId = filters.tenantId;
+  }
+
   if (filters.startDate || filters.endDate) {
     where.createdAt = {};
     if (filters.startDate) {
@@ -488,6 +505,10 @@ const filterInMemoryEvents = (filters?: SecurityEventFilters): SecurityEvent[] =
 
   if (filters?.userId) {
     filtered = filtered.filter((e) => e.userId === filters.userId);
+  }
+
+  if (filters?.tenantId) {
+    filtered = filtered.filter((e) => e.details?.tenantId === filters.tenantId);
   }
 
   if (filters?.startDate) {

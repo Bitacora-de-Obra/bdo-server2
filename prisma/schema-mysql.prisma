@@ -29,6 +29,8 @@ enum EntryType {
   SAFETY
   ADMINISTRATIVE
   TECHNICAL
+  ENVIRONMENTAL
+  SOCIAL
 }
 
 enum EntryStatus {
@@ -132,20 +134,54 @@ enum ModificationType {
   OTHER
 }
 
+enum ChatbotFeedbackRating {
+  POSITIVE
+  NEGATIVE
+}
+
 enum CommunicationDirection {
   SENT
   RECEIVED
 }
 
+// Modelo para multi-tenancy: cada cliente tiene su propio subdominio
+model Tenant {
+  id        String   @id @default(uuid())
+  subdomain String   @unique // "mutis", "proyecto2", etc. - debe ser único
+  name      String // "Proyecto Mutis", "Proyecto XYZ", etc.
+  domain    String // "mutis.bdigitales.com" - dominio completo
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones - todas las entidades principales pertenecen a un tenant
+  projects              Project[]
+  users                 User[]
+  logEntries            LogEntry[]
+  controlPoints         ControlPoint[]
+  reports               Report[]
+  actas                 Acta[]
+  costActas             CostActa[]
+  workActas             WorkActa[]
+  communications        Communication[]
+  contractModifications ContractModification[]
+  projectTasks          ProjectTask[]
+  drawings              Drawing[]
+  securityEventLogs     SecurityEventLog[]
+
+  @@index([subdomain])
+  @@index([isActive])
+}
+
 model User {
   id              String    @id @default(uuid())
-  email           String    @unique
+  email           String // Ya no es único globalmente, solo dentro del tenant
   password        String
   fullName        String
   projectRole     UserRole
   appRole         AppRole
-  entity          String?   // IDU, INTERVENTORIA, CONTRATISTA
-  cargo           String?   // Cargo o posición del usuario
+  entity          String? // IDU, INTERVENTORIA, CONTRATISTA
+  cargo           String? // Cargo o posición del usuario
   avatarUrl       String?
   status          String // "active" | "inactive"
   canDownload     Boolean   @default(true) // Permiso para descargar archivos
@@ -155,111 +191,143 @@ model User {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  // Multi-tenancy: cada usuario pertenece a un tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
   // Relaciones
-  logEntries              LogEntry[]                   @relation("Author")
-  assignedTo              LogEntry[]                   @relation("Assignees")
-  comments                Comment[]
-  signatures              Signature[]
-  communications          Communication[]              @relation("Uploader")
-  statusChanges           CommunicationStatusHistory[]
-  photoEntries            PhotoEntry[]
-  responsibleFor          Commitment[]
-  observations            Observation[]
-  reports                 Report[]
-  drawingVersions         DrawingVersion[]
-  logEntryHistory         LogEntryHistory[]
-  auditLogs               AuditLog[]
-  emailVerificationTokens EmailVerificationToken[]
-  passwordResetTokens     PasswordResetToken[]
-  assignedCommunications  Communication[]             @relation("CommunicationAssignedTo")
-  chatbotUsage            ChatbotUsage[]
-  userSignatures          UserSignature[]
-  documentSignatureLogs   DocumentSignatureLog[]
-  signatureTasks          LogEntrySignatureTask[]
-  contractorReviewedEntries LogEntry[] @relation("ContractorReviewer")
-  notifications             Notification[] @relation("NotificationRecipient")
+  logEntries                LogEntry[]                   @relation("Author")
+  assignedTo                LogEntry[]                   @relation("Assignees")
+  comments                  Comment[]
+  signatures                Signature[]
+  communications            Communication[]              @relation("Uploader")
+  statusChanges             CommunicationStatusHistory[]
+  photoEntries              PhotoEntry[]
+  responsibleFor            Commitment[]
+  observations              Observation[]
+  reports                   Report[]
+  drawingVersions           DrawingVersion[]
+  logEntryHistory           LogEntryHistory[]
+  auditLogs                 AuditLog[]
+  emailVerificationTokens   EmailVerificationToken[]
+  passwordResetTokens       PasswordResetToken[]
+  assignedCommunications    Communication[]              @relation("CommunicationAssignedTo")
+  chatbotUsage              ChatbotUsage[]
+  chatbotInteractions       ChatbotInteraction[]
+  userSignatures            UserSignature[]
+  documentSignatureLogs     DocumentSignatureLog[]
+  signatureTasks            LogEntrySignatureTask[]
+  reviewTasks               LogEntryReviewTask[]
+  contractorReviewedEntries LogEntry[]                   @relation("ContractorReviewer")
+  notifications             Notification[]               @relation("NotificationRecipient")
+
+  // Email único por tenant (composite unique)
+  @@unique([email, tenantId])
+  @@index([tenantId])
+  @@index([email])
 }
 
 model Project {
-  id                        String         @id @default(uuid())
-  name                      String
-  contractId                String         @unique
-  object                    String
-  contractorName            String
-  supervisorName            String
-  initialValue              Float
-  startDate                 DateTime
-  initialEndDate            DateTime
-  civs                      String?        @db.Text // CIVs del corredor vial (JSON array) - DEPRECATED: usar CorredorVialElement
-  corredorVialElements      CorredorVialElement[]
-  keyPersonnel              KeyPersonnel[]
-  logEntries                LogEntry[]
-  interventoriaContractId   String
+  id                      String                @id @default(uuid())
+  name                    String
+  contractId              String // Ya no es único globalmente, solo dentro del tenant
+  object                  String                @db.Text
+  contractorName          String
+  supervisorName          String
+  initialValue            Float
+  startDate               DateTime
+  initialEndDate          DateTime
+  civs                    String?               @db.Text // CIVs del corredor vial (JSON array) - DEPRECATED: usar CorredorVialElement
+  corredorVialElements    CorredorVialElement[]
+  keyPersonnel            KeyPersonnel[]
+  logEntries              LogEntry[]
+  projectTasks            ProjectTask[]
+  interventoriaContractId String
+
+  // Multi-tenancy: cada proyecto pertenece a un tenant
+  tenantId                  String
+  tenant                    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   interventoriaInitialValue Float
   technicalSupervisorName   String
-  createdAt                 DateTime       @default(now())
-  updatedAt                 DateTime       @updatedAt
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  // ContractId único por tenant (composite unique)
+  @@unique([contractId, tenantId])
+  @@index([tenantId])
 }
 
 model CorredorVialElement {
-  id            String   @id @default(uuid())
-  civ           String   // CIV
-  ubicacion     String   @db.Text // UBICACIÓN
-  pkId          String   // PK_ID
-  tipoElemento  String   // TIPO DE ELEMENTO
-  costado       String   // COSTADO
-  sortOrder     Int      @default(0) // Orden de visualización
-  project       Project  @relation(fields: [projectId], references: [id])
-  projectId     String
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String   @id @default(uuid())
+  civ          String // CIV
+  ubicacion    String   @db.Text // UBICACIÓN
+  pkId         String // PK_ID
+  tipoElemento String // TIPO DE ELEMENTO
+  costado      String // COSTADO
+  sortOrder    Int      @default(0) // Orden de visualización
+  project      Project  @relation(fields: [projectId], references: [id])
+  projectId    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([projectId, sortOrder])
 }
 
 model KeyPersonnel {
-  id        String  @id @default(uuid())
-  name      String
-  role      String
-  company   String
-  email     String
-  phone     String
-  project   Project @relation(fields: [projectId], references: [id])
-  projectId String
+  id         String  @id @default(uuid())
+  name       String
+  role       String
+  company    String
+  email      String
+  phone      String
+  dedication String? // Porcentaje de dedicación (ej: "100%", "50%")
+  sortOrder  Int     @default(0) // Orden de visualización
+  project    Project @relation(fields: [projectId], references: [id])
+  projectId  String
+
+  @@index([projectId, sortOrder])
 }
 
 model Communication {
-  id              String                       @id @default(uuid())
-  radicado        String                       @unique
-  subject         String
-  description     String
-  senderEntity    String
-  senderName      String
-  senderTitle     String
-  recipientEntity String
-  recipientName   String
-  recipientTitle  String
-  signerName      String
-  sentDate        DateTime
-  dueDate         DateTime?
-  deliveryMethod  DeliveryMethod
-  notes           String?
-  status          CommunicationStatus
-  direction       CommunicationDirection
+  id               String                 @id @default(uuid())
+  radicado         String // Ya no es único globalmente, solo dentro del tenant
+  subject          String
+  description      String
+  senderEntity     String
+  senderName       String
+  senderTitle      String
+  recipientEntity  String
+  recipientName    String
+  recipientTitle   String
+  signerName       String
+  sentDate         DateTime
+  dueDate          DateTime?
+  deliveryMethod   DeliveryMethod
+  notes            String?
+  status           CommunicationStatus
+  direction        CommunicationDirection
   requiresResponse Boolean                @default(false)
   responseDueDate  DateTime?
-  uploader        User                         @relation("Uploader", fields: [uploaderId], references: [id])
-  uploaderId      String
-  assignee        User?                        @relation("CommunicationAssignedTo", fields: [assigneeId], references: [id])
-  assigneeId      String?
-  assignedAt      DateTime?
-  parent          Communication?               @relation("Replies", fields: [parentId], references: [id])
-  parentId        String?
-  replies         Communication[]              @relation("Replies")
-  statusHistory   CommunicationStatusHistory[]
-  attachments     Attachment[]
-  createdAt       DateTime                     @default(now())
-  updatedAt       DateTime                     @updatedAt
+
+  // Multi-tenancy: cada comunicación pertenece a un tenant
+  tenantId      String
+  tenant        Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  uploader      User                         @relation("Uploader", fields: [uploaderId], references: [id])
+  uploaderId    String
+  assignee      User?                        @relation("CommunicationAssignedTo", fields: [assigneeId], references: [id])
+  assigneeId    String?
+  assignedAt    DateTime?
+  parent        Communication?               @relation("Replies", fields: [parentId], references: [id])
+  parentId      String?
+  replies       Communication[]              @relation("Replies")
+  statusHistory CommunicationStatusHistory[]
+  attachments   Attachment[]
+  createdAt     DateTime                     @default(now())
+  updatedAt     DateTime                     @updatedAt
+
+  // Radicado único por tenant (composite unique)
+  @@unique([radicado, tenantId])
+  @@index([tenantId])
 }
 
 model AppSetting {
@@ -288,6 +356,30 @@ model AuditLog {
   diff       Json?
 }
 
+model SecurityEventLog {
+  id        String   @id @default(uuid())
+  type      String   @db.VarChar(64)
+  severity  String   @db.VarChar(32)
+  ipAddress String?  @db.VarChar(128)
+  userAgent String?  @db.VarChar(512)
+  userId    String?  @db.VarChar(191)
+  email     String?  @db.VarChar(255)
+  path      String?  @db.VarChar(255)
+  method    String?  @db.VarChar(16)
+  details   Json?
+  metadata  Json?
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@index([type])
+  @@index([severity])
+  @@index([createdAt])
+  @@index([userId])
+  @@index([ipAddress])
+  @@index([tenantId])
+}
+
 model CommunicationStatusHistory {
   id              String        @id @default(uuid())
   status          String // CommunicationStatus enum
@@ -299,18 +391,26 @@ model CommunicationStatusHistory {
 }
 
 model ContractModification {
-  id                 String           @id @default(uuid())
-  number             String           @unique
-  type               ModificationType
-  date               DateTime
-  value              Float?
-  days               Int?
-  justification      String
-  affectsFiftyPercent Boolean?        @default(true)
-  attachment         Attachment?      @relation(fields: [attachmentId], references: [id])
-  attachmentId       String?          @unique
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
+  id                  String           @id @default(uuid())
+  number              String // Ya no es único globalmente, solo dentro del tenant
+  type                ModificationType
+  date                DateTime
+  value               Float?
+  days                Int?
+  justification       String
+  affectsFiftyPercent Boolean?         @default(true)
+  attachment          Attachment?      @relation(fields: [attachmentId], references: [id])
+  attachmentId        String?          @unique
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  // Multi-tenancy: cada modificación de contrato pertenece a un tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  // Number único por tenant (composite unique)
+  @@unique([number, tenantId])
+  @@index([tenantId])
 }
 
 model WeeklyReport {
@@ -329,67 +429,76 @@ model WeeklyReport {
 
 // Resto de modelos existentes...
 model LogEntry {
-  id                String            @id @default(uuid())
-  folioNumber       Int               @unique @default(autoincrement())
-  title             String
-  description       String
-  entryDate         DateTime
-  activitiesPerformed     String @default("")
-  materialsUsed           String @default("")
-  workforce               String @default("")
-  weatherConditions       String @default("")
-  additionalObservations  String @default("")
-  contractorPersonnel     String?
-  interventoriaPersonnel  String?
-  equipmentResources      String?
-  executedActivities      String?
-  executedQuantities      String?
-  scheduledActivities     String?
-  qualityControls         String?
-  materialsReceived       String?
-  safetyNotes             String?
-  projectIssues           String?
-  siteVisits              String?
-  weatherReport           String?
-  contractorObservations  String?
-  interventoriaObservations String?
-  safetyFindings          String?
-  safetyContractorResponse String?
-  environmentFindings     String?
+  id                            String                  @id @default(uuid())
+  folioNumber                   Int // Ya no es único globalmente, solo dentro del tenant (autoincrement por tenant)
+  title                         String
+  description                   String
+  entryDate                     DateTime
+  activitiesPerformed           String                  @default("")
+  materialsUsed                 String                  @default("")
+  workforce                     String                  @default("")
+  weatherConditions             String                  @default("")
+  additionalObservations        String                  @default("")
+  contractorPersonnel           Json?
+  interventoriaPersonnel        Json?
+  equipmentResources            Json?
+  executedActivities            Json?
+  executedQuantities            Json?
+  scheduledActivities           Json?
+  qualityControls               Json?
+  materialsReceived             Json?
+  safetyNotes                   Json?
+  projectIssues                 Json?
+  siteVisits                    Json?
+  weatherReport                 Json?
+  contractorObservations        String?
+  interventoriaObservations     String?
+  safetyFindings                String?
+  safetyContractorResponse      String?
+  environmentFindings           String?
   environmentContractorResponse String?
-  socialActivities        Json?
-  socialObservations      String?
-  socialContractorResponse String?
-  socialPhotoSummary      String?
-  locationDetails         String @default("")
-  scheduleDay             Int? @default(0)
-  type              EntryType
-  subject           String
-  location          String
-  activityStartDate DateTime
-  activityEndDate   DateTime
-  isConfidential    Boolean           @default(false)
-  status            EntryStatus
-  author            User              @relation("Author", fields: [authorId], references: [id])
-  authorId          String
-  project           Project           @relation(fields: [projectId], references: [id])
-  projectId         String
-  assignees         User[]            @relation("Assignees")
-  comments          Comment[]
-  attachments       Attachment[]
-  signatures        Signature[]
-  history           LogEntryHistory[]
-  signatureTasks    LogEntrySignatureTask[]
-  reviewTasks       LogEntryReviewTask[]
-  contractorReviewCompleted   Boolean   @default(false)
-  contractorReviewCompletedAt DateTime?
-  contractorReviewer          User?     @relation("ContractorReviewer", fields: [contractorReviewerId], references: [id])
-  contractorReviewerId        String?
-  documentSignatureLogs DocumentSignatureLog[]
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
-
-  @@unique([projectId, entryDate])
+  socialActivities              Json?
+  socialObservations            String?
+  socialContractorResponse      String?
+  socialPhotoSummary            String?
+  locationDetails               String                  @default("")
+  scheduleDay                   Int?                    @default(0)
+  type                          EntryType
+  subject                       String
+  location                      String
+  activityStartDate             DateTime
+  activityEndDate               DateTime
+  isConfidential                Boolean                 @default(false)
+  status                        EntryStatus
+  author                        User                    @relation("Author", fields: [authorId], references: [id])
+  authorId                      String
+  project                       Project                 @relation(fields: [projectId], references: [id])
+  projectId                     String
+  assignees                     User[]                  @relation("Assignees")
+  comments                      Comment[]
+  attachments                   Attachment[]
+  signedPdf                     Attachment?              @relation("LogEntrySignedPdf", fields: [signedPdfAttachmentId], references: [id])
+  signedPdfAttachmentId         String?
+  signatures                    Signature[]
+  history                       LogEntryHistory[]
+  signatureTasks                LogEntrySignatureTask[]
+  reviewTasks                   LogEntryReviewTask[]
+  contractorReviewCompleted     Boolean                 @default(false)
+  contractorReviewCompletedAt   DateTime?
+  contractorReviewer            User?                   @relation("ContractorReviewer", fields: [contractorReviewerId], references: [id])
+  contractorReviewerId          String?
+  documentSignatureLogs         DocumentSignatureLog[]
+  createdAt                     DateTime                @default(now())
+  updatedAt                     DateTime                @updatedAt
+  
+  // Multi-tenancy: cada log entry pertenece a un tenant
+  tenantId String
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  
+  // FolioNumber único por tenant (composite unique)
+  @@unique([folioNumber, tenantId])
+  @@index([tenantId])
+  @@unique([projectId, entryDate, type])
   @@index([contractorReviewerId])
 }
 
@@ -406,16 +515,16 @@ model LogEntryHistory {
 }
 
 model Comment {
-  id          String       @id @default(uuid())
-  content     String
-  timestamp   DateTime     @default(now())
-  author      User         @relation(fields: [authorId], references: [id])
-  authorId    String
-  logEntry    LogEntry?    @relation(fields: [logEntryId], references: [id])
-  logEntryId  String?
-  drawing     Drawing?     @relation(fields: [drawingId], references: [id])
-  drawingId   String?
-  attachments Attachment[]
+  id            String         @id @default(uuid())
+  content       String
+  timestamp     DateTime       @default(now())
+  author        User           @relation(fields: [authorId], references: [id])
+  authorId      String
+  logEntry      LogEntry?      @relation(fields: [logEntryId], references: [id])
+  logEntryId    String?
+  drawing       Drawing?       @relation(fields: [drawingId], references: [id])
+  drawingId     String?
+  attachments   Attachment[]
   notifications Notification[] @relation("CommentMention")
 }
 
@@ -433,40 +542,44 @@ model Signature {
 }
 
 model UserSignature {
-  id        String   @id @default(uuid())
-  userId    String
-  signature String?  // Base64 encoded signature image
-  fileName  String?
-  mimeType  String?
-  size      Int?
-  url       String?
-  hash      String?
+  id          String   @id @default(uuid())
+  userId      String
+  signature   String? // Base64 encoded signature image
+  fileName    String?
+  mimeType    String?
+  size        Int?
+  url         String?
+  hash        String?
   storagePath String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId])
   @@index([userId])
 }
 
 model DocumentSignatureLog {
-  id              String   @id @default(uuid())
-  logEntryId      String?
-  originalPdfId   String?
-  signedPdfId     String?
-  signerId        String?
-  documentType    String?
-  documentId      String?
+  id                 String      @id @default(uuid())
+  logEntryId         String?
+  originalPdfId      String?
+  signedPdfId        String?
+  signerId           String?
+  documentType       String?
+  documentId         String?
   signedAttachmentId String?
-  signedAt        DateTime @default(now())
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @default(now()) @updatedAt
-  logEntry        LogEntry? @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
-  originalPdf     Attachment? @relation("OriginalPdf", fields: [originalPdfId], references: [id])
-  signedPdf       Attachment? @relation("SignedPdf", fields: [signedPdfId], references: [id])
-  signedAttachment Attachment? @relation("SignedAttachment", fields: [signedAttachmentId], references: [id])
-  signer          User?     @relation(fields: [signerId], references: [id])
+  originalHash       String?
+  signedHash         String?
+  ipAddress          String?
+  consentStatement   String?
+  signedAt           DateTime    @default(now())
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @default(now()) @updatedAt
+  logEntry           LogEntry?   @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+  originalPdf        Attachment? @relation("OriginalPdf", fields: [originalPdfId], references: [id])
+  signedPdf          Attachment? @relation("SignedPdf", fields: [signedPdfId], references: [id])
+  signedAttachment   Attachment? @relation("SignedAttachment", fields: [signedAttachmentId], references: [id])
+  signer             User?       @relation(fields: [signerId], references: [id])
 
   @@index([logEntryId])
   @@index([signerId])
@@ -476,16 +589,16 @@ model DocumentSignatureLog {
 }
 
 model LogEntrySignatureTask {
-  id        String      @id @default(uuid())
+  id         String              @id @default(uuid())
   logEntryId String
-  signerId  String
-  status    SignatureTaskStatus @default(PENDING)
+  signerId   String
+  status     SignatureTaskStatus @default(PENDING)
   assignedAt DateTime?
-  signedAt  DateTime?
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
-  logEntry  LogEntry    @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
-  signer    User        @relation(fields: [signerId], references: [id])
+  signedAt   DateTime?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+  logEntry   LogEntry            @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+  signer     User                @relation(fields: [signerId], references: [id])
 
   @@unique([logEntryId, signerId])
   @@index([logEntryId])
@@ -497,42 +610,65 @@ enum SignatureTaskStatus {
   SIGNED
 }
 
+model LogEntryReviewTask {
+  id          String           @id @default(uuid())
+  logEntryId  String
+  reviewerId  String
+  status      ReviewTaskStatus @default(PENDING)
+  assignedAt  DateTime?
+  completedAt DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  logEntry    LogEntry         @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+  reviewer    User             @relation(fields: [reviewerId], references: [id])
+
+  @@unique([logEntryId, reviewerId])
+  @@index([logEntryId])
+  @@index([reviewerId])
+}
+
+enum ReviewTaskStatus {
+  PENDING
+  COMPLETED
+}
+
 model Attachment {
-  id              String                @id @default(uuid())
-  fileName        String
-  url             String
-  size            Int
-  type            String
-  storagePath     String?
-  logEntry        LogEntry?             @relation(fields: [logEntryId], references: [id])
-  logEntryId      String?
-  communication   Communication?        @relation(fields: [communicationId], references: [id])
-  communicationId String?
-  acta            Acta?                 @relation(fields: [actaId], references: [id])
-  actaId          String?
-  costActa        CostActa?             @relation(fields: [costActaId], references: [id])
-  costActaId      String?
-  report          Report?               @relation(fields: [reportId], references: [id])
-  reportId        String?
-  comment         Comment?              @relation(fields: [commentId], references: [id])
-  commentId       String?
-  contractMod     ContractModification? @relation()
-  workActa        WorkActa?             @relation(fields: [workActaId], references: [id])
-  workActaId      String?
-  originalPdfs    DocumentSignatureLog[] @relation("OriginalPdf")
-  signedPdfs      DocumentSignatureLog[] @relation("SignedPdf")
+  id                String                 @id @default(uuid())
+  fileName          String
+  url               String
+  size              Int
+  type              String
+  storagePath       String?
+  logEntry          LogEntry?              @relation(fields: [logEntryId], references: [id])
+  logEntryId        String?
+  communication     Communication?         @relation(fields: [communicationId], references: [id])
+  communicationId   String?
+  acta              Acta?                  @relation(fields: [actaId], references: [id])
+  actaId            String?
+  costActa          CostActa?              @relation(fields: [costActaId], references: [id])
+  costActaId        String?
+  report            Report?                @relation(fields: [reportId], references: [id])
+  reportId          String?
+  comment           Comment?               @relation(fields: [commentId], references: [id])
+  commentId         String?
+  contractMod       ContractModification?  @relation()
+  workActa          WorkActa?              @relation(fields: [workActaId], references: [id])
+  workActaId        String?
+  originalPdfs      DocumentSignatureLog[] @relation("OriginalPdf")
+  signedPdfs        DocumentSignatureLog[] @relation("SignedPdf")
   signedAttachments DocumentSignatureLog[] @relation("SignedAttachment")
-  weeklyReport    WeeklyReport?         @relation(fields: [weeklyReportId], references: [id])
-  weeklyReportId  String?
-  photoEntry      PhotoEntry?           @relation("PhotoAttachment")
-  createdAt       DateTime              @default(now())
+  weeklyReport      WeeklyReport?          @relation(fields: [weeklyReportId], references: [id])
+  weeklyReportId    String?
+  photoEntry        PhotoEntry?            @relation("PhotoAttachment")
+  signedLogEntries  LogEntry[]             @relation("LogEntrySignedPdf")
+  createdAt         DateTime               @default(now())
 
   @@index([workActaId])
 }
 
 model Acta {
   id                      String       @id @default(uuid())
-  number                  String       @unique
+  number                  String // Ya no es único globalmente, solo dentro del tenant
   title                   String
   date                    DateTime
   area                    ActaArea
@@ -544,6 +680,14 @@ model Acta {
   requiredSignatoriesJson String?
   createdAt               DateTime     @default(now())
   updatedAt               DateTime     @updatedAt
+
+  // Multi-tenancy: cada acta pertenece a un tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  // Number único por tenant (composite unique)
+  @@unique([number, tenantId])
+  @@index([tenantId])
 }
 
 model Commitment {
@@ -560,22 +704,30 @@ model Commitment {
 }
 
 model CostActa {
-  id                      String         @id @default(uuid())
-  number                  String         @unique
-  period                  String
-  submissionDate          DateTime
-  approvalDate            DateTime?
-  paymentDueDate          DateTime?
-  billedAmount            Float
-  totalContractValue      Float
-  periodValue             Float?         // Valor del periodo
-  advancePaymentPercentage Float?        // % de anticipo amortizado
-  status                  CostActaStatus
-  relatedProgress         String?
-  observations            Observation[]
-  attachments             Attachment[]
-  createdAt               DateTime       @default(now())
-  updatedAt               DateTime       @updatedAt
+  id                       String         @id @default(uuid())
+  number                   String // Ya no es único globalmente, solo dentro del tenant
+  period                   String
+  submissionDate           DateTime
+  approvalDate             DateTime?
+  paymentDueDate           DateTime?
+  billedAmount             Float
+  totalContractValue       Float
+  periodValue              Float? // Valor del periodo
+  advancePaymentPercentage Float? // % de anticipo amortizado
+  status                   CostActaStatus
+  relatedProgress          String?
+  observations             Observation[]
+  attachments              Attachment[]
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
+
+  // Multi-tenancy: cada acta de costo pertenece a un tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  // Number único por tenant (composite unique)
+  @@unique([number, tenantId])
+  @@index([tenantId])
 }
 
 model Observation {
@@ -609,19 +761,31 @@ model Report {
   createdAt               DateTime     @default(now())
   updatedAt               DateTime     @updatedAt
 
-  @@unique([number, version])
+  // Multi-tenancy: cada reporte pertenece a un tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  // Number + version único por tenant (composite unique)
+  @@unique([number, version, tenantId])
+  @@index([tenantId])
 }
 
 model Drawing {
   id         String            @id @default(uuid())
-  code       String            @unique
+  code       String
   title      String
   discipline DrawingDiscipline
   status     DrawingStatus
+  tenantId   String
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   versions   DrawingVersion[]
   comments   Comment[]
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
+
+  // Code único por tenant (composite unique)
+  @@unique([code, tenantId])
+  @@index([tenantId])
 }
 
 model DrawingVersion {
@@ -659,10 +823,17 @@ model ControlPoint {
   photos      PhotoEntry[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
+
+  // Multi-tenancy: cada control point pertenece a un tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
 }
 
 model ProjectTask {
   id           String   @id @default(uuid())
+  taskId       String // Ya no es único globalmente, solo dentro del tenant
   name         String   @db.VarChar(512)
   startDate    DateTime
   endDate      DateTime
@@ -671,30 +842,49 @@ model ProjectTask {
   isSummary    Boolean  @default(false)
   outlineLevel Int      @default(1)
   dependencies String?  @db.Text // Stored as JSON array of task IDs
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+
+  parentId String?
+  parent   ProjectTask?  @relation("TaskHierarchy", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  children ProjectTask[] @relation("TaskHierarchy")
+
+  // Multi-tenancy: cada tarea del proyecto pertenece a un tenant
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  successors   ProjectTask[] @relation("TaskDependencies")
+  predecessors ProjectTask[] @relation("TaskDependencies")
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // TaskId único por tenant (composite unique)
+  @@unique([taskId, tenantId])
+  @@index([tenantId])
 }
 
 model ContractItem {
-  id               String         @id @default(uuid())
-  itemCode         String         @unique
-  description      String         @db.Text
+  id               String                  @id @default(uuid())
+  itemCode         String                  @unique
+  description      String                  @db.Text
   unit             String
   unitPrice        Float
   contractQuantity Float
-  executedQuantity Float          @default(0) // Cantidad ejecutada total (suma de todas las ejecuciones por PK_ID)
+  executedQuantity Float                   @default(0) // Cantidad ejecutada total (suma de todas las ejecuciones por PK_ID)
   executions       ContractItemExecution[] // Ejecuciones por PK_ID
   workActaItems    WorkActaItem[]
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
 }
 
 model ContractItemExecution {
   id             String       @id @default(uuid())
   contractItemId String
   contractItem   ContractItem @relation(fields: [contractItemId], references: [id])
-  pkId           String       // PK_ID del corredor vial
-  quantity       Float        // Cantidad ejecutada para este PK_ID
+  pkId           String // PK_ID del corredor vial
+  quantity       Float // Cantidad ejecutada para este PK_ID
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -705,16 +895,24 @@ model ContractItemExecution {
 
 model WorkActa {
   id          String         @id @default(uuid())
-  number      String         @unique
+  number      String // Ya no es único globalmente, solo dentro del tenant
   period      String
   date        DateTime
   status      WorkActaStatus
-  grossValue  Float?         // Valor bruto del acta
-  description String?        // Objeto/descripción del acta
+  grossValue  Float? // Valor bruto del acta
+  description String? // Objeto/descripción del acta
   items       WorkActaItem[]
   attachments Attachment[]
   createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+
+  // Multi-tenancy: cada acta de obra pertenece a un tenant
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  updatedAt DateTime @updatedAt
+
+  // Number único por tenant (composite unique)
+  @@unique([number, tenantId])
+  @@index([tenantId])
 }
 
 model WorkActaItem {
@@ -758,35 +956,62 @@ model PasswordResetToken {
 }
 
 model ChatbotUsage {
-  id          String   @id @default(uuid())
-  userId      String
-  date        DateTime @db.Date
-  queryCount  Int      @default(0)
-  cost        Decimal  @default(0.00) @db.Decimal(10, 4)
-  model       String?
-  tokensUsed  Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String   @id @default(uuid())
+  userId     String
+  date       DateTime @db.Date
+  queryCount Int      @default(0)
+  cost       Decimal  @default(0.00) @db.Decimal(10, 4)
+  model      String?
+  tokensUsed Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, date])
   @@index([userId])
   @@index([date])
 }
 
+model ChatbotInteraction {
+  id               String           @id @default(uuid())
+  userId           String
+  question         String
+  answer           String
+  model            String
+  tokensPrompt     Int?
+  tokensCompletion Int?
+  selectedSections Json?
+  metadata         Json?
+  createdAt        DateTime         @default(now())
+  feedback         ChatbotFeedback?
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model ChatbotFeedback {
+  id            String                @id @default(uuid())
+  interactionId String                @unique
+  rating        ChatbotFeedbackRating
+  comment       String?
+  metadata      Json?
+  createdAt     DateTime              @default(now())
+  interaction   ChatbotInteraction    @relation(fields: [interactionId], references: [id], onDelete: Cascade)
+}
+
 model Notification {
-  id          String   @id @default(uuid())
-  type        String   // "mention" | "commitment_due" | "log_entry_assigned" | "communication_assigned"
-  message     String
-  isRead      Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  recipient   User     @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
-  recipientId String
-  comment     Comment? @relation("CommentMention", fields: [commentId], references: [id], onDelete: Cascade)
-  commentId   String?
+  id              String   @id @default(uuid())
+  type            String // "mention" | "commitment_due" | "log_entry_assigned" | "communication_assigned"
+  message         String
+  isRead          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  recipient       User     @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  recipientId     String
+  comment         Comment? @relation("CommentMention", fields: [commentId], references: [id], onDelete: Cascade)
+  commentId       String?
   relatedItemType String? // "logEntry" | "drawing" | "acta" | "communication"
   relatedItemId   String?
-  relatedView    String? // "logbook" | "drawings" | "minutes" | "communications"
+  relatedView     String? // "logbook" | "drawings" | "minutes" | "communications"
 
   @@index([recipientId])
   @@index([isRead])

@@ -4,7 +4,12 @@ import bcrypt from "bcryptjs";
 import { randomBytes, createHash } from "crypto";
 import { CookieOptions } from "express";
 import { authMiddleware, refreshAuthMiddleware, createAccessToken, createRefreshToken, AuthRequest } from "../middleware/auth";
-import { sendEmailVerificationEmail, sendPasswordResetEmail, isEmailServiceConfigured } from "../services/email";
+import {
+  sendEmailVerificationEmail,
+  sendPasswordResetEmail,
+  isEmailServiceConfigured,
+} from "../services/email";
+import { getRequestBaseUrl } from "../utils/requestUrl";
 import { roleMap } from "../utils/enum-maps";
 // Shared constants - will be imported from utils if needed
 
@@ -63,12 +68,20 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
         return res.status(400).json({ error: passwordError });
       }
 
-      const existingUser = await prisma.user.findUnique({
-        where: { email: normalizedEmail },
+      // Buscar usuario por email y tenantId (email es único por tenant)
+      const tenantId = (req as any).tenant?.id;
+      const existingUser = await prisma.user.findFirst({
+        where: tenantId 
+          ? { email: normalizedEmail, tenantId } as any
+          : { email: normalizedEmail } as any,
       });
 
       if (existingUser) {
         return res.status(409).json({ error: "El email ya está registrado." });
+      }
+
+      if (!tenantId) {
+        return res.status(400).json({ error: "No se pudo determinar el tenant." });
       }
 
       const hashedPassword = await bcrypt.hash(password, 12);
@@ -93,7 +106,8 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
           status: "active",
           tokenVersion: 0,
           emailVerifiedAt: isEmailServiceConfigured() ? null : new Date(),
-        },
+          tenantId,
+        } as any,
       });
 
       let verificationEmailSent = false;
@@ -202,8 +216,12 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
         return res.status(400).json({ error: "Email y contraseña son requeridos." });
       }
 
-      const user = await prisma.user.findUnique({
-        where: { email },
+      // Buscar usuario por email y tenantId (email es único por tenant)
+      const tenantId = (req as any).tenant?.id;
+      const user = await prisma.user.findFirst({
+        where: tenantId 
+          ? { email, tenantId } as any
+          : { email } as any,
       });
 
       console.log('User found:', user ? 'yes' : 'no');
@@ -244,7 +262,8 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
       
       return res.json({ 
         accessToken,
-        user: userWithoutPassword
+        user: userWithoutPassword,
+        forcePasswordChange: Boolean(user.mustUpdatePassword),
       });
 
     } catch (error) {
@@ -317,7 +336,7 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
 
   // Forgot password
   router.post("/forgot-password", async (req, res) => {
-    const { email } = req.body;
+    const { email, baseUrl: requestedBaseUrl } = req.body || {};
 
     if (!email) {
       return res
@@ -328,8 +347,12 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
     const normalizedEmail = String(email).trim().toLowerCase();
 
     try {
-      const user = await prisma.user.findUnique({
-        where: { email: normalizedEmail },
+      // Buscar usuario por email y tenantId (email es único por tenant)
+      const tenantId = (req as any).tenant?.id;
+      const user = await prisma.user.findFirst({
+        where: tenantId 
+          ? { email: normalizedEmail, tenantId } as any
+          : { email: normalizedEmail } as any,
       });
 
       if (user) {
@@ -352,12 +375,18 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
           }),
         ]);
 
+        const preferredBaseUrl =
+          typeof requestedBaseUrl === "string" && requestedBaseUrl.trim()
+            ? requestedBaseUrl.trim().replace(/\/$/, "")
+            : undefined;
+
         if (isEmailServiceConfigured()) {
           try {
             await sendPasswordResetEmail({
               to: user.email,
               token,
               fullName: user.fullName,
+              baseUrl: preferredBaseUrl || getRequestBaseUrl(req) || undefined,
             });
           } catch (mailError) {
             console.error(
@@ -431,6 +460,7 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
             password: hashedPassword,
             tokenVersion: resetToken.user.tokenVersion + 1,
             emailVerifiedAt: resetToken.user.emailVerifiedAt ?? new Date(),
+            mustUpdatePassword: false,
           },
         }),
         prisma.passwordResetToken.update({
@@ -510,6 +540,7 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
           data: {
             password: hashedPassword,
             tokenVersion: user.tokenVersion + 1,
+            mustUpdatePassword: false,
           },
         });
 

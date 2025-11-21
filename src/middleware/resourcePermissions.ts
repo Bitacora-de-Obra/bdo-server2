@@ -9,15 +9,26 @@ const prisma = new PrismaClient();
 /**
  * Verifica que el usuario tiene acceso a un log entry
  * Retorna el log entry si tiene acceso, null si no
+ * 
+ * @param logEntryId - ID del log entry
+ * @param userId - ID del usuario
+ * @param requireWriteAccess - Si requiere acceso de escritura
+ * @param tenantId - ID del tenant (opcional, para validación multi-tenant)
  */
 export const verifyLogEntryAccess = async (
   logEntryId: string,
   userId: string,
-  requireWriteAccess = false
+  requireWriteAccess = false,
+  tenantId?: string
 ): Promise<{ entry: any; hasAccess: boolean; reason?: string }> => {
   try {
-    const entry = await prisma.logEntry.findUnique({
-      where: { id: logEntryId },
+    // Filtrar por tenant si está disponible
+    const whereClause: any = tenantId 
+      ? { id: logEntryId, tenantId }
+      : { id: logEntryId };
+    
+    const entry = await prisma.logEntry.findFirst({
+      where: whereClause,
       include: {
         author: {
           select: { id: true, appRole: true, projectRole: true },
@@ -35,9 +46,18 @@ export const verifyLogEntryAccess = async (
       return { entry: null, hasAccess: false, reason: 'Log entry no encontrado' };
     }
 
-    // Obtener información del usuario
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
+    // Validar tenant si está disponible
+    if (tenantId && (entry as any).tenantId !== tenantId) {
+      return { entry: null, hasAccess: false, reason: 'Log entry no encontrado' };
+    }
+
+    // Obtener información del usuario (considerando tenant)
+    const userWhereClause: any = tenantId 
+      ? { id: userId, tenantId }
+      : { id: userId };
+    
+    const user = await prisma.user.findFirst({
+      where: userWhereClause,
       select: {
         id: true,
         appRole: true,
@@ -50,8 +70,8 @@ export const verifyLogEntryAccess = async (
       return { entry: null, hasAccess: false, reason: 'Usuario no activo' };
     }
 
-    // Admins siempre tienen acceso
-    if (user.appRole === 'admin') {
+    // Admins y editores siempre tienen acceso
+    if (user.appRole === 'admin' || user.appRole === 'editor') {
       return { entry, hasAccess: true };
     }
 
@@ -70,16 +90,13 @@ export const verifyLogEntryAccess = async (
       return { entry, hasAccess: true };
     }
 
-    // Los asignados pueden editar según el estado
-    if (isAssignee) {
-      // Lógica específica según el estado del log entry
-      // Por ejemplo, contratistas solo pueden editar en estado SUBMITTED
-      if (entry.status === 'SUBMITTED' && user.projectRole === 'CONTRACTOR_REP') {
-        return { entry, hasAccess: true };
-      }
+    // En estado SUBMITTED, permitir acceso de escritura a asignados y firmantes
+    // (la lógica específica de qué campos pueden editar se maneja en el endpoint)
+    if (entry.status === 'SUBMITTED' && (isAssignee || isSigner)) {
+      return { entry, hasAccess: true };
     }
 
-    // Los firmantes pueden firmar pero no editar
+    // Los firmantes pueden firmar pero no editar (para otros estados)
     if (isSigner && !requireWriteAccess) {
       return { entry, hasAccess: true };
     }
@@ -118,10 +135,14 @@ export const requireLogEntryAccess = (requireWrite = false) => {
         });
       }
 
+      // Obtener tenantId del request si está disponible
+      const tenantId = (req as any).tenant?.id;
+      
       const { entry, hasAccess, reason } = await verifyLogEntryAccess(
         id,
         userId,
-        requireWrite
+        requireWrite,
+        tenantId
       );
 
       if (!hasAccess) {
@@ -154,15 +175,26 @@ export const requireLogEntryAccess = (requireWrite = false) => {
 
 /**
  * Verifica que el usuario tiene acceso a un acta
+ * 
+ * @param actaId - ID del acta
+ * @param userId - ID del usuario
+ * @param requireWriteAccess - Si requiere acceso de escritura
+ * @param tenantId - ID del tenant (opcional, para validación multi-tenant)
  */
 export const verifyActaAccess = async (
   actaId: string,
   userId: string,
-  requireWriteAccess = false
+  requireWriteAccess = false,
+  tenantId?: string
 ): Promise<{ acta: any; hasAccess: boolean; reason?: string }> => {
   try {
-    const acta = await prisma.acta.findUnique({
-      where: { id: actaId },
+    // Filtrar por tenant si está disponible
+    const whereClause: any = tenantId 
+      ? { id: actaId, tenantId }
+      : { id: actaId };
+    
+    const acta = await prisma.acta.findFirst({
+      where: whereClause,
       include: {
         signatures: {
           select: { signerId: true },
@@ -174,8 +206,18 @@ export const verifyActaAccess = async (
       return { acta: null, hasAccess: false, reason: 'Acta no encontrada' };
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
+    // Validar tenant si está disponible
+    if (tenantId && (acta as any).tenantId !== tenantId) {
+      return { acta: null, hasAccess: false, reason: 'Acta no encontrada' };
+    }
+
+    // Obtener información del usuario (considerando tenant)
+    const userWhereClause: any = tenantId 
+      ? { id: userId, tenantId }
+      : { id: userId };
+    
+    const user = await prisma.user.findFirst({
+      where: userWhereClause,
       select: { appRole: true, status: true },
     });
 

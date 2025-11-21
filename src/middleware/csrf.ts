@@ -73,11 +73,18 @@ export const csrfProtection = (
     '/api/docs',
     '/api/swagger',
     '/api/log-entries/export-zip', // Exportación protegida con JWT
-    '/api/log-entries/export-pdf', // Exportación protegida con JWT
-    '/api/reports/export-pdf', // Exportación protegida con JWT
   ];
 
-  const isExcluded = excludedPaths.some(path => req.path.startsWith(path));
+  const excludedRegex = [
+    /^\/api\/auth\/reset-password\/.+$/, // Endpoint público para reset de contraseña con token
+    /^\/api\/auth\/verify-email\/.+$/, // Endpoint público para verificación de email con token
+    /^\/api\/log-entries\/[^/]+\/export-pdf$/, // Exportación protegida con JWT
+    /^\/api\/reports\/[^/]+\/export-pdf$/, // Exportación protegida con JWT
+  ];
+
+  const isExcluded =
+    excludedPaths.some((path) => req.path.startsWith(path)) ||
+    excludedRegex.some((pattern) => pattern.test(req.path));
   if (isExcluded) {
     return next();
   }

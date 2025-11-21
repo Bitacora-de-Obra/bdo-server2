@@ -32,6 +32,19 @@ async function forceMigrationFix() {
     connection = await mysql.createConnection(connectionConfig);
     console.log("✅ Conexión establecida");
 
+    // Verificar si la tabla _prisma_migrations existe
+    const [tables] = await connection.execute(`
+      SELECT TABLE_NAME 
+      FROM information_schema.TABLES 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = '_prisma_migrations'
+    `);
+    
+    if (tables.length === 0) {
+      console.log("ℹ️  Tabla _prisma_migrations no existe, saltando corrección de migración");
+      return;
+    }
+
     // Eliminar completamente la migración problemática
     console.log("🗑️  Eliminando migración problemática...");
     await connection.execute(`
@@ -40,7 +53,7 @@ async function forceMigrationFix() {
       OR id = '20250325100000_add_report_versions'
     `);
 
-    // Verificar estado de migraciones
+    // Verificar estado de migraciones (solo si la tabla existe)
     const [rows] = await connection.execute(`
       SELECT migration_name, finished_at, rolled_back_at 
       FROM _prisma_migrations 

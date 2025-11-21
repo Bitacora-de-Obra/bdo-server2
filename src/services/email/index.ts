@@ -25,7 +25,9 @@ interface SendVerificationParams {
   fullName?: string | null;
 }
 
-interface SendResetParams extends SendVerificationParams {}
+interface SendResetParams extends SendVerificationParams {
+  baseUrl?: string;
+}
 
 interface CommitmentReminder {
   id: string;
@@ -69,6 +71,17 @@ interface SendSignatureAssignmentParams {
     title: string;
     entryDate?: Date | string | null;
   };
+}
+
+interface SendUserInvitationParams {
+  to: string;
+  temporaryPassword: string;
+  fullName?: string | null;
+  invitedByName?: string | null;
+  invitedByEmail?: string | null;
+  tenantName?: string | null;
+  appRole?: string | null;
+  projectRole?: string | null;
 }
 
 const smtpHost = process.env.SMTP_HOST;
@@ -134,7 +147,7 @@ const getAppBaseUrl = () => {
   }
   // En producción, usar el dominio principal por defecto
   if (process.env.NODE_ENV === "production") {
-    return "https://bdigitales.com";
+    return "https://mutis.bdigitales.com";
   }
   const port = process.env.PORT || "4001";
   return `http://localhost:${port}`;
@@ -143,11 +156,12 @@ const getAppBaseUrl = () => {
 const buildLinkFromTemplate = (
   template: string | undefined,
   token: string,
-  fallbackPath: string
+  fallbackPath: string,
+  baseUrlOverride?: string
 ) => {
   const baseTemplate =
     template ||
-    `${getAppBaseUrl()}${fallbackPath}${
+    `${(baseUrlOverride || getAppBaseUrl())}${fallbackPath}${
       fallbackPath.includes("?") ? "&" : "?"
     }token={{token}}`;
 
@@ -261,11 +275,13 @@ export const sendPasswordResetEmail = async ({
   to,
   token,
   fullName,
-}: SendResetParams) => {
+  baseUrl,
+}: SendResetParams & { baseUrl?: string }) => {
   const resetUrl = buildLinkFromTemplate(
     process.env.PASSWORD_RESET_URL,
     token,
-    "/auth/reset-password"
+    "/auth/reset-password",
+    baseUrl
   );
 
   const displayName = fullName || "Usuario";
@@ -293,6 +309,65 @@ export const sendPasswordResetEmail = async ({
   const html = getEmailBaseTemplate(content);
 
   await sendEmail({ to, subject, html, text });
+};
+
+export const sendUserInvitationEmail = async ({
+  to,
+  temporaryPassword,
+  fullName,
+  invitedByName,
+  invitedByEmail,
+  tenantName,
+  appRole,
+  projectRole,
+}: SendUserInvitationParams): Promise<boolean> => {
+  const displayName = fullName || "Bienvenido";
+  const inviter =
+    invitedByName ||
+    invitedByEmail ||
+    "Un administrador de Bitácora Digital de Obra";
+  const loginUrl = `${getAppBaseUrl()}/auth/login`;
+  const contextLine = tenantName
+    ? `para el proyecto o tenant <strong>${tenantName}</strong>`
+    : "en la plataforma de Bitácora Digital de Obra";
+  const subject = `${inviter} te invitó a Bitácora Digital`;
+
+  const text = [
+    `Hola ${displayName},`,
+    "",
+    `${inviter} te invitó a unirte ${tenantName ? `a ${tenantName}` : "a Bitácora Digital de Obra"}.`,
+    appRole ? `Rol en la aplicación: ${appRole}` : undefined,
+    projectRole ? `Rol en proyecto: ${projectRole}` : undefined,
+    `Contraseña temporal: ${temporaryPassword}`,
+    `Ingresa en: ${loginUrl}`,
+    "Por seguridad se te pedirá cambiar la contraseña en tu primer ingreso.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const content = `
+    <h1>Acceso a Bitácora Digital</h1>
+    <p>Hola <strong>${displayName}</strong>,</p>
+    <p>${inviter} te invitó ${contextLine}.</p>
+    ${
+      appRole || projectRole
+        ? `<p><strong>Roles asignados:</strong><br/>
+            ${appRole ? `Aplicación: ${appRole}<br/>` : ""}
+            ${projectRole ? `Proyecto: ${projectRole}` : ""}
+          </p>`
+        : ""
+    }
+    ${getEmailInfoBox(
+      `Tu contraseña temporal es: <strong>${temporaryPassword}</strong><br/>
+       Guárdala en un lugar seguro. El sistema te pedirá cambiarla en tu primer inicio de sesión.`,
+      "warning"
+    )}
+    ${getEmailButton("Ingresar a Bitácora Digital", loginUrl)}
+    <p>Si no esperabas este correo, comunícate con tu administrador.</p>
+  `;
+  const html = getEmailBaseTemplate(content);
+
+  return sendEmail({ to, subject, html, text });
 };
 
 const formatDateLabel = (value?: Date | string | null) => {

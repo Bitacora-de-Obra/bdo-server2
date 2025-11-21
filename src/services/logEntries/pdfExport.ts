@@ -70,6 +70,7 @@ interface LogEntryPdfOptions {
   logEntryId: string;
   uploadsDir: string;
   baseUrl: string;
+  tenantId?: string; // Para validar tenant (el log entry ya debería estar validado, pero esto es una capa adicional)
 }
 
 const sanitizeFileName = (value: string) =>
@@ -96,12 +97,39 @@ const formatDateTime = (input: Date) =>
     minute: "2-digit",
   }).format(input);
 
-export const generateLogEntryPdf = async ({
-  prisma,
-  logEntryId,
-  uploadsDir,
-  baseUrl,
-}: LogEntryPdfOptions) => {
+const decodeBase64Signature = (value?: string | null): Buffer | null => {
+  if (!value) return null;
+  const parts = value.split("base64,");
+  const payload = parts.length > 1 ? parts[1] : value;
+  try {
+    return Buffer.from(payload, "base64");
+  } catch (_error) {
+    return null;
+  }
+};
+
+type PdfDocInstance = InstanceType<typeof PDFDocument>;
+
+const getImageDimensions = (
+  doc: PdfDocInstance,
+  buffer: Buffer
+): { width: number; height: number } | null => {
+  const docAny = doc as any;
+  if (docAny && typeof docAny.openImage === "function") {
+    try {
+      const img = docAny.openImage(buffer);
+      if (img?.width && img?.height) {
+        return { width: img.width, height: img.height };
+      }
+    } catch (_error) {
+      // Ignorar y retornar null
+    }
+  }
+  return null;
+};
+
+export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
+  const { prisma, logEntryId, uploadsDir, baseUrl, tenantId } = options;
   const entry = await prisma.logEntry.findUnique({
     where: { id: logEntryId },
     include: {
@@ -128,7 +156,8 @@ export const generateLogEntryPdf = async ({
               entity: true,
             }
           }
-        }
+        },
+        orderBy: { signedAt: "asc" },
       },
       assignees: {
         select: {
@@ -151,7 +180,7 @@ export const generateLogEntryPdf = async ({
             }
           }
         },
-        orderBy: { assignedAt: "asc" },
+        orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
       },
     },
   });
@@ -751,7 +780,49 @@ export const generateLogEntryPdf = async ({
       });
     }
 
-    const signatureBoxHeight = 110;
+    const signedParticipantIds = signatureParticipants
+      .filter((participant) => participant.status === "SIGNED")
+      .map((participant) => participant.id);
+
+    const signatureImages = new Map<string, Buffer>();
+    if (signedParticipantIds.length) {
+      const userSignatures = await prisma.userSignature.findMany({
+        where: { userId: { in: signedParticipantIds } },
+        select: {
+          userId: true,
+          storagePath: true,
+          signature: true,
+          url: true,
+        },
+      });
+      const storage = getStorage();
+
+      for (const userSignature of userSignatures) {
+        let buffer: Buffer | null = null;
+
+        if (userSignature.storagePath) {
+          try {
+            buffer = await storage.read(userSignature.storagePath);
+          } catch (error) {
+            console.warn("No se pudo leer firma desde storagePath", {
+              userId: userSignature.userId,
+              storagePath: userSignature.storagePath,
+              error,
+            });
+          }
+        }
+
+        if (!buffer) {
+          buffer = decodeBase64Signature(userSignature.signature);
+        }
+
+        if (buffer) {
+          signatureImages.set(userSignature.userId, buffer);
+        }
+      }
+    }
+
+    const signatureBoxHeight = 140;
     const signatureBoxWidth =
       pageWidth - doc.page.margins.left - doc.page.margins.right;
 
@@ -819,9 +890,63 @@ export const generateLogEntryPdf = async ({
         .fontSize(10)
         .text("Firma:", doc.page.margins.left + 16, currentY + 58);
 
+      const signatureLineY = currentY + signatureBoxHeight - 24;
+      const signatureAreaHeight = 44;
+      const signatureAreaTop = signatureLineY - signatureAreaHeight + 6;
+      const signatureAreaX = doc.page.margins.left + 150;
+      const signatureAreaWidth = signatureBoxWidth - (signatureAreaX - doc.page.margins.left) - 16;
+      const signatureBuffer = participant.id
+        ? signatureImages.get(participant.id)
+        : null;
+
+      if (signatureBuffer) {
+        const maxSignatureWidth = signatureAreaWidth - 14;
+        const maxSignatureHeight = signatureAreaHeight;
+        try {
+          const imageDimensions = getImageDimensions(doc, signatureBuffer);
+          const naturalWidth = imageDimensions?.width || maxSignatureWidth;
+          const naturalHeight = imageDimensions?.height || maxSignatureHeight;
+          const scale =
+            naturalWidth && naturalHeight
+              ? Math.min(
+                  maxSignatureWidth / naturalWidth,
+                  maxSignatureHeight / naturalHeight,
+                  1
+                )
+              : 1;
+          const renderWidth = naturalWidth * scale;
+          const renderHeight = naturalHeight * scale;
+          const renderX =
+            signatureAreaX + Math.max(0, (maxSignatureWidth - renderWidth) / 2);
+          const renderY = signatureLineY - renderHeight + 6; // apoyar la firma sobre la línea
+
+          // Limpiar el área para evitar fantasmas detrás
+          doc.save();
+          doc
+            .rect(
+              signatureAreaX - 8,
+              signatureAreaTop - 6,
+              signatureAreaWidth + 16,
+              signatureAreaHeight + 16
+            )
+            .fill("#FFFFFF");
+          doc.restore();
+
+          doc.image(signatureBuffer, renderX, renderY, {
+            width: renderWidth,
+            height: renderHeight,
+          });
+        } catch (error) {
+          console.warn("No se pudo renderizar la firma manuscrita en PDF", {
+            signerId: participant.id,
+            error,
+          });
+        }
+      }
+
       doc
-        .moveTo(doc.page.margins.left + 70, currentY + 72)
-        .lineTo(doc.page.margins.left + signatureBoxWidth - 16, currentY + 72)
+        .moveTo(signatureAreaX, signatureLineY)
+        .lineTo(signatureAreaX + signatureAreaWidth, signatureLineY)
         .stroke();
 
       doc.y = currentY + signatureBoxHeight + 16;
@@ -835,11 +960,20 @@ export const generateLogEntryPdf = async ({
 
   const stats = await fs.stat(filePath);
   
-  // Organizar PDFs generados por año y mes
+  // Organizar PDFs generados por tenant, año y mes
   const now = new Date();
   const year = now.getFullYear().toString();
   const month = String(now.getMonth() + 1).padStart(2, '0');
-  const storagePath = path.posix.join("generated", "log-entries", year, month, fileName);
+  
+  // Construir path con tenant si está disponible
+  const pathParts: string[] = [];
+  if (options.tenantId) {
+    const normalizedTenantId = options.tenantId.replace(/[^a-zA-Z0-9_-]/g, "");
+    pathParts.push('tenants', normalizedTenantId);
+  }
+  pathParts.push("generated", "log-entries", year, month, fileName);
+  
+  const storagePath = path.posix.join(...pathParts);
   
   // Upload file to storage
   const storage = getStorage();
