@@ -4,6 +4,7 @@ import fsSync from "fs";
 import PDFDocument from "pdfkit";
 import { PrismaClient } from "@prisma/client";
 import { getStorage } from "../../storage";
+import { PNG } from "pngjs";
 import {
   normalizeEquipmentEntries,
   normalizeListItems,
@@ -110,22 +111,63 @@ const decodeBase64Signature = (value?: string | null): Buffer | null => {
 
 type PdfDocInstance = InstanceType<typeof PDFDocument>;
 
-const getImageDimensions = (
-  doc: PdfDocInstance,
-  buffer: Buffer
-): { width: number; height: number } | null => {
-  const docAny = doc as any;
-  if (docAny && typeof docAny.openImage === "function") {
-    try {
-      const img = docAny.openImage(buffer);
-      if (img?.width && img?.height) {
-        return { width: img.width, height: img.height };
+const isPng = (buffer: Buffer): boolean =>
+  buffer.length > 8 &&
+  buffer[0] === 0x89 &&
+  buffer[1] === 0x50 &&
+  buffer[2] === 0x4e &&
+  buffer[3] === 0x47 &&
+  buffer[4] === 0x0d &&
+  buffer[5] === 0x0a &&
+  buffer[6] === 0x1a &&
+  buffer[7] === 0x0a;
+
+const trimPngWhitespace = (buffer: Buffer): Buffer => {
+  try {
+    const png = PNG.sync.read(buffer);
+    let minX = png.width;
+    let minY = png.height;
+    let maxX = -1;
+    let maxY = -1;
+
+    for (let y = 0; y < png.height; y += 1) {
+      for (let x = 0; x < png.width; x += 1) {
+        const idx = (png.width * y + x) << 2;
+        const r = png.data[idx];
+        const g = png.data[idx + 1];
+        const b = png.data[idx + 2];
+        const a = png.data[idx + 3];
+        const isInk = a > 10 && (r < 245 || g < 245 || b < 245);
+        if (isInk) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
       }
-    } catch (_error) {
-      // Ignorar y retornar null
     }
+
+    if (maxX === -1 || maxY === -1) {
+      return buffer;
+    }
+
+    const trimmedWidth = maxX - minX + 1;
+    const trimmedHeight = maxY - minY + 1;
+    const trimmed = new PNG({ width: trimmedWidth, height: trimmedHeight });
+    PNG.bitblt(png, trimmed, minX, minY, trimmedWidth, trimmedHeight, 0, 0);
+    return PNG.sync.write(trimmed);
+  } catch (error) {
+    console.warn("No se pudo recortar espacios en blanco de la firma", error);
+    return buffer;
   }
-  return null;
+};
+
+const prepareSignatureBuffer = (buffer: Buffer | null): Buffer | null => {
+  if (!buffer) return null;
+  if (isPng(buffer)) {
+    return trimPngWhitespace(buffer);
+  }
+  return buffer;
 };
 
 export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
@@ -817,7 +859,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         }
 
         if (buffer) {
-          signatureImages.set(userSignature.userId, buffer);
+          signatureImages.set(userSignature.userId, prepareSignatureBuffer(buffer));
         }
       }
     }
@@ -892,7 +934,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
 
       const signatureLineY = currentY + signatureBoxHeight - 22;
       const signatureAreaHeight = 70;
-      const signatureAreaTop = signatureLineY - signatureAreaHeight + 10;
+      const signatureAreaTop = signatureLineY - signatureAreaHeight;
       const signatureAreaX = doc.page.margins.left + 150;
       const signatureAreaWidth = signatureBoxWidth - (signatureAreaX - doc.page.margins.left) - 16;
       const signatureBuffer = participant.id
@@ -900,29 +942,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         : null;
 
       if (signatureBuffer) {
-        const maxSignatureWidth = signatureAreaWidth - 14;
-        const maxSignatureHeight = signatureAreaHeight - 6;
         try {
-          const imageDimensions = getImageDimensions(doc, signatureBuffer);
-          const naturalWidth = imageDimensions?.width || maxSignatureWidth;
-          const naturalHeight = imageDimensions?.height || maxSignatureHeight;
-          const scale =
-            naturalWidth && naturalHeight
-              ? Math.min(
-                  maxSignatureWidth / naturalWidth,
-                  maxSignatureHeight / naturalHeight,
-                  1
-                )
-              : 1;
-          const renderWidth = naturalWidth * scale;
-          const renderHeight = naturalHeight * scale;
-          const renderX =
-            signatureAreaX + Math.max(0, (maxSignatureWidth - renderWidth) / 2);
-          const renderY = Math.max(
-            signatureAreaTop,
-            signatureLineY - renderHeight + 8
-          ); // apoyar la firma cerca de la línea (ligeramente sobrepuesta)
-
           // Limpiar el área para evitar fantasmas detrás
           doc.save();
           doc
@@ -935,9 +955,10 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
             .fill("#FFFFFF");
           doc.restore();
 
-          doc.image(signatureBuffer, renderX, renderY, {
-            width: renderWidth,
-            height: renderHeight,
+          doc.image(signatureBuffer, signatureAreaX, signatureAreaTop, {
+            cover: [signatureAreaWidth, signatureAreaHeight],
+            align: "center",
+            valign: "bottom",
           });
         } catch (error) {
           console.warn("No se pudo renderizar la firma manuscrita en PDF", {

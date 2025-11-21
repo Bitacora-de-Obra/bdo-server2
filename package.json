@@ -76,6 +76,7 @@
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "pdfkit": "^0.15.0",
+    "pngjs": "^7.0.0",
     "swagger-ui-express": "^5.0.0",
     "winston": "^3.13.0",
     "xml2js": "^0.6.2",
