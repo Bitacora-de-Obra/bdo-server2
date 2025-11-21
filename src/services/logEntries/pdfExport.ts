@@ -902,8 +902,9 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         : null;
 
       if (signatureBuffer) {
-        const maxSignatureWidth = signatureAreaWidth - 20;
-        const maxSignatureHeight = signatureAreaHeight - 20;
+        // Limitar la firma para que no se deforme ni ocupe todo el recuadro
+        const maxSignatureWidth = Math.min(220, signatureAreaWidth - 20);
+        const maxSignatureHeight = Math.min(70, signatureAreaHeight - 24);
         try {
           const imageDimensions = getImageDimensions(doc, signatureBuffer);
           const naturalWidth = imageDimensions?.width || maxSignatureWidth;

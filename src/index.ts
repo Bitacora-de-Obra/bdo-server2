@@ -1020,9 +1020,8 @@ interface SignatureOverlayParticipant {
 
 const SIGNATURE_OVERLAY_CONSTANTS = {
   PAGE_MARGIN: 48,
-  SIGNATURE_BOX_HEIGHT: 140,
+  SIGNATURE_BOX_HEIGHT: 200,
   SIGNATURE_BOX_GAP: 16,
-  SIGNATURE_LINE_OFFSET: 116,
   SIGNATURE_SECTION_START_Y: 48 + 17.5,
 };
 
@@ -1285,7 +1284,7 @@ const overlaySignatureStatuses = async (
       // Limitar el ancho del texto para evitar traslape con la firma manuscrita
       // La firma empieza en PAGE_MARGIN + 100, el texto en PAGE_MARGIN + 16
       // Dejamos un margen de seguridad de ~14px antes de la firma
-      const maxStatusTextWidth = 70;
+      const maxStatusTextWidth = 140;
 
       page.drawText(statusLabel, {
         x: textX,
@@ -6910,7 +6909,7 @@ app.post(
                       page: undefined, // última página
                       x: LINE_X,
                       y: yPos,
-                      width: 260,
+                      width: 220,
                       height: SIGNATURE_DRAW_HEIGHT,
                       baseline: false,
                       fromTop: true,
