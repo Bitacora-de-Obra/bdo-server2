@@ -4612,9 +4612,45 @@ app.post(
             
             if (isEntryDateConstraint) {
               console.log("✅ Error de constraint de fecha detectado, retornando 409");
+              let existingEntry: any = null;
+              try {
+                const whereClause: any = {
+                  projectId,
+                  entryDate: entryDateValue,
+                  type: prismaType,
+                };
+                const tenantId = (req as any).tenant?.id;
+                if (tenantId) {
+                  whereClause.tenantId = tenantId;
+                }
+                existingEntry = await prisma.logEntry.findFirst({
+                  where: whereClause,
+                  select: {
+                    id: true,
+                    folioNumber: true,
+                    entryDate: true,
+                    type: true,
+                    status: true,
+                    title: true,
+                  },
+                });
+              } catch (lookupErr) {
+                console.warn("No se pudo buscar la bitácora duplicada:", lookupErr);
+              }
               return res.status(409).json({
                 error:
                   "Ya existe una bitácora registrada para este proyecto, fecha y tipo.",
+                code: "LOGENTRY_DUPLICATE",
+                existingEntry: existingEntry
+                  ? {
+                      id: existingEntry.id,
+                      folioNumber: existingEntry.folioNumber,
+                      entryDate: existingEntry.entryDate,
+                      type: existingEntry.type,
+                      status: existingEntry.status,
+                      title: existingEntry.title,
+                    }
+                  : undefined,
               });
             }
           }
@@ -4802,9 +4838,46 @@ app.post(
           
           if (isEntryDateConstraint) {
             console.log("✅ Error de constraint de fecha/tipo detectado en catch externo, retornando 409");
+            let existingEntry: any = null;
+            try {
+              const whereClause: any = {
+                projectId,
+                entryDate: entryDateValue,
+                type: prismaType,
+              };
+              const tenantId = (req as any).tenant?.id;
+              if (tenantId) {
+                whereClause.tenantId = tenantId;
+              }
+              existingEntry = await prisma.logEntry.findFirst({
+                where: whereClause,
+                select: {
+                  id: true,
+                  folioNumber: true,
+                  entryDate: true,
+                  type: true,
+                  status: true,
+                  title: true,
+                },
+              });
+            } catch (lookupErr) {
+              console.warn("No se pudo buscar la bitácora duplicada:", lookupErr);
+            }
+
             return res.status(409).json({
               error:
                 "Ya existe una bitácora para este proyecto, fecha y tipo.",
+              code: "LOGENTRY_DUPLICATE",
+              existingEntry: existingEntry
+                ? {
+                    id: existingEntry.id,
+                    folioNumber: existingEntry.folioNumber,
+                    entryDate: existingEntry.entryDate,
+                    type: existingEntry.type,
+                    status: existingEntry.status,
+                    title: existingEntry.title,
+                  }
+                : undefined,
             });
           }
         }
