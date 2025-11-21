@@ -88,7 +88,6 @@
     "@types/mime-types": "^3.0.1",
     "@types/node": "^20.19.25",
     "@types/node-cron": "^3.0.11",
-    "@types/pngjs": "^7.2.1",
     "@types/swagger-ui-express": "^4.1.8",
     "@types/xml2js": "^0.4.14",
     "@typescript-eslint/eslint-plugin": "^8.46.2",
