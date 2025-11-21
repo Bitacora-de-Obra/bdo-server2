@@ -924,7 +924,9 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
       doc
         .font("Helvetica-Bold")
         .fontSize(10)
-        .text("Firma:", doc.page.margins.left + 16, signatureAreaTop - 12);
+        .text("Firma:", doc.page.margins.left + 16, signatureAreaTop - 6, {
+          width: signatureAreaWidth,
+        });
       const signatureBuffer = participant.id
         ? signatureImages.get(participant.id)
         : null;
