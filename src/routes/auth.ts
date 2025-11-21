@@ -336,7 +336,7 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
 
   // Forgot password
   router.post("/forgot-password", async (req, res) => {
-    const { email } = req.body;
+    const { email, baseUrl: requestedBaseUrl } = req.body || {};
 
     if (!email) {
       return res
@@ -375,13 +375,18 @@ export const createAuthRouter = (deps: AuthRouterDeps) => {
           }),
         ]);
 
+        const preferredBaseUrl =
+          typeof requestedBaseUrl === "string" && requestedBaseUrl.trim()
+            ? requestedBaseUrl.trim().replace(/\/$/, "")
+            : undefined;
+
         if (isEmailServiceConfigured()) {
           try {
             await sendPasswordResetEmail({
               to: user.email,
               token,
               fullName: user.fullName,
-              baseUrl: getRequestBaseUrl(req) ?? undefined,
+              baseUrl: preferredBaseUrl || getRequestBaseUrl(req) || undefined,
             });
           } catch (mailError) {
             console.error(

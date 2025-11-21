@@ -11609,7 +11609,7 @@ app.post("/api/auth/logout", (req, res) => {
 
 app.post("/api/auth/forgot-password", async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, baseUrl: requestedBaseUrl } = req.body || {};
 
     if (!email) {
       return res
@@ -11650,13 +11650,18 @@ app.post("/api/auth/forgot-password", async (req, res) => {
           }),
         ]);
 
+        const preferredBaseUrl =
+          typeof requestedBaseUrl === "string" && requestedBaseUrl.trim()
+            ? requestedBaseUrl.trim().replace(/\/$/, "")
+            : undefined;
+
         if (isEmailServiceConfigured()) {
           try {
             await sendPasswordResetEmail({
               to: user.email,
               token,
               fullName: user.fullName,
-              baseUrl: getRequestBaseUrl(req) ?? undefined,
+              baseUrl: preferredBaseUrl || getRequestBaseUrl(req) || undefined,
             });
           } catch (mailError) {
             logger.error("No se pudo enviar el correo de restablecimiento", {
