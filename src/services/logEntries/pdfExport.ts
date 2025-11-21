@@ -162,13 +162,8 @@ const trimPngWhitespace = (buffer: Buffer): Buffer => {
   }
 };
 
-const prepareSignatureBuffer = (buffer: Buffer | null): Buffer | null => {
-  if (!buffer) return null;
-  if (isPng(buffer)) {
-    return trimPngWhitespace(buffer);
-  }
-  return buffer;
-};
+const prepareSignatureBuffer = (buffer: Buffer): Buffer =>
+  isPng(buffer) ? trimPngWhitespace(buffer) : buffer;
 
 export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
   const { prisma, logEntryId, uploadsDir, baseUrl, tenantId } = options;
@@ -939,7 +934,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
       const signatureAreaWidth = signatureBoxWidth - (signatureAreaX - doc.page.margins.left) - 16;
       const signatureBuffer = participant.id
         ? signatureImages.get(participant.id)
-        : null;
+        : undefined;
 
       if (signatureBuffer) {
         try {
