@@ -4208,6 +4208,10 @@ app.post(
     console.log("DEBUG: Método:", req.method);
     console.log("DEBUG: URL:", req.url);
     console.log("DEBUG: Headers content-type:", req.headers["content-type"]);
+    // Variables que necesitamos también en el catch
+    let prismaType: any = null;
+    let entryDateValue: Date = new Date();
+    let projectIdValue: string | undefined = undefined;
     try {
       const userId = req.user?.userId;
       console.log("DEBUG: User ID:", userId);
@@ -4307,13 +4311,15 @@ app.post(
           .json({ error: "El identificador del proyecto es obligatorio." });
       }
 
-      const prismaType = entryTypeMap[type] || entryTypeMap["General"];
+      projectIdValue = projectId;
+
+      prismaType = entryTypeMap[type] || entryTypeMap["General"];
       const prismaStatus =
         entryStatusMap[status] ||
         entryStatusMap[entryStatusReverseMap[status] || "Borrador"] ||
         "DRAFT";
 
-      const entryDateValue = entryDate ? new Date(entryDate) : new Date();
+      entryDateValue = entryDate ? new Date(entryDate) : new Date();
       const activityStartValue = activityStartDate
         ? new Date(activityStartDate)
         : entryDateValue;
@@ -4841,7 +4847,7 @@ app.post(
             let existingEntry: any = null;
             try {
               const whereClause: any = {
-                projectId,
+                projectId: projectIdValue,
                 entryDate: entryDateValue,
                 type: prismaType,
               };
