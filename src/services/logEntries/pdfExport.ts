@@ -108,8 +108,10 @@ const decodeBase64Signature = (value?: string | null): Buffer | null => {
   }
 };
 
+type PdfDocInstance = InstanceType<typeof PDFDocument>;
+
 const getImageDimensions = (
-  doc: PDFKit.PDFDocument | PDFDocument,
+  doc: PdfDocInstance,
   buffer: Buffer
 ): { width: number; height: number } | null => {
   const docAny = doc as any;
