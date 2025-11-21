@@ -29,13 +29,6 @@ import jwt from "jsonwebtoken";
 import "dotenv/config";
 import multer from "multer";
 import { randomUUID, randomBytes, createHash } from "crypto";
-import {
-  encryptSignature,
-  decryptSignature,
-  packEncryptedSignature,
-  unpackEncryptedSignature,
-  verifySignaturePassword,
-} from "./utils/signatureEncryption";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import cron from "node-cron";
@@ -106,11 +99,8 @@ import {
   sendCommunicationAssignmentEmail,
   sendSignatureAssignmentEmail,
   sendTestEmail,
-  sendUserInvitationEmail,
 } from "./services/email";
-import { getRequestBaseUrl } from "./utils/requestUrl";
 import { buildUserNotifications } from "./services/notifications";
-import { PDFDocument, rgb } from "pdf-lib";
 import {
   ChatbotContextSection,
   sectionToText,
@@ -119,24 +109,6 @@ import {
 // El middleware de autenticación ya está importado arriba
 const app = express();
 const prisma = new PrismaClient();
-
-/**
- * Helper para agregar filtro de tenant a queries
- * Retorna un objeto where que incluye tenantId si hay tenant en el request
- */
-function withTenantFilter<T extends { tenantId?: string }>(
-  req: Request,
-  baseWhere?: T
-): T & { tenantId?: string } {
-  const tenantId = (req as any).tenant?.id;
-  if (!tenantId) {
-    return baseWhere || ({} as T);
-  }
-  return {
-    ...baseWhere,
-    tenantId,
-  } as T & { tenantId?: string };
-}
 
 logger.info("Secrets cargados", {
   jwt: {
@@ -442,7 +414,6 @@ const formatAdminUser = (user: any) => {
     avatarUrl: user.avatarUrl,
     status: user.status,
     canDownload: user.canDownload ?? true,
-  mustUpdatePassword: Boolean(user.mustUpdatePassword),
     lastLoginAt:
       user.lastLoginAt instanceof Date
         ? user.lastLoginAt.toISOString()
@@ -474,19 +445,16 @@ const createDiff = (
 
 const resolveActorInfo = async (req: AuthRequest) => {
   if (!req.user?.userId) {
-    return { actorId: undefined, actorEmail: null, actorName: null };
+    return { actorId: undefined, actorEmail: null };
   }
-
+  if (req.user.email) {
+    return { actorId: req.user.userId, actorEmail: req.user.email };
+  }
   const actor = await prisma.user.findUnique({
     where: { id: req.user.userId },
-    select: { email: true, fullName: true },
+    select: { email: true },
   });
-
-  return {
-    actorId: req.user.userId,
-    actorEmail: actor?.email ?? req.user.email ?? null,
-    actorName: actor?.fullName ?? null,
-  };
+  return { actorId: req.user.userId, actorEmail: actor?.email ?? null };
 };
 
 const recordAuditEvent = async ({
@@ -678,74 +646,7 @@ const sanitizeFileName = (value: string) =>
     .replace(/^_+|_+$/g, "")
     .slice(0, 120);
 
-/**
- * Crea una clave de almacenamiento organizada igual que el expediente exportado
- * Estructura: {seccion}/{subfolder?}/{year}/{month}/{uniqueId}-{filename}
- * 
- * Secciones principales (igual que el ZIP del expediente):
- * - bitacora/ - Archivos de bitácoras (adjuntos, PDFs generados, firmas)
- * - actas/ - Archivos de actas de comité
- * - comunicaciones/ - Archivos de comunicaciones
- * - informes/ - Archivos de informes (adjuntos, PDFs generados)
- * - puntos-fijos/{controlPointId}/ - Fotos de puntos fijos (organizadas por punto fijo)
- * - firmas/ - Firmas de usuarios y documentos firmados
- * - planos/ - Planos de obra
- * 
- * @param seccion - Sección principal: 'bitacora', 'actas', 'comunicaciones', 'informes', 'puntos-fijos', 'firmas', 'planos'
- * @param originalName - Nombre original del archivo
- * @param subfolder - Subcarpeta opcional (ej: ID del punto fijo para puntos-fijos)
- * @returns Ruta organizada para almacenamiento
- */
-const createStorageKey = (
-  seccion: string,
-  originalName: string,
-  subfolder?: string,
-  tenantId?: string
-) => {
-  const now = new Date();
-  const year = now.getFullYear().toString();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  
-  const ext = path.extname(originalName);
-  const baseName = sanitizeFileName(path.basename(originalName, ext)) || "file";
-  const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-  
-  // Normalizar sección para evitar caracteres inválidos
-  const normalizedSeccion = seccion
-    .replace(/[^a-zA-Z0-9_-]/g, "")
-    .toLowerCase();
-  
-  // Normalizar subfolder si existe
-  const normalizedSubfolder = subfolder
-    ? subfolder.replace(/[^a-zA-Z0-9_-]/g, "").toLowerCase()
-    : undefined;
-  
-  // Construir path con tenant si está disponible (para aislamiento multi-tenant)
-  const pathParts: string[] = [];
-  
-  // Agregar prefijo de tenant si existe
-  if (tenantId) {
-    // Normalizar tenantId para evitar caracteres inválidos
-    const normalizedTenantId = tenantId.replace(/[^a-zA-Z0-9_-]/g, "");
-    pathParts.push('tenants', normalizedTenantId);
-  }
-  
-  pathParts.push(normalizedSeccion);
-  
-  if (normalizedSubfolder) {
-    pathParts.push(normalizedSubfolder);
-  }
-  
-  pathParts.push(year, month, `${uniqueSuffix}-${baseName}${ext}`);
-  
-  return path.posix.join(...pathParts);
-};
-
-/**
- * Función de compatibilidad para mantener la estructura antigua si es necesario
- * @deprecated Usar createStorageKey con type y category en su lugar
- */
-const createStorageKeyLegacy = (folder: string, originalName: string) => {
+const createStorageKey = (folder: string, originalName: string) => {
   const ext = path.extname(originalName);
   const baseName = sanitizeFileName(path.basename(originalName, ext)) || "file";
   const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
@@ -755,21 +656,12 @@ const createStorageKeyLegacy = (folder: string, originalName: string) => {
   return path.posix.join(normalizedFolder, `${uniqueSuffix}-${baseName}${ext}`);
 };
 
-/**
- * Persiste un archivo subido con organización igual que el expediente exportado
- * @param file - Archivo subido
- * @param seccion - Sección principal: 'bitacora', 'actas', 'comunicaciones', 'informes', 'puntos-fijos', 'firmas', 'planos'
- * @param subfolder - Subcarpeta opcional (ej: ID del punto fijo para puntos-fijos)
- * @returns Objeto con la clave de almacenamiento y URL pública
- */
 const persistUploadedFile = async (
   file: Express.Multer.File,
-  seccion: string,
-  subfolder?: string,
-  tenantId?: string
+  folder: string
 ) => {
   const storage = getStorage();
-  const key = createStorageKey(seccion, file.originalname, subfolder, tenantId);
+  const key = createStorageKey(folder, file.originalname);
   await storage.save({ path: key, content: file.buffer });
   return {
     key,
@@ -902,90 +794,39 @@ const loadAttachmentBuffer = async (attachment: any): Promise<Buffer> => {
   return storage.read(storagePath);
 };
 
-/**
- * Carga y desencripta la firma del usuario
- * @param userSignature - Objeto UserSignature de la BD
- * @param userPassword - Contraseña del usuario para desencriptar (requerida si la firma está encriptada)
- * @returns Buffer de la firma desencriptada
- */
 const loadUserSignatureBuffer = async (
-  userSignature: any,
-  userPassword?: string
+  userSignature: any
 ): Promise<Buffer> => {
   const storage = getStorage();
-  
-  // Si hay storagePath, intentar cargar desde ahí (puede estar encriptada o no)
-  if (userSignature.storagePath) {
+  const candidates = [
+    userSignature.storagePath,
+    resolveStorageKeyFromUrl(userSignature.url),
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
     try {
-      const buffer = await storage.read(userSignature.storagePath);
-      
-      // Intentar desencriptar si tenemos contraseña
-      if (userPassword) {
-        try {
-          const encryptedData = unpackEncryptedSignature(buffer);
-          return decryptSignature(encryptedData, userPassword);
-        } catch (decryptError) {
-          // Si falla la desencriptación, puede ser una firma antigua sin encriptar
-          // o la contraseña es incorrecta
-          console.warn("No se pudo desencriptar la firma, intentando como archivo sin encriptar...", decryptError);
-          // Continuar con el buffer original (firma antigua sin encriptar)
-        }
-      }
-      
-      // Si no hay contraseña o es una firma antigua, retornar el buffer tal cual
-      return buffer;
+      return await storage.read(candidate);
     } catch (error) {
       console.warn("No se pudo leer la firma desde storage.", {
-        storagePath: userSignature.storagePath,
+        candidate,
         error,
       });
     }
   }
 
-  // Fallback: intentar desde URL (firmas antiguas)
-  if (userSignature.url) {
-    const candidates = [
-      userSignature.storagePath,
-      resolveStorageKeyFromUrl(userSignature.url),
-    ].filter((value): value is string => Boolean(value));
-
-    for (const candidate of candidates) {
-      try {
-        const buffer = await storage.read(candidate);
-        // Si hay contraseña, intentar desencriptar
-        if (userPassword) {
-          try {
-            const encryptedData = unpackEncryptedSignature(buffer);
-            return decryptSignature(encryptedData, userPassword);
-          } catch {
-            // Firma antigua sin encriptar
-            return buffer;
-          }
-        }
-        return buffer;
-      } catch (error) {
-        console.warn("No se pudo leer la firma desde storage.", {
-          candidate,
-          error,
-        });
+  if (typeof userSignature.url === "string") {
+    try {
+      const response = await fetch(userSignature.url);
+      if (!response.ok) {
+        throw new Error(`Descarga fallida con status ${response.status}`);
       }
-    }
-
-    // Intentar descargar desde URL directa
-    if (typeof userSignature.url === "string") {
-      try {
-        const response = await fetch(userSignature.url);
-        if (!response.ok) {
-          throw new Error(`Descarga fallida con status ${response.status}`);
-        }
-        const arrayBuffer = await response.arrayBuffer();
-        return Buffer.from(arrayBuffer);
-      } catch (error) {
-        console.warn("No se pudo descargar la firma desde la URL.", {
-          url: userSignature.url,
-          error,
-        });
-      }
+      const arrayBuffer = await response.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    } catch (error) {
+      console.warn("No se pudo descargar la firma desde la URL.", {
+        url: userSignature.url,
+        error,
+      });
     }
   }
 
@@ -1006,304 +847,6 @@ const mapUserBasic = (user: any) => {
     entity: user.entity || null,
     cargo: user.cargo || null,
   };
-};
-
-interface SignatureOverlayParticipant {
-  id: string;
-  fullName?: string | null;
-  status: string;
-  signedAt?: Date | null;
-  projectRole?: string | null;
-  cargo?: string | null;
-  entity?: string | null;
-}
-
-const SIGNATURE_OVERLAY_CONSTANTS = {
-  PAGE_MARGIN: 48,
-  SIGNATURE_BOX_HEIGHT: 140,
-  SIGNATURE_BOX_GAP: 16,
-  SIGNATURE_LINE_OFFSET: 116,
-  SIGNATURE_SECTION_START_Y: 48 + 17.5,
-};
-
-const SIGNATURE_STATUS_COLORS = {
-  SIGNED: rgb(21 / 255, 128 / 255, 61 / 255),
-  PENDING: rgb(234 / 255, 88 / 255, 12 / 255),
-  DECLINED: rgb(239 / 255, 68 / 255, 68 / 255),
-  DEFAULT: rgb(31 / 255, 41 / 255, 55 / 255),
-};
-
-const formatSignatureDateTime = (date: Date) =>
-  new Intl.DateTimeFormat("es-CO", {
-    dateStyle: "short",
-    timeStyle: "short",
-  }).format(date);
-
-const getDisplayRole = (cargo: string | null | undefined, projectRole: string | null | undefined, entity: string | null | undefined): string => {
-  if (cargo) {
-    return cargo;
-  }
-  
-  if (entity) {
-    if (entity === 'IDU') return 'IDU';
-    if (entity === 'INTERVENTORIA') return 'Interventoría';
-    if (entity === 'CONTRATISTA') return 'Contratista';
-  }
-  
-  const projectRoleLabels: Record<string, string> = {
-    ADMIN: 'Administrador',
-    RESIDENT: 'Residente',
-    SUPERVISOR: 'Supervisor',
-    CONTRACTOR_REP: 'Representante del Contratista',
-  };
-  
-  return projectRoleLabels[projectRole || ''] || projectRole || 'Cargo / Rol';
-};
-
-const buildSignatureStatusLabel = (participant: SignatureOverlayParticipant) => {
-  if (participant.status === "SIGNED") {
-    return participant.signedAt
-      ? `Firmado · ${formatSignatureDateTime(participant.signedAt)}`
-      : "Firmado";
-  }
-  if (participant.status === "PENDING") {
-    return "Pendiente de firma";
-  }
-  if (participant.status === "DECLINED") {
-    return "Rechazado";
-  }
-  return participant.status || "Estado desconocido";
-};
-
-const buildSignatureParticipantsForOverlay = (entry: any) => {
-  const participants: SignatureOverlayParticipant[] = [];
-  const participantsById = new Map<string, SignatureOverlayParticipant>();
-
-  const registerParticipant = (participant: SignatureOverlayParticipant) => {
-    if (!participant.id) {
-      return;
-    }
-    const existing = participantsById.get(participant.id);
-    if (existing) {
-      const incomingSignedAt = participant.signedAt
-        ? new Date(participant.signedAt)
-        : undefined;
-      const existingSignedAt = existing.signedAt
-        ? new Date(existing.signedAt)
-        : undefined;
-
-      if (participant.status === "SIGNED" && existing.status !== "SIGNED") {
-        existing.status = "SIGNED";
-        existing.signedAt = incomingSignedAt || existing.signedAt || null;
-      } else if (existing.status !== "SIGNED") {
-        existing.status = participant.status;
-        existing.signedAt = incomingSignedAt || existing.signedAt || null;
-      } else if (participant.status === "SIGNED") {
-        // When both are signed, keep the latest timestamp so PDFs show the actual signing order
-        if (
-          incomingSignedAt &&
-          (!existingSignedAt || incomingSignedAt > existingSignedAt)
-        ) {
-          existing.signedAt = incomingSignedAt;
-        }
-      }
-      return;
-    }
-    const stored = { ...participant };
-    participants.push(stored);
-    participantsById.set(participant.id, stored);
-  };
-
-  const sortedSignatureTasks = [...(entry.signatureTasks || [])].sort(
-    (a, b) => {
-      const timeA = new Date(a.assignedAt || 0).getTime();
-      const timeB = new Date(b.assignedAt || 0).getTime();
-      if (timeA !== timeB) return timeA - timeB;
-      const createdA = new Date(a.createdAt || 0).getTime();
-      const createdB = new Date(b.createdAt || 0).getTime();
-      if (createdA !== createdB) return createdA - createdB;
-      return (a.id || "").localeCompare(b.id || "");
-    }
-  );
-
-  sortedSignatureTasks.forEach((task: any) => {
-    if (!task?.signer?.id) return;
-    registerParticipant({
-      id: task.signer.id,
-      fullName: task.signer.fullName,
-      projectRole: task.signer.projectRole,
-      cargo: task.signer.cargo,
-      entity: task.signer.entity,
-      status: task.status || "PENDING",
-      signedAt: task.signedAt ? new Date(task.signedAt) : undefined,
-    });
-  });
-
-  (entry.signatures || []).forEach((signature: any) => {
-    const signerId = signature.signerId || signature.signer?.id;
-    if (!signerId) return;
-    registerParticipant({
-      id: signerId,
-      fullName: signature.signer?.fullName || "Firmante",
-      projectRole: signature.signer?.projectRole,
-      cargo: signature.signer?.cargo,
-      entity: signature.signer?.entity,
-      status: "SIGNED",
-      signedAt: signature.signedAt ? new Date(signature.signedAt) : undefined,
-    });
-  });
-
-  if (!participants.length && entry.author) {
-    const authorSignature = (entry.signatures || []).find(
-      (signature: any) =>
-        (signature.signerId || signature.signer?.id) === entry.author?.id
-    );
-    registerParticipant({
-      id: entry.author.id,
-      fullName: entry.author.fullName,
-      projectRole: entry.author.projectRole,
-      cargo: entry.author.cargo,
-      entity: entry.author.entity,
-      status: authorSignature ? "SIGNED" : "PENDING",
-      signedAt: authorSignature?.signedAt
-        ? new Date(authorSignature.signedAt)
-        : undefined,
-    });
-  }
-
-  if (!participants.length && entry.assignees?.length) {
-    entry.assignees.forEach((assignee: any) => {
-      registerParticipant({
-        id: assignee.id,
-        fullName: assignee.fullName,
-        projectRole: assignee.projectRole,
-        cargo: assignee.cargo,
-        entity: assignee.entity,
-        status: "PENDING",
-      });
-    });
-  }
-
-  return participants;
-};
-
-const overlaySignatureStatuses = async (
-  pdfBuffer: Buffer,
-  entry: any,
-  focusSignerIds?: string | string[]
-): Promise<Buffer> => {
-  try {
-    const participants = buildSignatureParticipantsForOverlay(entry);
-    if (!participants.length) {
-      return pdfBuffer;
-    }
-
-    const focusSet = focusSignerIds
-      ? new Set(Array.isArray(focusSignerIds) ? focusSignerIds : [focusSignerIds])
-      : null;
-
-    const participantsIndexMap = new Map<string, number>();
-    participants.forEach((participant, index) => {
-      participantsIndexMap.set(participant.id, index);
-    });
-
-    const participantsToOverlay = focusSet
-      ? participants.filter((participant) => focusSet.has(participant.id))
-      : participants;
-
-    if (!participantsToOverlay.length) {
-      return pdfBuffer;
-    }
-
-    const pdfDoc = await PDFDocument.load(pdfBuffer);
-    const page = pdfDoc.getPage(pdfDoc.getPageCount() - 1);
-    const pageHeight = page.getHeight();
-    const pageWidth = page.getWidth();
-
-    const signatureBoxWidth =
-      pageWidth -
-      SIGNATURE_OVERLAY_CONSTANTS.PAGE_MARGIN * 2;
-    const overlayPaddingX = 12;
-    const overlayWidth = signatureBoxWidth - overlayPaddingX * 2;
-    const textX =
-      SIGNATURE_OVERLAY_CONSTANTS.PAGE_MARGIN + overlayPaddingX + 4;
-    const fontSize = 10;
-    const cargoFontSize = 10;
-    const statusOffsetFromTop = 46; // Estado se dibuja en currentY + 46
-    const cargoOffsetFromTop = 30; // Cargo se dibuja en currentY + 30
-
-    const convertTopToPdfLibY = (topValue: number) =>
-      pageHeight - topValue;
-
-    participantsToOverlay.forEach((participant) => {
-      const index = participantsIndexMap.get(participant.id) ?? 0;
-      const currentY =
-        SIGNATURE_OVERLAY_CONSTANTS.SIGNATURE_SECTION_START_Y +
-        index *
-          (SIGNATURE_OVERLAY_CONSTANTS.SIGNATURE_BOX_HEIGHT +
-            SIGNATURE_OVERLAY_CONSTANTS.SIGNATURE_BOX_GAP);
-
-      // Dibujar el cargo
-      const roleLabel = getDisplayRole(
-        participant.cargo,
-        participant.projectRole,
-        participant.entity
-      );
-      const cargoTextTop = currentY + cargoOffsetFromTop;
-      const cargoTextY = convertTopToPdfLibY(cargoTextTop + cargoFontSize);
-
-      page.drawText(roleLabel, {
-        x: textX,
-        y: cargoTextY,
-        size: cargoFontSize,
-        color: rgb(75 / 255, 85 / 255, 99 / 255), // #4B5563
-      });
-
-      // Dibujar el estado
-      const statusLabel = buildSignatureStatusLabel(participant);
-      const statusColor =
-        SIGNATURE_STATUS_COLORS[
-          participant.status as keyof typeof SIGNATURE_STATUS_COLORS
-        ] || SIGNATURE_STATUS_COLORS.DEFAULT;
-
-      const statusTextTop = currentY + statusOffsetFromTop;
-      const statusTextY = convertTopToPdfLibY(statusTextTop + fontSize);
-
-      // Limpiar el área del estado antes de dibujar el nuevo texto
-      // para evitar que se monte encima del texto anterior
-      const statusBackgroundHeight = 24;
-      const statusBackgroundY = convertTopToPdfLibY(statusTextTop + statusBackgroundHeight);
-      
-      page.drawRectangle({
-        x: SIGNATURE_OVERLAY_CONSTANTS.PAGE_MARGIN + overlayPaddingX,
-        y: statusBackgroundY,
-        width: overlayWidth,
-        height: statusBackgroundHeight,
-        color: rgb(1, 1, 1), // Blanco para limpiar
-      });
-
-      // Limitar el ancho del texto para evitar traslape con la firma manuscrita
-      // La firma empieza en PAGE_MARGIN + 100, el texto en PAGE_MARGIN + 16
-      // Dejamos un margen de seguridad de ~14px antes de la firma
-      const maxStatusTextWidth = 70;
-
-      page.drawText(statusLabel, {
-        x: textX,
-        y: statusTextY,
-        size: fontSize,
-        color: statusColor,
-        maxWidth: maxStatusTextWidth,
-      });
-    });
-
-    return Buffer.from(await pdfDoc.save());
-  } catch (error) {
-    console.warn(
-      "No se pudo actualizar los estados de las firmas en el PDF firmado:",
-      error
-    );
-    return pdfBuffer;
-  }
 };
 
 const LOG_ENTRY_FIELD_LABELS: Record<string, string> = {
@@ -1994,8 +1537,6 @@ const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:3001",
   "http://localhost:5173",
   "https://bdigitales.com",
-  "https://www.bdigitales.com",
-  "https://mutis.bdigitales.com",
   "https://bdo-client.vercel.app",
   "https://bdo-client-git-main-bitacora-de-obras-projects.vercel.app",
   "https://bdo-client-bitacora-de-obras-projects.vercel.app",
@@ -2051,14 +1592,9 @@ const corsOptions: CorsOptions = {
     "x-xsrf-token",
     "X-CSRF-Token",
     "x-csrf-token",
-    "Accept",
-    "Origin",
-    "X-Requested-With",
   ],
   exposedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
   credentials: true,
-  preflightContinue: false, // Responder inmediatamente al preflight
-  optionsSuccessStatus: 200, // Algunos navegadores antiguos requieren 200
 };
 
 const mapReportVersionSummary = (report: any): ReportVersion => ({
@@ -2075,46 +1611,12 @@ const mapReportVersionSummary = (report: any): ReportVersion => ({
       : report.createdAt,
 });
 
-// Log de orígenes permitidos al iniciar (solo en desarrollo o si hay problemas)
-if (!isProduction || process.env.LOG_CORS === "true") {
-  logger.info("CORS configuration", {
-    allowedOrigins: allowedOrigins,
-    defaultOrigins: DEFAULT_ALLOWED_ORIGINS,
-    envOrigins: envAllowedOrigins,
-    inferredOrigins: inferredOrigins.filter((value): value is string => Boolean(value)),
-  });
-}
-
-// Aplicar CORS antes que cualquier otro middleware para asegurar que los preflight requests se manejen correctamente
 app.use(cors(corsOptions));
-
-// Middleware de detección de tenant (después de CORS, antes de otros middlewares)
-import { detectTenantMiddleware, requireTenantMiddleware } from "./middleware/tenant";
-app.use(detectTenantMiddleware);
-
-// Manejar preflight requests explícitamente para asegurar que siempre respondan
-// Esto es crítico porque algunos navegadores fallan si el preflight no responde correctamente
-app.options("*", (req, res) => {
-  const origin = req.headers.origin;
-  const normalizedOrigin = normalizeOrigin(origin);
-  
-  if (origin && normalizedOrigin && allowedOrigins.includes(normalizedOrigin)) {
-    res.header("Access-Control-Allow-Origin", origin);
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-XSRF-TOKEN, x-xsrf-token, X-CSRF-Token, x-csrf-token, Accept, Origin, X-Requested-With");
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Max-Age", "86400"); // 24 horas
-    res.sendStatus(200);
-  } else {
-    res.sendStatus(403);
-  }
-});
 
 // Configuración mejorada de Helmet para seguridad
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
-    crossOriginEmbedderPolicy: false, // Permitir recursos embebidos desde otros orígenes
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -2328,86 +1830,32 @@ app.get("/api/attachments/:id/download", async (req, res) => {
       return res.status(404).json({ error: "Adjunto no encontrado." });
     }
 
-    // Validar tenant a través del recurso relacionado
-    const tenantId = (req as any).tenant?.id;
-    if (tenantId && attachment) {
-      let resourceTenantId: string | null = null;
-      
-      if (attachment.logEntryId) {
-        const logEntry = await prisma.logEntry.findUnique({
-          where: { id: attachment.logEntryId },
-          select: { tenantId: true } as any,
-        });
-        resourceTenantId = (logEntry as any)?.tenantId || null;
-      } else if (attachment.actaId) {
-        const acta = await prisma.acta.findUnique({
-          where: { id: attachment.actaId },
-          select: { tenantId: true } as any,
-        });
-        resourceTenantId = (acta as any)?.tenantId || null;
-      } else if (attachment.reportId) {
-        const report = await prisma.report.findUnique({
-          where: { id: attachment.reportId },
-          select: { tenantId: true } as any,
-        });
-        resourceTenantId = (report as any)?.tenantId || null;
-      } else if (attachment.communicationId) {
-        const communication = await prisma.communication.findUnique({
-          where: { id: attachment.communicationId },
-          select: { tenantId: true } as any,
-        });
-        resourceTenantId = (communication as any)?.tenantId || null;
-      } else if (attachment.costActaId) {
-        const costActa = await prisma.costActa.findUnique({
-          where: { id: attachment.costActaId },
-          select: { tenantId: true } as any,
-        });
-        resourceTenantId = (costActa as any)?.tenantId || null;
-      }
-      
-      if (resourceTenantId && resourceTenantId !== tenantId) {
-        return res.status(404).json({ error: "Adjunto no encontrado." });
-      }
-    }
+    const storagePath =
+      attachment.storagePath || resolveStorageKeyFromUrl(attachment.url);
 
-    const storageDriver = (process.env.STORAGE_DRIVER || "local").toLowerCase();
-    const storage = getStorage();
-
-    // Si tenemos storagePath, intentar cargar desde el storage configurado (local o remoto)
-    if (attachment.storagePath) {
+    if (storagePath) {
+      const storage = getStorage();
       try {
-        const fileBuffer = await storage.read(attachment.storagePath);
-
+        const buffer = await storage.read(storagePath);
         const mimeType =
-          attachment.type || mime.lookup(attachment.fileName) || "application/octet-stream";
+          attachment.type ||
+          mime.lookup(attachment.fileName) ||
+          "application/octet-stream";
 
         res.setHeader("Content-Type", mimeType as string);
         res.setHeader(
           "Content-Disposition",
           `attachment; filename="${attachment.fileName}"`
         );
-
-        return res.send(fileBuffer);
+        return res.send(buffer);
       } catch (error) {
-        console.error("Error al cargar archivo desde storage:", error);
-        // Si falla, intentar con redirect a URL pública si está disponible
-        if (attachment.url && attachment.url.startsWith("http")) {
-          return res.redirect(attachment.url);
-        }
-        // Si no hay URL pública, continuar con la lógica local como último recurso
+        console.warn("No se pudo leer adjunto desde storage, probando local", {
+          storagePath,
+          error,
+        });
       }
     }
 
-    // Si es storage remoto (s3/cloudflare/r2) y tiene URL pública, hacer redirect
-    if (
-      ["s3", "cloudflare", "r2"].includes(storageDriver) &&
-      attachment.url &&
-      attachment.url.startsWith("http")
-    ) {
-      return res.redirect(attachment.url);
-    }
-
-    // Para storage local, buscar en el sistema de archivos
     let filePath: string | null = null;
     if (attachment.url) {
       try {
@@ -2466,58 +1914,17 @@ app.get("/api/attachments/:id/view", async (req, res) => {
       return res.status(404).json({ error: "Adjunto no encontrado." });
     }
 
-    // Validar tenant a través del recurso relacionado
-    const tenantId = (req as any).tenant?.id;
-    if (tenantId && attachment) {
-      let resourceTenantId: string | null = null;
-      
-      if (attachment.logEntryId) {
-        const logEntry = await prisma.logEntry.findUnique({
-          where: { id: attachment.logEntryId },
-          select: { tenantId: true } as any,
-        });
-        resourceTenantId = (logEntry as any)?.tenantId || null;
-      } else if (attachment.actaId) {
-        const acta = await prisma.acta.findUnique({
-          where: { id: attachment.actaId },
-          select: { tenantId: true } as any,
-        });
-        resourceTenantId = (acta as any)?.tenantId || null;
-      } else if (attachment.reportId) {
-        const report = await prisma.report.findUnique({
-          where: { id: attachment.reportId },
-          select: { tenantId: true } as any,
-        });
-        resourceTenantId = (report as any)?.tenantId || null;
-      } else if (attachment.communicationId) {
-        const communication = await prisma.communication.findUnique({
-          where: { id: attachment.communicationId },
-          select: { tenantId: true } as any,
-        });
-        resourceTenantId = (communication as any)?.tenantId || null;
-      } else if (attachment.costActaId) {
-        const costActa = await prisma.costActa.findUnique({
-          where: { id: attachment.costActaId },
-          select: { tenantId: true } as any,
-        });
-        resourceTenantId = (costActa as any)?.tenantId || null;
-      }
-      
-      if (resourceTenantId && resourceTenantId !== tenantId) {
-        return res.status(404).json({ error: "Adjunto no encontrado." });
-      }
-    }
+    const storagePath =
+      attachment.storagePath || resolveStorageKeyFromUrl(attachment.url);
 
-    const storageDriver = (process.env.STORAGE_DRIVER || "local").toLowerCase();
-    const storage = getStorage();
-
-    // Si tenemos storagePath, intentar cargar desde el storage configurado (local o remoto)
-    if (attachment.storagePath) {
+    if (storagePath) {
+      const storage = getStorage();
       try {
-        const fileBuffer = await storage.read(attachment.storagePath);
-
+        const buffer = await storage.read(storagePath);
         const mimeType =
-          attachment.type || mime.lookup(attachment.fileName) || "application/octet-stream";
+          attachment.type ||
+          mime.lookup(attachment.fileName) ||
+          "application/octet-stream";
 
         res.setHeader("Content-Type", mimeType as string);
         res.setHeader(
@@ -2525,25 +1932,13 @@ app.get("/api/attachments/:id/view", async (req, res) => {
           `inline; filename="${attachment.fileName}"`
         );
 
-        return res.send(fileBuffer);
+        return res.send(buffer);
       } catch (error) {
-        console.error("Error al cargar archivo desde storage (view):", error);
-        // Si falla, intentar con redirect a URL pública si está disponible
-        if (attachment.url && attachment.url.startsWith("http")) {
-          return res.redirect(attachment.url);
-        }
-        // Si no hay URL pública, continuar con la lógica local como último recurso
+        console.warn("No se pudo leer adjunto inline desde storage, probando local", {
+          storagePath,
+          error,
+        });
       }
-    }
-
-    // Si es storage remoto (s3/cloudflare/r2) y tiene URL pública, hacer redirect
-    if (
-      ["s3", "cloudflare", "r2"].includes(storageDriver) &&
-      attachment.url &&
-      attachment.url.startsWith("http")
-    ) {
-      // Si usamos S3/R2/Cloudflare, redirigimos a la URL pública. Idealmente firmada con Content-Disposition=inline.
-      return res.redirect(attachment.url);
     }
 
     let filePath: string | null = null;
@@ -2677,49 +2072,6 @@ app.post(
       if (!attachment) {
         return res.status(404).json({ error: "Adjunto no encontrado." });
       }
-
-      // Validar tenant a través del recurso relacionado
-      const requestTenantId = (req as any).tenant?.id;
-      if (requestTenantId && attachment) {
-        let resourceTenantId: string | null = null;
-        
-        if (attachment.logEntryId) {
-          const logEntry = await prisma.logEntry.findUnique({
-            where: { id: attachment.logEntryId },
-            select: { tenantId: true } as any,
-          });
-          resourceTenantId = (logEntry as any)?.tenantId || null;
-        } else if (attachment.actaId) {
-          const acta = await prisma.acta.findUnique({
-            where: { id: attachment.actaId },
-            select: { tenantId: true } as any,
-          });
-          resourceTenantId = (acta as any)?.tenantId || null;
-        } else if (attachment.reportId) {
-          const report = await prisma.report.findUnique({
-            where: { id: attachment.reportId },
-            select: { tenantId: true } as any,
-          });
-          resourceTenantId = (report as any)?.tenantId || null;
-        } else if (attachment.communicationId) {
-          const communication = await prisma.communication.findUnique({
-            where: { id: attachment.communicationId },
-            select: { tenantId: true } as any,
-          });
-          resourceTenantId = (communication as any)?.tenantId || null;
-        } else if (attachment.costActaId) {
-          const costActa = await prisma.costActa.findUnique({
-            where: { id: attachment.costActaId },
-            select: { tenantId: true } as any,
-          });
-          resourceTenantId = (costActa as any)?.tenantId || null;
-        }
-        
-        if (resourceTenantId && resourceTenantId !== requestTenantId) {
-          return res.status(404).json({ error: "Adjunto no encontrado." });
-        }
-      }
-
       if (attachment.type !== "application/pdf") {
         return res
           .status(400)
@@ -2795,32 +2147,9 @@ app.post(
         }
       }
 
-      // Obtener la contraseña del body para desencriptar la firma
-      const { password: signaturePassword } = req.body || {};
-      if (!signaturePassword) {
-        return res.status(400).json({
-          error: "Se requiere la contraseña para usar tu firma manuscrita.",
-        });
-      }
-
-      // Verificar que la contraseña sea correcta
-      const signer = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { password: true },
-      });
-      if (!signer) {
-        return res.status(404).json({ error: "Usuario no encontrado." });
-      }
-      const passwordMatches = await bcrypt.compare(signaturePassword, signer.password);
-      if (!passwordMatches) {
-        return res.status(401).json({
-          error: "Contraseña incorrecta.",
-        });
-      }
-
       const [originalBuffer, signatureBuffer] = await Promise.all([
         loadAttachmentBuffer(baseAttachment),
-        loadUserSignatureBuffer(signature, signaturePassword),
+        loadUserSignatureBuffer(signature),
       ]);
 
       // Si no recibimos coordenadas, calcularlas automáticamente para alinear con el cuadro del firmante
@@ -2833,7 +2162,7 @@ app.post(
             signatures: { include: { signer: true } },
             signatureTasks: {
               include: { signer: true },
-              orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+              orderBy: { assignedAt: "asc" },
             },
           },
         });
@@ -2842,16 +2171,9 @@ app.post(
           const orderedTasks = (logEntry.signatureTasks || [])
             .filter((t: any) => t?.signer?.id)
             .sort(
-              (a: any, b: any) => {
-                const timeA = new Date(a.assignedAt || 0).getTime();
-                const timeB = new Date(b.assignedAt || 0).getTime();
-                if (timeA !== timeB) return timeA - timeB;
-                // Tie-breaker
-                const createdA = new Date(a.createdAt || 0).getTime();
-                const createdB = new Date(b.createdAt || 0).getTime();
-                if (createdA !== createdB) return createdA - createdB;
-                return a.id.localeCompare(b.id);
-              }
+              (a: any, b: any) =>
+                new Date(a.assignedAt || 0).getTime() -
+                new Date(b.assignedAt || 0).getTime()
             );
           let signerIndex = orderedTasks.findIndex(
             (t: any) => t.signer?.id === userId
@@ -2864,10 +2186,10 @@ app.post(
           }
           if (signerIndex < 0) signerIndex = 0; // último recurso
           const MARGIN = 48; // Debe coincidir con pdfExport
-          const BOX_H = 140;
+          const BOX_H = 110;
           const GAP = 16;
-          const LINE_Y = 116; // línea de firma relativa al inicio del box
-          const LINE_X = 90; // desplazamiento respecto al margen izquierdo
+          const LINE_Y = 72; // línea de firma relativa al inicio del box
+          const LINE_X = 70; // desplazamiento respecto al margen izquierdo
           y =
             y === undefined ? MARGIN + signerIndex * (BOX_H + GAP) + LINE_Y : y;
           x = x === undefined ? MARGIN + LINE_X : x;
@@ -2904,14 +2226,11 @@ app.post(
       });
 
       const storage = getStorage();
-      const storageTenantId = (req as any).tenant?.id;
       const parsedFileName = path.parse(attachment.fileName || "documento.pdf");
       const signedFileName = `${parsedFileName.name}-firmado-${Date.now()}.pdf`;
       const signedKey = createStorageKey(
-        "firmas",
-        signedFileName,
-        undefined,
-        storageTenantId
+        `signed-documents/${userId}`,
+        signedFileName
       );
       await storage.save({ path: signedKey, content: signedBuffer });
       const signedUrl = storage.getPublicUrl(signedKey);
@@ -3015,7 +2334,7 @@ app.post(
             assignees: true,
             signatureTasks: {
               include: { signer: true },
-              orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+              orderBy: { assignedAt: "asc" },
             },
             history: {
               include: { user: true },
@@ -3257,12 +2576,6 @@ app.get(
       if (endDate) filters.endDate = new Date(endDate as string);
       filters.limit = parseInt(limit as string, 10) || 100;
 
-      // Agregar tenantId a los filtros si está disponible
-      const tenantId = (req as any).tenant?.id;
-      if (tenantId) {
-        filters.tenantId = tenantId;
-      }
-
       const events = await getSecurityEvents(filters);
 
       res.json({
@@ -3288,9 +2601,7 @@ app.get(
   requireAdmin,
   async (req: AuthRequest, res) => {
     try {
-      // Filtrar por tenant si está disponible
-      const tenantId = (req as any).tenant?.id;
-      const stats = await getSecurityStats(tenantId);
+      const stats = await getSecurityStats();
       res.json(stats);
     } catch (error) {
       logger.error("Error obteniendo estadísticas de seguridad", {
@@ -3329,15 +2640,8 @@ app.get("/health", (req, res) => {
 // Endpoint público para obtener usuarios de demostración
 app.get("/api/public/demo-users", async (req, res) => {
   try {
-    // Filtrar por tenant si está disponible
-    const tenantId = (req as any).tenant?.id;
-    const whereClause: any = { status: "active" };
-    if (tenantId) {
-      whereClause.tenantId = tenantId;
-    }
-    
     const users = await prisma.user.findMany({
-      where: whereClause,
+      where: { status: "active" },
       select: {
         id: true,
         fullName: true,
@@ -3436,9 +2740,7 @@ app.get(
   authMiddleware,
   async (req: AuthRequest, res) => {
     try {
-      const where = withTenantFilter(req);
       const project = await prisma.project.findFirst({
-        where: Object.keys(where).length > 0 ? (where as any) : undefined,
         include: {
           keyPersonnel: {
             orderBy: {
@@ -3474,62 +2776,7 @@ app.get(
   authMiddleware,
   async (req: AuthRequest, res) => {
     try {
-      // Si se solicita el summary, calcular y retornar el resumen
-      if (req.query.summary === "1") {
-        const where = withTenantFilter(req);
-        const project = await prisma.project.findFirst({
-          where: Object.keys(where).length > 0 ? (where as any) : undefined,
-        });
-        if (!project) {
-          return res.status(404).json({
-            error: "No se encontró ningún proyecto.",
-          });
-        }
-
-        const modWhere = withTenantFilter(req);
-        const modifications = await prisma.contractModification.findMany({
-          where: Object.keys(modWhere).length > 0 ? (modWhere as any) : undefined,
-          orderBy: { date: "desc" },
-        });
-
-        // El tope del 50% se calcula sobre el valor inicial del contrato
-        const baseValue = project.initialValue || 0;
-        const cap = baseValue * 0.5;
-
-        // Separar adiciones que afectan el 50% de las que no (incorporaciones por mayores cantidades)
-        const additionsAffecting = modifications
-          .filter((mod) => 
-            mod.type === "ADDITION" && 
-            mod.value !== null && 
-            (mod.affectsFiftyPercent === true || mod.affectsFiftyPercent === null) // null se trata como true por compatibilidad
-          )
-          .reduce((sum, mod) => sum + (mod.value || 0), 0);
-
-        const additionsNonAffecting = modifications
-          .filter((mod) => 
-            mod.type === "ADDITION" && 
-            mod.value !== null && 
-            mod.affectsFiftyPercent === false
-          )
-          .reduce((sum, mod) => sum + (mod.value || 0), 0);
-
-        const usedPercent = baseValue > 0 ? (additionsAffecting / baseValue) * 100 : 0;
-        const remainingCap = Math.max(cap - additionsAffecting, 0);
-
-        return res.json({
-          baseValue,
-          cap,
-          additionsAffecting,
-          additionsNonAffecting,
-          usedPercent,
-          remainingCap,
-        });
-      }
-
-      // Si no es summary, retornar la lista normal
-      const modWhere = withTenantFilter(req);
       const modifications = await prisma.contractModification.findMany({
-        where: Object.keys(modWhere).length > 0 ? (modWhere as any) : undefined,
         orderBy: { date: "desc" },
         include: {
           attachment: true,
@@ -3564,7 +2811,7 @@ app.post(
   authMiddleware,
   async (req: AuthRequest, res) => {
     try {
-      const { number, type, date, value, days, justification, attachmentId, affectsFiftyPercent } =
+      const { number, type, date, value, days, justification, attachmentId } =
         req.body ?? {};
 
       if (!number || !type || !date || !justification) {
@@ -3599,33 +2846,18 @@ app.post(
           ? null
           : parsedDaysRaw;
 
-      // Para adiciones, affectsFiftyPercent es true por defecto (solo false si es incorporación por mayores cantidades)
-      // Para otros tipos (prórrogas), no aplica
-      const affectsFiftyPercentValue = 
-        prismaType === "ADDITION" 
-          ? (affectsFiftyPercent !== undefined ? Boolean(affectsFiftyPercent) : true)
-          : null;
-
-      // Asignar tenantId si está disponible
-      const tenantId = (req as any).tenant?.id;
-      const modData: any = {
-        number,
-        type: prismaType,
-        date: new Date(date),
-        value: parsedValue,
-        days: parsedDays,
-        justification,
-        affectsFiftyPercent: affectsFiftyPercentValue,
-        attachment: attachmentId
-          ? { connect: { id: attachmentId } }
-          : undefined,
-      };
-      if (tenantId) {
-        modData.tenantId = tenantId;
-      }
-
       const newModification = await prisma.contractModification.create({
-        data: modData,
+        data: {
+          number,
+          type: prismaType,
+          date: new Date(date),
+          value: parsedValue,
+          days: parsedDays,
+          justification,
+          attachment: attachmentId
+            ? { connect: { id: attachmentId } }
+            : undefined,
+        },
         include: {
           attachment: true,
         },
@@ -3770,11 +3002,9 @@ app.post(
 );
 
 // --- RUTAS PARA ACTAS DE COMITÉ ---
-app.get("/api/actas", async (req, res) => {
+app.get("/api/actas", async (_req, res) => {
   try {
-    const where = withTenantFilter(req);
     const actas = await prisma.acta.findMany({
-      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { date: "desc" },
       include: {
         attachments: true,
@@ -3792,9 +3022,8 @@ app.get("/api/actas", async (req, res) => {
 app.get("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const where = withTenantFilter(req, { id } as any);
-    const acta = await prisma.acta.findFirst({
-      where: Object.keys(where).length > 1 ? (where as any) : { id },
+    const acta = await prisma.acta.findUnique({
+      where: { id },
       include: {
         attachments: true,
         commitments: { include: { responsible: true } },
@@ -3803,11 +3032,6 @@ app.get("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
     });
 
     if (!acta) {
-      return res.status(404).json({ error: "Acta no encontrada." });
-    }
-    
-    // Verificar que el tenant coincida si hay tenant
-    if ((req as any).tenant && (acta as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Acta no encontrada." });
     }
 
@@ -3841,23 +3065,14 @@ app.post("/api/actas", async (req, res) => {
     const prismaArea = actaAreaMap[area] || "OTHER";
     const prismaStatus = actaStatusMap[status] || "DRAFT";
 
-    // Asignar tenantId si está disponible
-    const tenantId = (req as any).tenant?.id;
-    const actaData: any = {
-      number,
-      title,
-      date: new Date(date),
-      area: prismaArea,
-      status: prismaStatus,
-      summary,
-    };
-    if (tenantId) {
-      actaData.tenantId = tenantId;
-    }
-
     const newActa = await prisma.acta.create({
       data: {
-        ...actaData,
+        number,
+        title,
+        date: new Date(date),
+        area: prismaArea,
+        status: prismaStatus,
+        summary,
         commitments: {
           create: commitments.map((commitment: any) => ({
             description: commitment.description,
@@ -3898,21 +3113,6 @@ app.put("/api/actas/:id", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { number, title, date, area, status, summary } = req.body ?? {};
-
-    // Verificar que el acta pertenezca al tenant
-    const where = withTenantFilter(req, { id } as any);
-    const existingActa = await prisma.acta.findFirst({
-      where: Object.keys(where).length > 1 ? (where as any) : { id },
-    });
-
-    if (!existingActa) {
-      return res.status(404).json({ error: "Acta no encontrada." });
-    }
-    
-    // Verificar que el tenant coincida si hay tenant
-    if ((req as any).tenant && (existingActa as any).tenantId !== (req as any).tenant.id) {
-      return res.status(404).json({ error: "Acta no encontrada." });
-    }
 
     const data: Record<string, unknown> = {};
     if (number) data.number = number;
@@ -4008,18 +3208,6 @@ app.post(
     try {
       const { actaId, commitmentId } = req.params;
 
-      // Verificar que el acta pertenezca al tenant primero
-      const tenantId = (req as any).tenant?.id;
-      const actaWhere = tenantId ? { id: actaId, tenantId } as any : { id: actaId };
-      const acta = await prisma.acta.findFirst({
-        where: actaWhere,
-        select: { id: true },
-      });
-      
-      if (!acta) {
-        return res.status(404).json({ error: "Acta no encontrada." });
-      }
-
       const commitment = await prisma.commitment.findFirst({
         where: { id: commitmentId, actaId },
         include: {
@@ -4092,17 +3280,8 @@ app.post(
         return res.status(401).json({ error: "Contraseña incorrecta." });
       }
 
-      // Verificar que el acta pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const acta = await prisma.acta.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
-      });
+      const acta = await prisma.acta.findUnique({ where: { id } });
       if (!acta) {
-        return res.status(404).json({ error: "Acta no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (acta as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Acta no encontrada." });
       }
 
@@ -4153,9 +3332,7 @@ app.post(
 // --- RUTAS DE BITÁCORA ---
 app.get("/api/log-entries", authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const where = withTenantFilter(req);
     const entries = await prisma.logEntry.findMany({
-      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { createdAt: "desc" },
       include: logEntryResponseInclude as any,
     });
@@ -4234,34 +3411,6 @@ app.post(
         projectId,
         assigneeIds = [],
         scheduleDay,
-        activitiesPerformed,
-        materialsUsed,
-        workforce,
-        weatherConditions,
-        additionalObservations,
-        locationDetails,
-        contractorPersonnel,
-        interventoriaPersonnel,
-        equipmentResources,
-        executedActivities,
-        executedQuantities,
-        scheduledActivities,
-        qualityControls,
-        materialsReceived,
-        safetyNotes,
-        projectIssues,
-        siteVisits,
-        weatherReport,
-        contractorObservations,
-        interventoriaObservations,
-        safetyFindings,
-        safetyContractorResponse,
-        environmentFindings,
-        environmentContractorResponse,
-        socialActivities,
-        socialObservations,
-        socialContractorResponse,
-        socialPhotoSummary,
       } = req.body ?? {};
 
       // Leer requiredSignatories directamente de req.body (no del destructuring)
@@ -4332,13 +3481,10 @@ app.post(
       }[] = [];
 
       if (req.files && Array.isArray(req.files)) {
-        const tenantId = (req as any).tenant?.id;
         for (const file of req.files as Express.Multer.File[]) {
           const key = createStorageKey(
-            "bitacora",
-            file.originalname,
-            undefined,
-            tenantId
+            "log-entries",
+            `${Date.now()}-${file.originalname}`
           );
           await storage.save({ path: key, content: file.buffer });
           attachmentRecords.push({
@@ -4417,35 +3563,8 @@ app.post(
       console.log("DEBUG: Intentando crear LogEntry en Prisma...");
       let logEntry;
       try {
-        // Asignar tenantId (obligatorio para multi-tenancy)
-        // Primero intentar obtener desde req.tenant (detectado por middleware)
-        let tenantId = (req as any).tenant?.id;
-        
-        // Si no está disponible en req.tenant, obtener desde el usuario autenticado
-        if (!tenantId) {
-          console.log("DEBUG: Tenant no detectado en req.tenant, obteniendo desde usuario...");
-          const user = await prisma.user.findUnique({
-            where: { id: userId },
-            select: { tenantId: true },
-          });
-          
-          if (user?.tenantId) {
-            tenantId = user.tenantId;
-            console.log("DEBUG: tenantId obtenido desde usuario:", tenantId);
-          }
-        }
-        
-        // Validar que existe tenantId antes de crear
-        if (!tenantId) {
-          console.error("❌ ERROR: No se pudo detectar el tenant del request ni del usuario");
-          return res.status(400).json({ 
-            error: "No se pudo determinar el cliente (tenant). Por favor, verifica tu acceso." 
-          });
-        }
-        
-        console.log("DEBUG: tenantId detectado:", tenantId);
-        
-        const logEntryDataBase: any = {
+        logEntry = await prisma.logEntry.create({
+        data: {
           title,
           description,
           type: prismaType,
@@ -4457,115 +3576,24 @@ app.post(
           activityEndDate: activityEndValue,
           isConfidential: parseBooleanInput(isConfidential),
           scheduleDay: parsedScheduleDay,
-          tenant: { connect: { id: tenantId } }, // Usar relación en lugar de tenantId directo
           author: { connect: { id: userId } },
           project: { connect: { id: projectId } },
-          // Campos de texto
-          activitiesPerformed: typeof activitiesPerformed === "string" ? activitiesPerformed : "",
-          materialsUsed: typeof materialsUsed === "string" ? materialsUsed : "",
-          workforce: typeof workforce === "string" ? workforce : "",
-          weatherConditions: typeof weatherConditions === "string" ? weatherConditions : "",
-          additionalObservations: typeof additionalObservations === "string" ? additionalObservations : "",
-          locationDetails: typeof locationDetails === "string" ? locationDetails : "",
-          contractorObservations: typeof contractorObservations === "string" ? contractorObservations : null,
-          interventoriaObservations: typeof interventoriaObservations === "string" ? interventoriaObservations : null,
-          safetyFindings: typeof safetyFindings === "string" ? safetyFindings : null,
-          safetyContractorResponse: typeof safetyContractorResponse === "string" ? safetyContractorResponse : null,
-          environmentFindings: typeof environmentFindings === "string" ? environmentFindings : null,
-          environmentContractorResponse: typeof environmentContractorResponse === "string" ? environmentContractorResponse : null,
-          socialObservations: typeof socialObservations === "string" ? socialObservations : null,
-          socialContractorResponse: typeof socialContractorResponse === "string" ? socialContractorResponse : null,
-          socialPhotoSummary: typeof socialPhotoSummary === "string" ? socialPhotoSummary : null,
-          // Campos JSON - parsear solo si tienen contenido
-          contractorPersonnel: contractorPersonnel && contractorPersonnel !== "" ? (typeof contractorPersonnel === "string" ? JSON.parse(contractorPersonnel) : contractorPersonnel) : null,
-          interventoriaPersonnel: interventoriaPersonnel && interventoriaPersonnel !== "" ? (typeof interventoriaPersonnel === "string" ? JSON.parse(interventoriaPersonnel) : interventoriaPersonnel) : null,
-          equipmentResources: equipmentResources && equipmentResources !== "" ? (typeof equipmentResources === "string" ? JSON.parse(equipmentResources) : equipmentResources) : null,
-          executedActivities: executedActivities && executedActivities !== "" ? (typeof executedActivities === "string" ? JSON.parse(executedActivities) : executedActivities) : null,
-          executedQuantities: executedQuantities && executedQuantities !== "" ? (typeof executedQuantities === "string" ? JSON.parse(executedQuantities) : executedQuantities) : null,
-          scheduledActivities: scheduledActivities && scheduledActivities !== "" ? (typeof scheduledActivities === "string" ? JSON.parse(scheduledActivities) : scheduledActivities) : null,
-          qualityControls: qualityControls && qualityControls !== "" ? (typeof qualityControls === "string" ? JSON.parse(qualityControls) : qualityControls) : null,
-          materialsReceived: materialsReceived && materialsReceived !== "" ? (typeof materialsReceived === "string" ? JSON.parse(materialsReceived) : materialsReceived) : null,
-          safetyNotes: safetyNotes && safetyNotes !== "" ? (typeof safetyNotes === "string" ? JSON.parse(safetyNotes) : safetyNotes) : null,
-          projectIssues: projectIssues && projectIssues !== "" ? (typeof projectIssues === "string" ? JSON.parse(projectIssues) : projectIssues) : null,
-          siteVisits: siteVisits && siteVisits !== "" ? (typeof siteVisits === "string" ? JSON.parse(siteVisits) : siteVisits) : null,
-          weatherReport: weatherReport && weatherReport !== "" ? (typeof weatherReport === "string" ? JSON.parse(weatherReport) : weatherReport) : null,
-          socialActivities: socialActivities && socialActivities !== "" ? (typeof socialActivities === "string" ? JSON.parse(socialActivities) : socialActivities) : null,
-        };
-
-        const MAX_FOLIO_RETRIES = 5;
-        let lastFolioError: any = null;
-
-        for (let attempt = 0; attempt < MAX_FOLIO_RETRIES; attempt++) {
-          // Generar folioNumber: obtener el máximo folioNumber del tenant y sumar 1
-          const maxFolioResult = await prisma.$queryRawUnsafe<
-            Array<{ maxFolio: bigint | null }>
-          >(
-            `SELECT MAX(folioNumber) as maxFolio FROM LogEntry WHERE tenantId = ?`,
-            tenantId
-          );
-          const maxFolio = maxFolioResult[0]?.maxFolio;
-          const nextFolioNumber = maxFolio ? Number(maxFolio) + 1 : 1;
-          console.log(
-            `DEBUG: folioNumber generado (intento ${attempt + 1}):`,
-            nextFolioNumber
-          );
-
-          try {
-            logEntry = await prisma.logEntry.create({
-              data: {
-                ...logEntryDataBase,
-                folioNumber: nextFolioNumber, // Generado automáticamente por tenant
-                assignees: {
-                  connect: (Array.isArray(assigneeIds) ? assigneeIds : [])
-                    .filter(
-                      (id) => typeof id === "string" && id.trim().length > 0
-                    )
-                    .map((id) => ({ id })),
-                },
-                attachments: {
-                  create: attachmentRecords.map((att) => ({
-                    fileName: att.fileName,
-                    url: att.url,
-                    size: att.size,
-                    type: att.type,
-                    storagePath: att.storagePath,
-                  })),
-                },
-              },
-            });
-            lastFolioError = null;
-            break; // éxito
-          } catch (prismaError: any) {
-            lastFolioError = prismaError;
-            const target = (prismaError.meta as any)?.target;
-            const isFolioConstraint =
-              prismaError?.code === "P2002" &&
-              (Array.isArray(target)
-                ? target.includes("LogEntry_folioNumber_tenantId_key") ||
-                  target.includes("folioNumber_tenantId")
-                : typeof target === "string" &&
-                  target.includes("folioNumber_tenantId"));
-
-            if (isFolioConstraint) {
-              console.warn(
-                `⚠️ Conflicto de folio (intento ${attempt + 1}). Recalculando...`
-              );
-              // Reintentar con el siguiente número
-              continue;
-            }
-
-            // Otros errores se relanzan
-            throw prismaError;
-          }
-        }
-
-        if (!logEntry) {
-          console.error(
-            "❌ No se pudo generar folio único después de múltiples intentos",
-            lastFolioError
-          );
-          throw lastFolioError || new Error("No se pudo generar folio único.");
-        }
+          assignees: {
+            connect: (Array.isArray(assigneeIds) ? assigneeIds : [])
+              .filter((id) => typeof id === "string" && id.trim().length > 0)
+              .map((id) => ({ id })),
+          },
+          attachments: {
+            create: attachmentRecords.map((att) => ({
+              fileName: att.fileName,
+              url: att.url,
+              size: att.size,
+              type: att.type,
+              storagePath: att.storagePath,
+            })),
+          },
+        },
+      });
       console.log("✅ LogEntry creado exitosamente:", { id: logEntry.id, title: logEntry.title });
       
       // Registrar la creación inicial en el historial
@@ -4798,23 +3826,9 @@ app.post(
           }
         }
       }
-      // Log detallado del error para debugging
-      console.error("❌ ERROR DETALLADO al crear anotación:");
-      console.error("Error type:", error?.constructor?.name);
-      console.error("Error message:", error instanceof Error ? error.message : String(error));
-      if (error instanceof Prisma.PrismaClientKnownRequestError) {
-        console.error("Prisma error code:", error.code);
-        console.error("Prisma error meta:", JSON.stringify(error.meta, null, 2));
-      }
-      if (error instanceof Error && error.stack) {
-        console.error("Error stack:", error.stack);
-      }
-      
       res.status(500).json({ 
         error: "No se pudo crear la anotación.",
-        details: process.env.NODE_ENV === 'development' 
-          ? (error instanceof Error ? error.message : String(error))
-          : undefined
+        details: error instanceof Error ? error.message : String(error)
       });
     }
   }
@@ -4826,18 +3840,12 @@ app.get(
   async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      const where = withTenantFilter(req, { id } as any);
-      const entry = await prisma.logEntry.findFirst({
-        where: Object.keys(where).length > 1 ? where : { id },
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
         include: logEntryResponseInclude as any,
       });
 
       if (!entry) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -4867,19 +3875,12 @@ app.post(
         return res.status(401).json({ error: "Usuario no autenticado." });
       }
 
-      // Verificar que el log entry pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const entry = await prisma.logEntry.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
         include: { author: true },
       });
 
       if (!entry) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -4963,19 +3964,12 @@ app.post(
         return res.status(401).json({ error: "Usuario no autenticado." });
       }
 
-      // Verificar que el log entry pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const entry = await prisma.logEntry.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
         include: { assignees: true },
       });
 
       if (!entry) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -5070,19 +4064,12 @@ app.post(
         return res.status(401).json({ error: "Usuario no autenticado." });
       }
 
-      // Verificar que el log entry pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const entry = await prisma.logEntry.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
         include: { author: true },
       });
 
       if (!entry) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -5187,19 +4174,12 @@ app.post(
         return res.status(401).json({ error: "Usuario no autenticado." });
       }
 
-      // Verificar que el log entry pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const entry = await prisma.logEntry.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
         include: { author: true },
       });
 
       if (!entry) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -5276,6 +4256,7 @@ app.post(
 app.put(
   "/api/log-entries/:id",
   authMiddleware,
+  requireEditor,
   (req, res, next) => {
     // Solo usar multer si el Content-Type es multipart/form-data
     const contentType = req.headers["content-type"] || "";
@@ -5301,33 +4282,11 @@ app.put(
         return res.status(401).json({ error: "Usuario no autenticado." });
       }
 
-      // Obtener información del usuario primero para verificar permisos
-      const currentUser = await prisma.user.findUnique({
-        where: { id: userId },
-        select: {
-          id: true,
-          fullName: true,
-          appRole: true,
-          projectRole: true,
-          entity: true,
-        },
-      });
-
-      if (!currentUser) {
-        return res.status(404).json({
-          error: "Usuario no encontrado.",
-        });
-      }
-
       // Verificar acceso al recurso usando el middleware de permisos
-      // Obtener tenantId del request si está disponible
-      const tenantId = (req as any).tenant?.id;
-      
       const { entry: existingEntry, hasAccess, reason } = await verifyLogEntryAccess(
         id,
         userId,
-        true, // requireWriteAccess = true
-        tenantId
+        true // requireWriteAccess = true
       );
 
       if (!hasAccess || !existingEntry) {
@@ -5362,18 +4321,28 @@ app.put(
             : existingEntry.status;
       }
 
+      const currentUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          fullName: true,
+          appRole: true,
+          projectRole: true,
+        },
+      });
+
+      if (!currentUser) {
+        return res.status(404).json({
+          error: "Usuario no encontrado.",
+        });
+      }
+
       const isAdmin = currentUser.appRole === "admin";
-      const isEditor = currentUser.appRole === "editor";
       const isAuthor = existingEntry.authorId === userId;
-      // Verificar si es contratista: por projectRole o por entity
-      const isContractorUser = 
-        currentUser.projectRole === "CONTRACTOR_REP" || 
-        currentUser.entity === "CONTRATISTA";
+      const isContractorUser = currentUser.projectRole === "CONTRACTOR_REP";
       const status = existingEntry.status;
 
-      // Verificar permisos según el estado de la anotación
       if (status === "DRAFT") {
-        // Solo autor o admin pueden editar borradores
         if (!isAuthor && !isAdmin) {
           return res.status(403).json({
             error:
@@ -5382,34 +4351,15 @@ app.put(
           });
         }
       } else if (status === "SUBMITTED") {
-        // Permitir que contratistas asignados o firmantes actualicen campos permitidos
-        // También permitir a admins y editores
-        const isAssignee = existingEntry.assignees?.some((a: any) => a.id === userId);
-        let isSigner = false;
-        if (existingEntry.signatureTasks) {
-          isSigner = existingEntry.signatureTasks.some((task: any) => task.signerId === userId);
-        } else {
-          // Si no está incluido, consultar directamente
-          const signatureTask = await prisma.logEntrySignatureTask.findFirst({
-            where: {
-              logEntryId: id,
-              signerId: userId,
-            },
-          });
-          isSigner = !!signatureTask;
-        }
-        
-        // Permitir si es admin, editor, contratista asignado o firmante
-        if (!isAdmin && !isEditor && !isContractorUser && !isAssignee && !isSigner) {
+        if (!isContractorUser && !isAdmin) {
           return res.status(403).json({
             error:
-              "Solo el contratista asignado o firmante puede agregar observaciones durante su fase de revisión.",
+              "Solo el contratista asignado puede agregar observaciones durante su fase de revisión.",
             code: "CONTRACTOR_REVIEW_ONLY",
           });
         }
       } else if (status === "NEEDS_REVIEW") {
-        // Solo autor, admin o editor pueden editar durante revisión final
-        if (!isAuthor && !isAdmin && !isEditor) {
+        if (!isAuthor && !isAdmin) {
           return res.status(403).json({
             error:
               "Solo la interventoría puede ajustar la anotación durante la revisión final.",
@@ -5417,14 +4367,11 @@ app.put(
           });
         }
       } else {
-        // Para otros estados, solo admin o editor pueden editar
-        if (!isAdmin && !isEditor) {
-          return res.status(403).json({
-            error: `No se puede editar una anotación en estado '${entryStatusReverseMap[status] || status}'.`,
-            code: "ENTRY_NOT_EDITABLE",
-            currentStatus: status,
-          });
-        }
+        return res.status(403).json({
+          error: `No se puede editar una anotación en estado '${entryStatusReverseMap[status] || status}'.`,
+          code: "ENTRY_NOT_EDITABLE",
+          currentStatus: status,
+        });
       }
 
       if (
@@ -5618,9 +4565,8 @@ app.put(
       const newAttachments: any[] = [];
 
       if (req.files && Array.isArray(req.files)) {
-        const tenantId = (req as any).tenant?.id;
         for (const file of req.files as Express.Multer.File[]) {
-          const key = createStorageKey("bitacora", file.originalname, undefined, tenantId);
+          const key = createStorageKey("log-entries", `${Date.now()}-${file.originalname}`);
           await storage.save({ path: key, content: file.buffer });
           newAttachments.push({
             fileName: file.originalname,
@@ -5642,9 +4588,7 @@ app.put(
         (key) => key !== "attachments"
       );
 
-      // Si el estado es SUBMITTED y el usuario es contratista (no admin ni editor),
-      // solo permitir actualizar campos específicos del contratista
-      if (status === "SUBMITTED" && !isAdmin && !isEditor) {
+      if (status === "SUBMITTED") {
         const contractorAllowedFields = new Set([
           "contractorObservations",
           "safetyContractorResponse",
@@ -6139,128 +5083,10 @@ app.put(
   }
 );
 
-app.delete(
-  "/api/log-entries/:id",
-  authMiddleware,
-  requireAdmin,
-  async (req: AuthRequest, res) => {
-    try {
-      const { id } = req.params;
-      const userId = req.user?.userId;
-
-      if (!userId) {
-        return res.status(401).json({ error: "Usuario no autenticado." });
-      }
-
-      // Verificar que el log entry pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const entry = await prisma.logEntry.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
-        include: {
-          attachments: true,
-          author: {
-            select: {
-              id: true,
-              fullName: true,
-              email: true,
-            },
-          },
-        },
-      });
-
-      if (!entry) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
-      }
-
-      // Eliminar archivos adjuntos del storage
-      const storage = getStorage();
-      if (entry.attachments && entry.attachments.length > 0) {
-        for (const attachment of entry.attachments) {
-          if (attachment.storagePath) {
-            try {
-              await storage.remove(attachment.storagePath);
-            } catch (storageError) {
-              console.warn(
-                `No se pudo eliminar el archivo del storage: ${attachment.storagePath}`,
-                storageError
-              );
-              // Continuar con la eliminación aunque falle el storage
-            }
-          }
-        }
-      }
-
-      // Eliminar relaciones manualmente antes de eliminar la anotación
-      await prisma.$transaction([
-        // Eliminar tareas de revisión
-        prisma.logEntryReviewTask.deleteMany({
-          where: { logEntryId: id },
-        }),
-        // Eliminar tareas de firma
-        prisma.logEntrySignatureTask.deleteMany({
-          where: { logEntryId: id },
-        }),
-        // Eliminar historial
-        prisma.logEntryHistory.deleteMany({
-          where: { logEntryId: id },
-        }),
-        // Eliminar comentarios (y sus attachments)
-        prisma.comment.deleteMany({
-          where: { logEntryId: id },
-        }),
-        // Eliminar firmas
-        prisma.signature.deleteMany({
-          where: { logEntryId: id },
-        }),
-        // Eliminar attachments
-        prisma.attachment.deleteMany({
-          where: { logEntryId: id },
-        }),
-        // Finalmente, eliminar la anotación
-        prisma.logEntry.delete({
-          where: { id },
-        }),
-      ]);
-
-      // Registrar evento de seguridad
-      recordSecurityEvent('LOG_ENTRY_DELETED', 'high', req, {
-        logEntryId: id,
-        authorId: entry.authorId,
-        authorEmail: entry.author.email,
-        folioNumber: entry.folioNumber,
-        title: entry.title,
-      });
-
-      logger.info("Anotación eliminada por administrador", {
-        logEntryId: id,
-        folioNumber: entry.folioNumber,
-        deletedBy: userId,
-        authorId: entry.authorId,
-      });
-
-      res.status(204).send();
-    } catch (error) {
-      logger.error("Error al eliminar la anotación", {
-        error: error instanceof Error ? error.message : String(error),
-        logEntryId: req.params.id,
-        userId: req.user?.userId,
-      });
-      res.status(500).json({
-        error: "No se pudo eliminar la anotación.",
-        details: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-);
-
 app.post(
   "/api/log-entries/:id/comments",
   authMiddleware,
+  requireEditor,
   (req: AuthRequest, res) => {
     const uploadMiddleware = upload.array("attachments", 5);
 
@@ -6290,12 +5116,10 @@ app.post(
         }
 
         // Verificar acceso al log entry antes de permitir comentar
-        const tenantId = (req as any).tenant?.id;
         const { entry: logEntry, hasAccess, reason } = await verifyLogEntryAccess(
           id,
           userId,
-          false, // Solo lectura necesaria para comentar
-          tenantId
+          false // Solo lectura necesaria para comentar
         );
 
         if (!hasAccess || !logEntry) {
@@ -6308,63 +5132,6 @@ app.post(
           return res.status(403).json({
             error: reason || "No tienes acceso a este recurso",
             code: "ACCESS_DENIED",
-          });
-        }
-
-        // Validar permisos para comentar
-        const currentUser = await prisma.user.findUnique({
-          where: { id: userId },
-          select: { appRole: true, projectRole: true, status: true, entity: true },
-        });
-
-        if (!currentUser || currentUser.status !== 'active') {
-          return res.status(403).json({
-            error: "Usuario no activo.",
-            code: "USER_INACTIVE",
-          });
-        }
-
-        // Si verifyLogEntryAccess retornó hasAccess: true, el usuario tiene acceso básico
-        // Ahora validamos permisos específicos para comentar:
-        
-        // 1. Admins y editores siempre pueden comentar
-        const isAdminOrEditor = currentUser.appRole === 'admin' || currentUser.appRole === 'editor';
-        
-        // 2. Verificar si el usuario está asignado a la bitácora
-        const isAssignee = logEntry.assignees?.some((a: any) => a.id === userId);
-        const isAuthor = logEntry.authorId === userId;
-        
-        // Verificar si es firmante (consultar directamente si no está incluido)
-        let isSigner = false;
-        if (logEntry.signatureTasks) {
-          isSigner = logEntry.signatureTasks.some((task: any) => task.signerId === userId);
-        } else {
-          // Si no está incluido, consultar directamente
-          const signatureTask = await prisma.logEntrySignatureTask.findFirst({
-            where: {
-              logEntryId: id,
-              signerId: userId,
-            },
-          });
-          isSigner = !!signatureTask;
-        }
-
-        const isSubmitted = logEntry.status === 'SUBMITTED';
-
-        // Permitir comentarios si:
-        // - Es admin o editor, O
-        // - Es autor de la bitácora, O
-        // - Está asignado a la bitácora (especialmente importante cuando está en SUBMITTED), O
-        // - Es firmante de la bitácora
-        const canComment = isAdminOrEditor || 
-                          isAuthor || 
-                          isAssignee || 
-                          isSigner;
-
-        if (!canComment) {
-          return res.status(403).json({
-            error: "No tienes permisos para agregar comentarios en esta bitácora.",
-            code: "COMMENT_PERMISSION_DENIED",
           });
         }
 
@@ -6395,13 +5162,9 @@ app.post(
               });
               continue;
             }
-            // Comentarios de bitácoras van en la sección bitacora
-            const tenantId = (req as any).tenant?.id;
             const stored = await persistUploadedFile(
               file,
-              "bitacora",
-              undefined,
-              tenantId
+              "log-entry-comments"
             );
             const attachment = await prisma.attachment.create({
               data: {
@@ -6502,10 +5265,9 @@ app.post(
         return res.status(401).json({ error: "Usuario no autenticado." });
       }
 
-      // Verificar que el log entry pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const entry = await prisma.logEntry.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
+      // Obtener la anotación
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
         include: {
           reviewTasks: { include: { reviewer: true } },
           assignees: true,
@@ -6513,11 +5275,6 @@ app.post(
       });
 
       if (!entry) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -6647,23 +5404,15 @@ app.post(
         });
       }
 
-      // Verificar que el log entry pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const entry = await prisma.logEntry.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
+      const entry = await prisma.logEntry.findUnique({
+        where: { id },
         include: {
           signatureTasks: { include: { signer: true } },
           attachments: true,
-          signedPdf: true,
         },
       });
 
       if (!entry) {
-        return res.status(404).json({ error: "Anotación no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (entry as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Anotación no encontrada." });
       }
 
@@ -6749,91 +5498,65 @@ app.post(
 
       if (userSignature) {
         try {
-          // Buscar si existe un PDF con firmas previas
-          // Primero intentar usar el PDF referenciado en signedPdfAttachmentId
-          let previousSignedPdf: any = entry.signedPdf;
-          if (!previousSignedPdf && entry.signedPdfAttachmentId) {
-            // Si entry.signedPdf no está cargado pero existe el ID, cargarlo explícitamente
-            previousSignedPdf = await prisma.attachment.findUnique({
-              where: { id: entry.signedPdfAttachmentId },
+          // Regenerar el PDF para que muestre el estado actualizado ("Firmado" con fecha)
+          console.log("Regenerando PDF para reflejar el estado actualizado de las firmas...");
+          let basePdf: any = null;
+          try {
+            const baseUrl =
+              process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
+            await generateLogEntryPdf({
+              prisma,
+              logEntryId: id,
+              uploadsDir: process.env.UPLOADS_DIR || "./uploads",
+              baseUrl,
             });
-          }
-          if (!previousSignedPdf) {
-            // Fallback: buscar por nombre
-            previousSignedPdf = await prisma.attachment.findFirst({
+            console.log("PDF regenerado exitosamente con el estado actualizado");
+
+            // Buscar el PDF recién regenerado (el más reciente sin "firmado" en el nombre)
+            basePdf = await prisma.attachment.findFirst({
               where: {
                 logEntryId: id,
                 type: "application/pdf",
-                fileName: { contains: "firmado" },
+                fileName: { not: { contains: "firmado" } },
+              },
+              orderBy: { createdAt: "desc" },
+            });
+          } catch (regenerateError) {
+            console.warn("No se pudo regenerar el PDF, usando PDF existente:", regenerateError);
+            // Fallback: buscar PDF existente
+            basePdf = await prisma.attachment.findFirst({
+              where: {
+                logEntryId: id,
+                type: "application/pdf",
+                fileName: { not: { contains: "firmado" } },
               },
               orderBy: { createdAt: "desc" },
             });
           }
 
-          let basePdf: any = null;
-
-          // Si existe un PDF con firmas previas, usarlo como base para mantener las firmas manuscritas
-          // Si no existe, regenerar el PDF para tener los estados actualizados
-          if (previousSignedPdf) {
-            console.log(`✅ Encontrado PDF con firmas previas: ${previousSignedPdf.fileName} (ID: ${previousSignedPdf.id})`);
-            console.log(`📄 Usando PDF previo como base para mantener las firmas previas, agregando solo la nueva firma...`);
-            basePdf = previousSignedPdf;
-          } else {
-            // No hay PDF previo con firmas, regenerar el PDF para tener los estados actualizados
-            console.log("No se encontró PDF con firmas previas, regenerando PDF base...");
-            try {
-              const baseUrl =
-                process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
-              const tenantId = (req as any).tenant?.id;
-              await generateLogEntryPdf({
-                prisma,
-                logEntryId: id,
-                uploadsDir: process.env.UPLOADS_DIR || "./uploads",
-                baseUrl,
-                tenantId,
-              });
-              console.log("PDF regenerado exitosamente con el estado actualizado");
-
-              // Buscar el PDF recién regenerado (el más reciente sin "firmado" en el nombre)
-              basePdf = await prisma.attachment.findFirst({
-                where: {
-                  logEntryId: id,
-                  type: "application/pdf",
-                  fileName: { not: { contains: "firmado" } },
-                },
-                orderBy: { createdAt: "desc" },
-              });
-            } catch (regenerateError) {
-              console.warn("No se pudo regenerar el PDF, usando PDF existente:", regenerateError);
-              // Fallback: buscar PDF existente sin firmas
-              basePdf = await prisma.attachment.findFirst({
-                where: {
-                  logEntryId: id,
-                  type: "application/pdf",
-                  fileName: { not: { contains: "firmado" } },
-                },
-                orderBy: { createdAt: "desc" },
-              });
-            }
-          }
-
           if (basePdf) {
             console.log(
-              `Aplicando la nueva firma manuscrita al PDF: ${basePdf.fileName} (ID: ${basePdf.id})`
+              `Aplicando TODAS las firmas manuscritas al PDF regenerado: ${basePdf.fileName} (ID: ${basePdf.id})`
             );
 
-            // Cargar el PDF base (que puede tener firmas previas o no)
+            // Cargar el PDF base regenerado
             let currentPdfBuffer = await loadAttachmentBuffer(basePdf);
             const originalPdfSize = currentPdfBuffer.length;
-            console.log(`📦 PDF base cargado: ${basePdf.fileName}, tamaño: ${originalPdfSize} bytes`);
             
+            // Obtener todas las firmas que ya están firmadas (incluyendo la nueva)
+            const allSignatures = await prisma.signature.findMany({
+              where: { logEntryId: id },
+              include: { signer: true },
+              orderBy: { signedAt: "asc" },
+            });
+
             // Obtener tareas de firma ordenadas para calcular posiciones
             const logEntryWithTasks = await prisma.logEntry.findUnique({
               where: { id },
               include: {
                 signatureTasks: {
                   include: { signer: true },
-                  orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+                  orderBy: { assignedAt: "asc" },
                 },
               },
             });
@@ -6842,16 +5565,9 @@ app.post(
               (logEntryWithTasks?.signatureTasks || [])
                 .filter((t: any) => t?.signer?.id)
                 .sort(
-                  (a: any, b: any) => {
-                    const timeA = new Date(a.assignedAt || 0).getTime();
-                    const timeB = new Date(b.assignedAt || 0).getTime();
-                    if (timeA !== timeB) return timeA - timeB;
-                    // Tie-breaker using createdAt if available, or id for stability
-                    const createdA = new Date(a.createdAt || 0).getTime();
-                    const createdB = new Date(b.createdAt || 0).getTime();
-                    if (createdA !== createdB) return createdA - createdB;
-                    return a.id.localeCompare(b.id);
-                  }
+                  (a: any, b: any) =>
+                    new Date(a.assignedAt || 0).getTime() -
+                    new Date(b.assignedAt || 0).getTime()
                 ) || [];
 
             // Valores que coinciden con pdfExport.ts
@@ -6860,98 +5576,72 @@ app.post(
             const SIGNATURE_BOX_GAP = 16;
             const SIGNATURE_LINE_OFFSET = 72;
             const SIGNATURE_SECTION_START_Y = PAGE_MARGIN + 17.5;
-            const LINE_X = PAGE_MARGIN + 100; // Movido a la derecha para evitar que se corte
+            const LINE_X = PAGE_MARGIN + 70;
 
-            // Aplicar solo la nueva firma (la del firmante actual)
-            const newSignature = await prisma.signature.findFirst({
-              where: { logEntryId: id, signerId },
-              include: { signer: true },
-            });
+            // Aplicar todas las firmas manuscritas en orden
+            console.log(`Aplicando ${allSignatures.length} firma(s) manuscrita(s) al PDF...`);
+            for (const signature of allSignatures) {
+              const signerId = signature.signerId || signature.signer?.id;
+              if (!signerId) continue;
 
-            if (newSignature) {
               const userSig = await prisma.userSignature.findUnique({
                 where: { userId: signerId },
               });
 
-              if (userSig) {
-                // Calcular índice del firmante
-                let signerIndex = orderedTasks.findIndex(
-                  (t: any) => t.signer?.id === signerId
-                );
-                if (signerIndex < 0) signerIndex = 0;
-
-                const currentY = SIGNATURE_SECTION_START_Y + signerIndex * (SIGNATURE_BOX_HEIGHT + SIGNATURE_BOX_GAP);
-                const yPos = currentY + SIGNATURE_LINE_OFFSET;
-
-                console.log(`Aplicando firma de ${newSignature.signer?.fullName} en posición:`, {
-                  signerIndex,
-                  y: yPos,
-                  x: LINE_X,
-                });
-
-                try {
-                  // Usar la contraseña del firmante actual para desencriptar su firma
-                  const signatureBuffer = await loadUserSignatureBuffer(userSig, password);
-                  currentPdfBuffer = await applySignatureToPdf({
-                    originalPdf: currentPdfBuffer,
-                    signature: {
-                      buffer: signatureBuffer,
-                      mimeType: userSig.mimeType || "image/png",
-                    },
-                    position: {
-                      page: undefined, // última página
-                      x: LINE_X,
-                      y: yPos,
-                      width: 220,
-                      height: 28,
-                      baseline: true,
-                      baselineRatio: 0.25,
-                      fromTop: true,
-                    },
-                  });
-                  console.log(`✅ Firma de ${newSignature.signer?.fullName} aplicada exitosamente`);
-                } catch (sigError) {
-                  console.error(`❌ Error aplicando firma de ${newSignature.signer?.fullName}:`, sigError);
-                  throw sigError;
-                }
-              } else {
+              if (!userSig) {
                 console.warn(`No se encontró firma manuscrita para el usuario ${signerId}`);
+                continue;
+              }
+
+              // Calcular índice del firmante
+              let signerIndex = orderedTasks.findIndex(
+                (t: any) => t.signer?.id === signerId
+              );
+              if (signerIndex < 0) signerIndex = 0;
+
+              const currentY = SIGNATURE_SECTION_START_Y + signerIndex * (SIGNATURE_BOX_HEIGHT + SIGNATURE_BOX_GAP);
+              const yPos = currentY + SIGNATURE_LINE_OFFSET;
+
+              console.log(`Aplicando firma de ${signature.signer?.fullName} en posición:`, {
+                signerIndex,
+                y: yPos,
+                x: LINE_X,
+              });
+
+              try {
+                const signatureBuffer = await loadUserSignatureBuffer(userSig);
+                currentPdfBuffer = await applySignatureToPdf({
+                  originalPdf: currentPdfBuffer,
+                  signature: {
+                    buffer: signatureBuffer,
+                    mimeType: userSig.mimeType || "image/png",
+                  },
+                  position: {
+                    page: undefined, // última página
+                    x: LINE_X,
+                    y: yPos,
+                    width: 220,
+                    height: 28,
+                    baseline: true,
+                    baselineRatio: 0.25,
+                    fromTop: true,
+                  },
+                });
+                console.log(`✅ Firma de ${signature.signer?.fullName} aplicada exitosamente`);
+              } catch (sigError) {
+                console.error(`❌ Error aplicando firma de ${signature.signer?.fullName}:`, sigError);
               }
             }
             
-            // Obtener el total de firmas para el log
-            const totalSignatures = await prisma.signature.count({
-              where: { logEntryId: id },
-            });
-            
-            let signedBuffer = currentPdfBuffer;
+            const signedBuffer = currentPdfBuffer;
             console.log(`PDF con todas las firmas generado:`, {
               originalSize: originalPdfSize,
               signedSize: signedBuffer.length,
-              totalSignatures: totalSignatures,
+              totalSignatures: allSignatures.length,
             });
-
-            // Actualizar los estados visibles en el PDF agregando un overlay sobre los textos existentes
-            const entryWithLatestStatus = await prisma.logEntry.findUnique({
-              where: { id },
-              include: {
-                signatureTasks: { include: { signer: true } },
-                signatures: { include: { signer: true } },
-                assignees: true,
-                author: true,
-              },
-            });
-
-            if (entryWithLatestStatus) {
-              signedBuffer = await overlaySignatureStatuses(
-                signedBuffer,
-                entryWithLatestStatus
-              );
-            }
 
             // Crear nuevo PDF firmado para acumular firmas
             const storage = getStorage();
-            const tenantId = (req as any).tenant?.id;
             const parsedFileName = path.parse(
               basePdf.fileName || "documento.pdf"
             );
@@ -6959,12 +5649,9 @@ app.post(
             const baseName = parsedFileName.name.replace(/-firmado(-\d+)?$/, '');
             // Usar sufijo -firmado con timestamp para crear versiones únicas
             const signedFileName = `${baseName}-firmado-${Date.now()}.pdf`;
-            // Firmas de bitácoras van en la sección bitacora
             const signedKey = createStorageKey(
-              "bitacora",
-              signedFileName,
-              undefined,
-              tenantId
+              "log-entry-signatures",
+              signedFileName
             );
             
             console.log(`Guardando PDF firmado en storage:`, {
@@ -7005,11 +5692,6 @@ app.post(
               url: newAttachment.url,
               storagePath: newAttachment.storagePath,
               size: newAttachment.size,
-            });
-
-            await prisma.logEntry.update({
-              where: { id },
-              data: { signedPdfAttachmentId: newAttachment.id },
             });
           } else {
             console.warn(
@@ -7099,14 +5781,8 @@ app.post(
       if (status && status !== "all") where.status = entryStatusMap[status] || status;
       if (authorId && authorId !== "all") where.authorId = authorId;
 
-      // Filtrar por tenant
-      const tenantWhere = withTenantFilter(req, where);
-      const finalWhere = Object.keys(tenantWhere).length > Object.keys(where).length 
-        ? tenantWhere 
-        : where;
-
       const entries = await prisma.logEntry.findMany({
-        where: Object.keys(finalWhere).length > 0 ? (finalWhere as any) : undefined,
+        where,
         orderBy: { entryDate: "asc" },
         include: {
           attachments: true,
@@ -7130,7 +5806,6 @@ app.post(
         // si no hay, generar
         if (!pdfAttachment) {
           try {
-            const tenantId = (req as any).tenant?.id;
             await generateLogEntryPdf({
               prisma,
               logEntryId: entry.id,
@@ -7138,7 +5813,6 @@ app.post(
               baseUrl:
                 process.env.SERVER_PUBLIC_URL ||
                 `http://localhost:${port}`,
-              tenantId,
             });
             // buscar de nuevo
             const refreshed = await prisma.logEntry.findUnique({
@@ -7163,7 +5837,7 @@ app.post(
         }
 
         try {
-          const buffer = await storage.read(pdfAttachment.storagePath);
+          const buffer = await storage.load(pdfAttachment.storagePath);
           const safeTitle = (entry.title || "Anotacion")
             .replace(/[^a-zA-Z0-9 _.-]/g, "")
             .substring(0, 80)
@@ -7193,11 +5867,9 @@ app.post(
 );
 
 // --- RUTAS PARA COMUNICACIONES ---
-app.get("/api/communications", async (req, res) => {
+app.get("/api/communications", async (_req, res) => {
   try {
-    const where = withTenantFilter(req);
     const communications = await prisma.communication.findMany({
-      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { sentDate: "desc" },
       include: {
         uploader: true,
@@ -7225,9 +5897,8 @@ app.get("/api/communications", async (req, res) => {
 app.get("/api/communications/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const where = withTenantFilter(req, { id } as any);
-    const communication = await prisma.communication.findFirst({
-      where: Object.keys(where).length > 1 ? (where as any) : { id },
+    const communication = await prisma.communication.findUnique({
+      where: { id },
       include: {
         uploader: true,
         assignee: true,
@@ -7240,11 +5911,6 @@ app.get("/api/communications/:id", async (req, res) => {
     });
 
     if (!communication) {
-      return res.status(404).json({ error: "Comunicación no encontrada." });
-    }
-    
-    // Verificar que el tenant coincida si hay tenant
-    if ((req as any).tenant && (communication as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Comunicación no encontrada." });
     }
 
@@ -7297,54 +5963,47 @@ app.post("/api/communications", async (req, res) => {
       "RECEIVED";
     const normalizedRequiresResponse = Boolean(requiresResponse);
 
-    // Asignar tenantId si está disponible
-    const tenantId = (req as any).tenant?.id;
-    const commData: any = {
-      radicado,
-      subject,
-      description,
-      senderEntity: senderDetails?.entity,
-      senderName: senderDetails?.personName,
-      senderTitle: senderDetails?.personTitle,
-      recipientEntity: recipientDetails?.entity,
-      recipientName: recipientDetails?.personName,
-      recipientTitle: recipientDetails?.personTitle,
-      signerName,
-      sentDate: new Date(sentDate),
-      dueDate: dueDate ? new Date(dueDate) : null,
-      deliveryMethod: prismaDeliveryMethod,
-      notes,
-      status: "PENDIENTE",
-      direction: prismaDirection,
-      requiresResponse: normalizedRequiresResponse,
-      responseDueDate:
-        normalizedRequiresResponse && responseDueDate
-          ? new Date(responseDueDate)
-          : null,
-      uploader: { connect: { id: uploaderId } },
-      assignee: assigneeId ? { connect: { id: assigneeId } } : undefined,
-      assignedAt: assigneeId ? new Date() : null,
-      parent: parentId ? { connect: { id: parentId } } : undefined,
-      attachments: Array.isArray(attachments)
-        ? {
-            connect: attachments
-              .filter((att: any) => att?.id)
-              .map((att: any) => ({ id: att.id })),
-          }
-        : undefined,
-      statusHistory: {
-        create: {
-          status: communicationStatusMap["Pendiente"] || "PENDIENTE",
-          user: { connect: { id: uploaderId } },
+    const newComm = await prisma.communication.create({
+      data: {
+        radicado,
+        subject,
+        description,
+        senderEntity: senderDetails?.entity,
+        senderName: senderDetails?.personName,
+        senderTitle: senderDetails?.personTitle,
+        recipientEntity: recipientDetails?.entity,
+        recipientName: recipientDetails?.personName,
+        recipientTitle: recipientDetails?.personTitle,
+        signerName,
+        sentDate: new Date(sentDate),
+        dueDate: dueDate ? new Date(dueDate) : null,
+        deliveryMethod: prismaDeliveryMethod,
+        notes,
+        status: "PENDIENTE",
+        direction: prismaDirection,
+        requiresResponse: normalizedRequiresResponse,
+        responseDueDate:
+          normalizedRequiresResponse && responseDueDate
+            ? new Date(responseDueDate)
+            : null,
+        uploader: { connect: { id: uploaderId } },
+        assignee: assigneeId ? { connect: { id: assigneeId } } : undefined,
+        assignedAt: assigneeId ? new Date() : null,
+        parent: parentId ? { connect: { id: parentId } } : undefined,
+        attachments: Array.isArray(attachments)
+          ? {
+              connect: attachments
+                .filter((att: any) => att?.id)
+                .map((att: any) => ({ id: att.id })),
+            }
+          : undefined,
+        statusHistory: {
+          create: {
+            status: communicationStatusMap["Pendiente"] || "PENDIENTE",
+            user: { connect: { id: uploaderId } },
+          },
         },
       },
-    };
-    if (tenantId) {
-      commData.tenantId = tenantId;
-    }
-
-    const newComm = await prisma.communication.create({
-      data: commData,
       include: {
         uploader: true,
         assignee: true,
@@ -7412,21 +6071,6 @@ app.put(
         ] ||
         "PENDIENTE";
 
-      // Verificar que la comunicación pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const existingComm = await prisma.communication.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
-      });
-
-      if (!existingComm) {
-        return res.status(404).json({ error: "Comunicación no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (existingComm as any).tenantId !== (req as any).tenant.id) {
-        return res.status(404).json({ error: "Comunicación no encontrada." });
-      }
-
       const updated = await prisma.communication.update({
         where: { id },
         data: {
@@ -7468,19 +6112,12 @@ app.put(
       const { id } = req.params;
       const { assigneeId } = req.body as { assigneeId?: string | null };
 
-      // Verificar que la comunicación pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const current = await prisma.communication.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
+      const current = await prisma.communication.findUnique({
+        where: { id },
         select: { assigneeId: true },
       });
 
       if (!current) {
-        return res.status(404).json({ error: "Comunicación no encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (current as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Comunicación no encontrada." });
       }
 
@@ -7600,44 +6237,6 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
           .slice(-6)
       : [];
 
-    // Preparar query de commitments con filtro de tenant antes del Promise.all
-    const tenantId = (req as any).tenant?.id;
-    const commitmentQueryPromise = tenantId
-      ? (async () => {
-          const actaIds = (await prisma.acta.findMany({
-            where: { tenantId } as any,
-            select: { id: true },
-          })).map((a: any) => a.id);
-          
-          return prisma.commitment.findMany({
-            where: {
-              status: "PENDING",
-              dueDate: { gte: new Date() },
-              actaId: { in: actaIds },
-            },
-            include: {
-              responsible: {
-                select: { fullName: true, projectRole: true },
-              },
-            },
-            orderBy: { dueDate: "asc" },
-            take: 10,
-          });
-        })()
-      : prisma.commitment.findMany({
-          where: {
-            status: "PENDING",
-            dueDate: { gte: new Date() },
-          },
-          include: {
-            responsible: {
-              select: { fullName: true, projectRole: true },
-            },
-          },
-          orderBy: { dueDate: "asc" },
-          take: 10,
-        });
-
     const [
       project,
       contractModifications,
@@ -7654,28 +6253,18 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
       pendingCommitments,
       recentLogEntries,
     ] = await Promise.all([
-      prisma.project.findFirst({ 
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
-        include: { keyPersonnel: true } 
-      }),
+      prisma.project.findFirst({ include: { keyPersonnel: true } }),
       prisma.contractModification.findMany({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { date: "desc" },
         take: 10,
       }),
       prisma.logEntry.findFirst({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { createdAt: "desc" },
         include: { author: { select: { fullName: true } } },
       }),
-      // ContractItems no tienen tenantId directo, pero están relacionados con workActas que sí lo tienen
-      // Filtrar workActas primero si hay tenant
       prisma.contractItem.findMany({
         include: {
           workActaItems: {
-            where: (req as any).tenant 
-              ? { workActa: { tenantId: (req as any).tenant.id } as any }
-              : undefined,
             include: {
               workActa: {
                 select: { id: true, number: true, date: true, status: true },
@@ -7686,7 +6275,6 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         orderBy: { itemCode: "asc" },
       }),
       prisma.workActa.findMany({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         include: {
           items: {
             include: {
@@ -7706,17 +6294,14 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         take: 10,
       }),
       prisma.projectTask.findMany({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { startDate: "asc" },
         take: 20,
       }),
       prisma.communication.findMany({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { sentDate: "desc" },
         take: 10,
       }),
       prisma.acta.findMany({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { date: "desc" },
         take: 10,
         include: {
@@ -7730,12 +6315,10 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         },
       }),
       prisma.costActa.findMany({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { submissionDate: "desc" },
         take: 10,
       }),
       prisma.report.findMany({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { submissionDate: "desc" },
         take: 10,
         include: {
@@ -7745,7 +6328,6 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         },
       }),
       prisma.drawing.findMany({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { code: "asc" },
         take: 20,
         include: {
@@ -7756,7 +6338,6 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         },
       }),
       prisma.controlPoint.findMany({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         include: {
           photos: {
             orderBy: { date: "desc" },
@@ -7765,9 +6346,20 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         },
         take: 10,
       }),
-      commitmentQueryPromise,
+      prisma.commitment.findMany({
+        where: {
+          status: "PENDING",
+          dueDate: { gte: new Date() },
+        },
+        include: {
+          responsible: {
+            select: { fullName: true, projectRole: true },
+          },
+        },
+        orderBy: { dueDate: "asc" },
+        take: 10,
+      }),
       prisma.logEntry.findMany({
-        where: (req as any).tenant ? { tenantId: (req as any).tenant.id } as any : undefined,
         orderBy: { createdAt: "desc" },
         take: 10,
         include: {
@@ -7829,12 +6421,12 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         : null;
 
       const totalAdditionsValue = contractModifications
-        .filter((mod: any) => mod.type === "ADDITION" && mod.value)
-        .reduce((sum: number, mod: any) => sum + (mod.value || 0), 0);
+        .filter((mod) => mod.type === "ADDITION" && mod.value)
+        .reduce((sum, mod) => sum + (mod.value || 0), 0);
 
       const totalExtensionsDays = contractModifications
-        .filter((mod: any) => mod.type === "TIME_EXTENSION" && mod.days)
-        .reduce((sum: number, mod: any) => sum + (mod.days || 0), 0);
+        .filter((mod) => mod.type === "TIME_EXTENSION" && mod.days)
+        .reduce((sum, mod) => sum + (mod.days || 0), 0);
 
       let initialDurationDays: number | null = null;
       if (startDate && initialEndDate) {
@@ -7898,7 +6490,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
         const highlightedPersonnel = project.keyPersonnel
           .slice(0, 5)
           .map(
-            (person: any) =>
+            (person) =>
               `${person.role} (${person.company}): ${person.name} | Correo: ${
                 person.email
               } | Teléfono: ${person.phone || "N/D"}`
@@ -7923,7 +6515,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
       if (contractModifications.length) {
         const modificationsSummary = contractModifications
           .slice(0, 5)
-          .map((mod: any) => {
+          .map((mod) => {
             const partes: string[] = [
               `${mod.number} - ${
                 modificationTypeReverseMap[mod.type] || mod.type
@@ -7949,8 +6541,8 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
     }
 
     if (contractItems.length) {
-      const itemsWithProgress = contractItems.map((item: any) => {
-        const executedQuantity = item.workActaItems.reduce((sum: number, entry: any) => {
+      const itemsWithProgress = contractItems.map((item) => {
+        const executedQuantity = item.workActaItems.reduce((sum, entry) => {
           const quantity =
             typeof entry.quantity === "number"
               ? entry.quantity
@@ -7964,8 +6556,8 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
             : 0;
 
         const latestEntry = item.workActaItems
-          .filter((entry: any) => entry.workActa?.date)
-          .sort((a: any, b: any) => {
+          .filter((entry) => entry.workActa?.date)
+          .sort((a, b) => {
             const dateA = a.workActa?.date
               ? new Date(a.workActa.date as unknown as string).getTime()
               : 0;
@@ -7998,7 +6590,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
       const topItems = itemsWithProgress
         .sort(
-          (a: any, b: any) =>
+          (a, b) =>
             b.percentage - a.percentage ||
             b.executedQuantity - a.executedQuantity
         )
@@ -8006,7 +6598,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
       if (topItems.length) {
         const lines = topItems.map(
-          (item: any) =>
+          (item) =>
             `• ${item.itemCode} - ${item.description}: Contratado ${formatNumber(
               item.contractQuantity,
               2
@@ -8027,8 +6619,8 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
     }
 
     if (workActas.length) {
-      const workActaLines = workActas.map((acta: any) => {
-        const totalQuantity = acta.items.reduce((sum: number, item: any) => {
+      const workActaLines = workActas.map((acta) => {
+        const totalQuantity = acta.items.reduce((sum, item) => {
           const quantity =
             typeof item.quantity === "number"
               ? item.quantity
@@ -8036,7 +6628,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
           return sum + quantity;
         }, 0);
 
-        const totalValue = acta.items.reduce((sum: number, item: any) => {
+        const totalValue = acta.items.reduce((sum, item) => {
           const quantity =
             typeof item.quantity === "number"
               ? item.quantity
@@ -8047,7 +6639,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
         const principales = acta.items
           .slice(0, 3)
-          .map((item: any) => {
+          .map((item) => {
             const code = item.contractItem?.itemCode || "N/D";
             const qty =
               typeof item.quantity === "number"
@@ -8079,7 +6671,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
     }
 
     if (projectTasks.length) {
-      const taskLines = projectTasks.map((task: any) => {
+      const taskLines = projectTasks.map((task) => {
         const label = task.isSummary ? "hito" : "tarea";
         return `• ${task.name} (${label}): avance ${formatPercentage(
           task.progress,
@@ -8122,7 +6714,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (communications.length) {
       const communicationsSummary = communications
-        .map((comm: any) => {
+        .map((comm) => {
           const sender = comm.senderEntity || "No especificado";
           const recipient = comm.recipientEntity || "No especificado";
           const status =
@@ -8142,7 +6734,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (actas.length) {
       const actasSummary = actas
-        .map((acta: any) => {
+        .map((acta) => {
           const area = actaAreaReverseMap[acta.area] || acta.area;
           const status = actaStatusReverseMap[acta.status] || acta.status;
           const commitmentsCount = acta.commitments?.length || 0;
@@ -8161,7 +6753,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (costActas.length) {
       const costActasSummary = costActas
-        .map((acta: any) => {
+        .map((acta) => {
           const status =
             costActaStatusReverseMap[acta.status] || acta.status;
           return `• ${acta.number}: Período ${acta.period} - Valor: ${formatCurrency(
@@ -8181,7 +6773,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (reports.length) {
       const reportsSummary = reports
-        .map((report: any) => {
+        .map((report) => {
           const scope =
             reportScopeReverseMap[report.reportScope] || report.reportScope;
           const status = reportStatusReverseMap[report.status] || report.status;
@@ -8200,7 +6792,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (drawings.length) {
       const drawingsSummary = drawings
-        .map((drawing: any) => {
+        .map((drawing) => {
           const discipline =
             drawingDisciplineMap[drawing.discipline] || drawing.discipline;
           const status =
@@ -8219,7 +6811,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (controlPoints.length) {
       const controlPointsSummary = controlPoints
-        .map((point: any) => {
+        .map((point) => {
           const photosCount = point.photos?.length || 0;
           return `• ${point.name}: ${point.description} - Ubicación: ${point.location} - Fotos: ${photosCount}`;
         })
@@ -8234,7 +6826,7 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (pendingCommitments.length) {
       const commitmentsSummary = pendingCommitments
-        .map((commitment: any) => {
+        .map((commitment) => {
           const responsible =
             commitment.responsible?.fullName || "No asignado";
           const role = commitment.responsible?.projectRole || "";
@@ -8254,12 +6846,12 @@ app.post("/api/chatbot/query", authMiddleware, async (req: AuthRequest, res) => 
 
     if (recentLogEntries.length) {
       const logEntriesSummary = recentLogEntries
-        .map((entry: any) => {
+        .map((entry) => {
           const author = entry.author?.fullName || "No especificado";
           const type = entryTypeReverseMap[entry.type] || entry.type;
           const status = entryStatusReverseMap[entry.status] || entry.status;
           const assignees =
-            entry.assignees?.map((a: any) => a.fullName).join(", ") ||
+            entry.assignees?.map((a) => a.fullName).join(", ") ||
             "Sin asignados";
           return `• "${entry.title}" - Autor: ${author} - Tipo: ${type} - Estado: ${status} - Asignados: ${assignees} - Fecha: ${formatDate(
             entry.createdAt
@@ -8564,15 +7156,14 @@ app.get("/api/users/me/signature", authMiddleware, async (req: AuthRequest, res)
       return res.json({ signature: null });
     }
 
-    // NO exponer la firma encriptada - solo metadatos
-    // La firma solo se puede obtener desencriptada con el endpoint específico que requiere contraseña
     res.json({
       signature: {
         id: signature.id,
         fileName: signature.fileName,
         mimeType: signature.mimeType,
         size: signature.size,
-        hasSignature: true,
+        url: signature.url,
+        hash: signature.hash,
         createdAt: signature.createdAt,
         updatedAt: signature.updatedAt,
       },
@@ -8582,85 +7173,6 @@ app.get("/api/users/me/signature", authMiddleware, async (req: AuthRequest, res)
     res.status(500).json({ error: "No se pudo obtener la firma guardada." });
   }
 });
-
-/**
- * Endpoint para obtener la firma desencriptada (requiere contraseña)
- * Solo el usuario puede acceder a su propia firma desencriptada
- */
-app.post(
-  "/api/users/me/signature/decrypt",
-  authMiddleware,
-  async (req: AuthRequest, res) => {
-    try {
-      const userId = req.user?.userId;
-      if (!userId) {
-        return res.status(401).json({ error: "Usuario no autenticado." });
-      }
-
-      const { password } = req.body || {};
-      if (!password || typeof password !== "string") {
-        return res.status(400).json({
-          error: "Se requiere la contraseña para desencriptar la firma.",
-        });
-      }
-
-      // Verificar que la contraseña sea correcta
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { password: true },
-      });
-
-      if (!user) {
-        return res.status(404).json({ error: "Usuario no encontrado." });
-      }
-
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (!isPasswordValid) {
-        return res.status(401).json({
-          error: "Contraseña incorrecta.",
-        });
-      }
-
-      const signature = await prisma.userSignature.findUnique({
-        where: { userId },
-      });
-
-      if (!signature || !signature.storagePath) {
-        return res.status(404).json({ error: "No hay firma registrada." });
-      }
-
-      // Cargar la firma encriptada desde storage
-      const storage = getStorage();
-      const encryptedBuffer = await storage.read(signature.storagePath);
-
-      // Desencriptar usando la contraseña del usuario
-      const encryptedData = unpackEncryptedSignature(encryptedBuffer);
-      const decryptedBuffer = decryptSignature(encryptedData, password);
-
-      // Retornar como base64 para que el frontend pueda usarla
-      const base64Signature = decryptedBuffer.toString("base64");
-      const dataUrl = `data:${signature.mimeType || "image/png"};base64,${base64Signature}`;
-
-      res.json({
-        signature: {
-          id: signature.id,
-          fileName: signature.fileName,
-          mimeType: signature.mimeType,
-          size: signature.size,
-          dataUrl, // Firma desencriptada como data URL
-        },
-      });
-    } catch (error) {
-      console.error("Error al desencriptar la firma:", error);
-      if (error instanceof Error && error.message.includes("Unsupported state")) {
-        return res.status(401).json({
-          error: "Contraseña incorrecta o firma corrupta.",
-        });
-      }
-      res.status(500).json({ error: "No se pudo desencriptar la firma." });
-    }
-  }
-);
 
 app.post(
   "/api/users/me/signature",
@@ -8680,61 +7192,22 @@ app.post(
           .json({ error: "No se recibió ningún archivo válido." });
       }
 
-      // Requerir contraseña para encriptar la firma
-      const { password } = req.body || {};
-      if (!password || typeof password !== "string") {
-        return res.status(400).json({
-          error: "Se requiere la contraseña del usuario para proteger la firma.",
-        });
-      }
-
-      // Verificar que la contraseña sea correcta
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { password: true },
-      });
-
-      if (!user) {
-        return res.status(404).json({ error: "Usuario no encontrado." });
-      }
-
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (!isPasswordValid) {
-        return res.status(401).json({
-          error: "Contraseña incorrecta. La firma requiere tu contraseña para ser protegida.",
-        });
-      }
-
       const existing = await prisma.userSignature.findUnique({
         where: { userId },
       });
 
-      // Encriptar la firma usando la contraseña del usuario
-      const encryptedData = encryptSignature(file.buffer, password);
-      const encryptedBuffer = packEncryptedSignature(encryptedData);
-
-      // Guardar la firma encriptada en storage
       const storage = getStorage();
-      const tenantId = (req as any).tenant?.id;
-      const key = createStorageKey("firmas", file.originalname, undefined, tenantId);
-      await storage.save({ path: key, content: encryptedBuffer });
-      
-      // NO guardar la URL pública ni el hash del archivo original
-      // Solo guardar metadatos y el hash del archivo encriptado para verificación
-      const hash = sha256(encryptedBuffer);
+      const key = createStorageKey(
+        `user-signatures/${userId}`,
+        file.originalname
+      );
+      await storage.save({ path: key, content: file.buffer });
+      const url = storage.getPublicUrl(key);
+      const hash = sha256(file.buffer);
 
       let newSignature: any = null;
       await prisma.$transaction(async (tx) => {
         if (existing) {
-          // Eliminar firma anterior del storage
-          if (existing.storagePath) {
-            await storage.remove(existing.storagePath).catch((error) => {
-              console.warn(
-                "No se pudo eliminar la firma anterior del almacenamiento.",
-                { error }
-              );
-            });
-          }
           await tx.userSignature.delete({ where: { id: existing.id } });
         }
         newSignature = await tx.userSignature.create({
@@ -8742,11 +7215,10 @@ app.post(
             userId,
             fileName: file.originalname,
             mimeType: file.mimetype,
-            size: file.size, // Tamaño original
+            size: file.size,
             storagePath: key,
-            // NO guardar URL pública - la firma está encriptada
-            url: null,
-            hash, // Hash del archivo encriptado
+            url,
+            hash,
           },
         });
       });
@@ -8755,18 +7227,26 @@ app.post(
         throw new Error("No se pudo registrar la nueva firma.");
       }
 
+      if (existing?.storagePath && existing.storagePath !== key) {
+        await storage.remove(existing.storagePath).catch((error) => {
+          console.warn(
+            "No se pudo eliminar la firma anterior del almacenamiento.",
+            { error }
+          );
+        });
+      }
+
       res.status(201).json({
         signature: {
           id: newSignature.id,
           fileName: newSignature.fileName,
           mimeType: newSignature.mimeType,
           size: newSignature.size,
-          // NO exponer URL ni hash - la firma está protegida
-          hasSignature: true,
+          url: newSignature.url,
+          hash: newSignature.hash,
           createdAt: newSignature.createdAt,
           updatedAt: newSignature.updatedAt,
         },
-        message: "Firma guardada y protegida con encriptación. Solo tú puedes acceder a ella con tu contraseña.",
       });
     } catch (error) {
       console.error("Error al guardar la firma del usuario:", error);
@@ -8814,12 +7294,9 @@ app.delete(
 );
 
 // --- RUTAS PARA PLANOS (DRAWINGS) ---
-app.get("/api/drawings", async (req, res) => {
+app.get("/api/drawings", async (_req, res) => {
   try {
-    // Filtrar por tenant si está disponible
-    const where = withTenantFilter(req);
     const drawings = await prisma.drawing.findMany({
-      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { createdAt: "desc" },
       include: {
         versions: {
@@ -8871,10 +7348,8 @@ app.get("/api/drawings", async (req, res) => {
 app.get("/api/drawings/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    // Verificar que el drawing pertenezca al tenant
-    const where = withTenantFilter(req, { id } as any);
-    const drawing = await prisma.drawing.findFirst({
-      where: Object.keys(where).length > 1 ? (where as any) : { id },
+    const drawing = await prisma.drawing.findUnique({
+      where: { id },
       include: {
         versions: {
           orderBy: { versionNumber: "desc" },
@@ -8888,11 +7363,6 @@ app.get("/api/drawings/:id", async (req, res) => {
     });
 
     if (!drawing) {
-      return res.status(404).json({ error: "Plano no encontrado." });
-    }
-    
-    // Verificar que el tenant coincida si hay tenant
-    if ((req as any).tenant && (drawing as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Plano no encontrado." });
     }
 
@@ -8946,19 +7416,12 @@ app.post(
 
       const prismaDiscipline = drawingDisciplineMap[discipline] || "OTHER";
 
-      // Asignar tenantId si está disponible
-      const tenantId = (req as any).tenant?.id;
-      if (!tenantId) {
-        return res.status(400).json({ error: "No se pudo determinar el tenant." });
-      }
-
       const newDrawing = await prisma.drawing.create({
         data: {
           code,
           title,
           discipline: prismaDiscipline,
           status: "VIGENTE",
-          tenantId,
           versions: {
             create: [
               {
@@ -8970,7 +7433,7 @@ app.post(
               },
             ],
           },
-        } as any,
+        },
         include: {
           versions: { include: { uploader: true } },
           comments: { include: { author: true } },
@@ -9013,19 +7476,12 @@ app.post(
           .json({ error: "Faltan los datos de la nueva versión." });
       }
 
-      // Verificar que el drawing pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const existingDrawing = await prisma.drawing.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
+      const existingDrawing = await prisma.drawing.findUnique({
+        where: { id },
         include: { versions: { orderBy: { versionNumber: "desc" } } },
       });
 
       if (!existingDrawing) {
-        return res.status(404).json({ error: "El plano no fue encontrado." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (existingDrawing as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "El plano no fue encontrado." });
       }
 
@@ -9087,21 +7543,6 @@ app.post(
           .json({ error: "El contenido y el autor son obligatorios." });
       }
 
-      // Verificar que el drawing pertenezca al tenant antes de comentar
-      const drawingWhere = withTenantFilter(req, { id } as any);
-      const drawing = await prisma.drawing.findFirst({
-        where: Object.keys(drawingWhere).length > 1 ? (drawingWhere as any) : { id },
-      });
-
-      if (!drawing) {
-        return res.status(404).json({ error: "Plano no encontrado." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (drawing as any).tenantId !== (req as any).tenant.id) {
-        return res.status(404).json({ error: "Plano no encontrado." });
-      }
-
       const newComment = await prisma.comment.create({
         data: {
           content,
@@ -9134,55 +7575,7 @@ app.post(
           .json({ error: "No se subió ningún archivo válido." });
       }
 
-      // Determinar la sección basada en el tipo de archivo y contexto (igual que el expediente exportado)
-      const fileType = req.body?.type || "document"; // 'document', 'photo', 'drawing'
-      const context = req.body?.context || req.body?.section; // 'bitacora', 'actas', 'comunicaciones', 'informes', etc.
-      const controlPointId = req.body?.controlPointId; // ID del punto fijo para fotos
-      
-      let seccion: string;
-      let subfolder: string | undefined;
-      
-      if (fileType === "photo") {
-        seccion = "puntos-fijos";
-        // Si hay controlPointId, usarlo como subcarpeta
-        if (controlPointId && typeof controlPointId === "string") {
-          subfolder = controlPointId;
-        }
-      } else if (fileType === "drawing") {
-        seccion = "planos";
-      } else if (context) {
-        // Si se especifica un contexto, usarlo (normalizado)
-        const normalizedContext = context
-          .replace(/[^a-zA-Z0-9_-]/g, "")
-          .toLowerCase();
-        // Mapear nombres comunes a secciones del expediente
-        const contextMap: Record<string, string> = {
-          "acta": "actas",
-          "actas": "actas",
-          "comunicacion": "comunicaciones",
-          "comunicaciones": "comunicaciones",
-          "informe": "informes",
-          "informes": "informes",
-          "report": "informes",
-          "reports": "informes",
-          "bitacora": "bitacora",
-          "logentry": "bitacora",
-          "log-entry": "bitacora",
-        };
-        seccion = contextMap[normalizedContext] || normalizedContext;
-      } else {
-        // Por defecto, archivos generales van a bitacora
-        seccion = "bitacora";
-      }
-      
-      const storage = getStorage();
-      const tenantId = (req as any).tenant?.id;
-      const key = createStorageKey(seccion, file.originalname, subfolder, tenantId);
-      await storage.save({ path: key, content: file.buffer });
-      const stored = {
-        key,
-        url: storage.getPublicUrl(key),
-      };
+      const stored = await persistUploadedFile(file, "attachments");
 
       const attachment = await prisma.attachment.create({
         data: {
@@ -9205,11 +7598,9 @@ app.post(
 );
 
 // --- RUTAS DE CRONOGRAMA Y CONTROL ---
-app.get("/api/project-tasks", async (req, res) => {
+app.get("/api/project-tasks", async (_req, res) => {
   try {
-    const where = withTenantFilter(req);
     const tasks = await prisma.projectTask.findMany({
-      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { outlineLevel: "asc" },
     });
 
@@ -9230,61 +7621,19 @@ app.get("/api/project-tasks", async (req, res) => {
   }
 });
 
-app.get("/api/control-points", async (req, res) => {
+app.get("/api/control-points", async (_req, res) => {
   try {
-    // Filtrar por tenant si está disponible
-    // Nota: tenantId se agregará después de aplicar la migración
-    // Por ahora, usar query raw si hay tenant, o query normal si no
-    let points: any[];
-    
-    if (req.tenant) {
-      // Después de la migración, usar findMany con where
-      // Por ahora, usar query raw como fallback
-      try {
-        points = await prisma.$queryRawUnsafe(
-          `SELECT * FROM ControlPoint WHERE tenantId = ? ORDER BY createdAt ASC`,
-          req.tenant.id
-        ) as any[];
-      } catch (error) {
-        // Si falla (campo no existe aún), usar query normal
-        points = await prisma.controlPoint.findMany({
-          orderBy: { createdAt: "asc" },
-          include: {
-            photos: {
-              orderBy: [{ order: "asc" }, { date: "asc" }],
-              include: { author: true, attachment: true },
-            },
-          },
-        });
-      }
-    } else {
-      points = await prisma.controlPoint.findMany({
-        orderBy: { createdAt: "asc" },
-        include: {
-          photos: {
-            orderBy: [{ order: "asc" }, { date: "asc" }],
-            include: { author: true, attachment: true },
-          },
+    const points = await prisma.controlPoint.findMany({
+      orderBy: { createdAt: "asc" },
+      include: {
+        photos: {
+          orderBy: { date: "asc" },
+          include: { author: true, attachment: true },
         },
-      });
-    }
-    
-    // Si usamos query raw, necesitamos cargar las relaciones manualmente
-    if (req.tenant && points.length > 0 && !points[0].photos) {
-      const pointIds = points.map((p: any) => p.id);
-      const allPhotos = await prisma.photoEntry.findMany({
-        where: { controlPointId: { in: pointIds } },
-        include: { author: true, attachment: true },
-        orderBy: [{ order: "asc" }, { date: "asc" }],
-      });
-      
-      points = points.map((point: any) => ({
-        ...point,
-        photos: allPhotos.filter((p: any) => p.controlPointId === point.id),
-      }));
-    }
+      },
+    });
 
-    const formatted = points.map((point: any) => ({
+    const formatted = points.map((point) => ({
       ...point,
       photos: (point.photos || []).map((photo: any) => ({
         ...photo,
@@ -9403,11 +7752,9 @@ app.patch(
   }
 );
 
-app.get("/api/work-actas", async (req, res) => {
+app.get("/api/work-actas", async (_req, res) => {
   try {
-    const where = withTenantFilter(req);
     const actas = await prisma.workActa.findMany({
-      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { date: "desc" },
       include: {
         items: { include: { contractItem: true } },
@@ -9426,9 +7773,8 @@ app.get("/api/work-actas", async (req, res) => {
 app.get("/api/work-actas/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const where = withTenantFilter(req, { id } as any);
-    const acta = await prisma.workActa.findFirst({
-      where: Object.keys(where).length > 1 ? (where as any) : { id },
+    const acta = await prisma.workActa.findUnique({
+      where: { id },
       include: {
         items: { include: { contractItem: true } },
         attachments: true,
@@ -9436,11 +7782,6 @@ app.get("/api/work-actas/:id", async (req, res) => {
     });
 
     if (!acta) {
-      return res.status(404).json({ error: "Acta de avance no encontrada." });
-    }
-    
-    // Verificar que el tenant coincida si hay tenant
-    if ((req as any).tenant && (acta as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Acta de avance no encontrada." });
     }
 
@@ -9470,21 +7811,12 @@ app.post(
 
       const prismaStatus = workActaStatusMap[status] || "DRAFT";
 
-      // Asignar tenantId si está disponible
-      const tenantId = (req as any).tenant?.id;
-      const workActaData: any = {
-        number,
-        period,
-        date: new Date(date),
-        status: prismaStatus,
-      };
-      if (tenantId) {
-        workActaData.tenantId = tenantId;
-      }
-
       const newActa = await prisma.workActa.create({
         data: {
-          ...workActaData,
+          number,
+          period,
+          date: new Date(date),
+          status: prismaStatus,
           items: {
             create: items.map(
               (item: { contractItemId: string; quantity: number }) => ({
@@ -9537,21 +7869,6 @@ app.put(
         return res.status(400).json({ error: "Estado inválido proporcionado." });
       }
 
-      // Verificar que el work acta pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const existingActa = await prisma.workActa.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
-      });
-
-      if (!existingActa) {
-        return res.status(404).json({ error: "El acta de avance no fue encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (existingActa as any).tenantId !== (req as any).tenant.id) {
-        return res.status(404).json({ error: "El acta de avance no fue encontrada." });
-      }
-
       const updatedActa = await prisma.workActa.update({
         where: { id },
         data: { status: prismaStatus },
@@ -9578,7 +7895,7 @@ app.put(
 app.get("/api/reports", async (req, res) => {
   try {
     const { type, scope } = req.query;
-    const where: any = withTenantFilter(req);
+    const where: Prisma.ReportWhereInput = {};
 
     if (type) where.type = String(type);
     if (scope && reportScopeMap[String(scope)]) {
@@ -9586,7 +7903,7 @@ app.get("/api/reports", async (req, res) => {
     }
 
     const reports = await prisma.report.findMany({
-      where: Object.keys(where).length > 0 ? where : undefined,
+      where,
       orderBy: [{ number: "asc" }, { version: "desc" }],
       include: {
         author: true,
@@ -9631,9 +7948,8 @@ app.get("/api/reports", async (req, res) => {
 app.get("/api/reports/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const where = withTenantFilter(req, { id } as any);
-    const report = await prisma.report.findFirst({
-      where: Object.keys(where).length > 1 ? (where as any) : { id },
+    const report = await prisma.report.findUnique({
+      where: { id },
       include: {
         author: true,
         attachments: true,
@@ -9642,11 +7958,6 @@ app.get("/api/reports/:id", async (req, res) => {
     });
 
     if (!report) {
-      return res.status(404).json({ error: "Informe no encontrado." });
-    }
-    
-    // Verificar que el tenant coincida si hay tenant
-    if ((req as any).tenant && (report as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Informe no encontrado." });
     }
 
@@ -9709,14 +8020,9 @@ app.post(
         | { connect: { id: string } }
         | undefined = undefined;
 
-      // Asignar tenantId si está disponible
-      const tenantId = (req as any).tenant?.id;
-
       if (previousReportId) {
-        // Validar que el informe anterior pertenezca al tenant
-        const prevWhere = tenantId ? { id: previousReportId, tenantId } as any : { id: previousReportId };
-        const previousReport = await prisma.report.findFirst({
-          where: prevWhere,
+        const previousReport = await prisma.report.findUnique({
+          where: { id: previousReportId },
         });
 
         if (!previousReport) {
@@ -9756,25 +8062,18 @@ app.post(
         });
       }
 
-      const reportData: any = {
-        type: resolvedType!,
-        reportScope: resolvedScopeDb!,
-        number: resolvedNumber!,
-        version: resolvedVersion,
-        previousReport: previousReportConnect,
-        period,
-        submissionDate: new Date(submissionDate),
-        summary,
-        status: "DRAFT",
-        author: { connect: { id: resolvedAuthorId } },
-      };
-      if (tenantId) {
-        reportData.tenantId = tenantId;
-      }
-
       const newReport = await prisma.report.create({
         data: {
-          ...reportData,
+          type: resolvedType!,
+          reportScope: resolvedScopeDb!,
+          number: resolvedNumber!,
+          version: resolvedVersion,
+          previousReport: previousReportConnect,
+          period,
+          submissionDate: new Date(submissionDate),
+          summary,
+          status: "DRAFT",
+          author: { connect: { id: resolvedAuthorId } },
           requiredSignatoriesJson: JSON.stringify(
             requiredSignatories.map((u: any) => u.id)
           ),
@@ -9829,21 +8128,6 @@ app.put(
       const prismaStatus = reportStatusMap[status] || undefined;
       if (!prismaStatus || !Object.values(ReportStatus).includes(prismaStatus)) {
         return res.status(400).json({ error: "Estado inválido proporcionado." });
-      }
-
-      // Verificar que el report pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const existingReport = await prisma.report.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
-      });
-
-      if (!existingReport) {
-        return res.status(404).json({ error: "El informe no fue encontrado." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (existingReport as any).tenantId !== (req as any).tenant.id) {
-        return res.status(404).json({ error: "El informe no fue encontrado." });
       }
 
       const updated = await prisma.report.update({
@@ -9912,17 +8196,8 @@ app.post(
         return res.status(401).json({ error: "Contraseña incorrecta." });
       }
 
-      // Verificar que el report pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const report = await prisma.report.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
-      });
+      const report = await prisma.report.findUnique({ where: { id } });
       if (!report) {
-        return res.status(404).json({ error: "Informe no encontrado." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (report as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Informe no encontrado." });
       }
 
@@ -10013,13 +8288,11 @@ app.post(
       const baseUrl =
         process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
 
-      const tenantId = (req as any).tenant?.id;
       const result = await generateWeeklyReportExcel({
         prisma,
         reportId: id,
         uploadsDir,
         baseUrl,
-        tenantId,
       });
 
       const updated = await prisma.report.findUnique({
@@ -10081,13 +8354,11 @@ app.post(
       const baseUrl =
         process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
 
-      const tenantId = (req as any).tenant?.id;
       const result = await generateReportPdf({
         prisma,
         reportId: id,
         uploadsDir,
         baseUrl,
-        tenantId,
       });
 
       const updated = await prisma.report.findUnique({
@@ -10139,31 +8410,14 @@ app.post(
   async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      
-      // Primero verificar si ya existe un PDF firmado
-      const existingEntry = await prisma.logEntry.findUnique({
-        where: { id },
-        include: { signedPdf: true }
-      });
-
-      if (existingEntry?.signedPdf) {
-        console.log(`📄 Sirviendo PDF firmado existente para anotación ${id}`);
-        return res.json({
-          entry: formatLogEntry(existingEntry),
-          attachment: buildAttachmentResponse(existingEntry.signedPdf),
-        });
-      }
-
       const baseUrl =
         process.env.SERVER_PUBLIC_URL || `http://localhost:${port}`;
 
-      const tenantId = (req as any).tenant?.id;
       const result = await generateLogEntryPdf({
         prisma,
         logEntryId: id,
         uploadsDir: process.env.UPLOADS_DIR || "./uploads",
         baseUrl,
-        tenantId,
       });
 
       const updated = await prisma.logEntry.findUnique({
@@ -10204,11 +8458,9 @@ app.post(
 );
 
 // --- RUTAS PARA ACTAS DE COSTO ---
-app.get("/api/cost-actas", async (req, res) => {
+app.get("/api/cost-actas", async (_req, res) => {
   try {
-    const where = withTenantFilter(req);
     const actas = await prisma.costActa.findMany({
-      where: Object.keys(where).length > 0 ? (where as any) : undefined,
       orderBy: { submissionDate: "desc" },
       include: {
         observations: { include: { author: true }, orderBy: { timestamp: "asc" } },
@@ -10236,9 +8488,8 @@ app.get("/api/cost-actas", async (req, res) => {
 app.get("/api/cost-actas/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const where = withTenantFilter(req, { id } as any);
-    const acta = await prisma.costActa.findFirst({
-      where: Object.keys(where).length > 1 ? (where as any) : { id },
+    const acta = await prisma.costActa.findUnique({
+      where: { id },
       include: {
         observations: { 
           include: { author: true }, 
@@ -10249,11 +8500,6 @@ app.get("/api/cost-actas/:id", async (req, res) => {
     });
 
     if (!acta) {
-      return res.status(404).json({ error: "Acta de costo no encontrada." });
-    }
-    
-    // Verificar que el tenant coincida si hay tenant
-    if ((req as any).tenant && (acta as any).tenantId !== (req as any).tenant.id) {
       return res.status(404).json({ error: "Acta de costo no encontrada." });
     }
 
@@ -10307,26 +8553,17 @@ app.post(
         });
       }
 
-      // Asignar tenantId si está disponible
-      const tenantId = (req as any).tenant?.id;
-      const costActaData: any = {
-        number,
-        period,
-        submissionDate: new Date(submissionDate),
-        billedAmount: Number(billedAmount),
-        totalContractValue: Number(totalContractValue),
-        periodValue: periodValue !== null && periodValue !== undefined ? Number(periodValue) : null,
-        advancePaymentPercentage: advancePaymentPercentage !== null && advancePaymentPercentage !== undefined ? Number(advancePaymentPercentage) : null,
-        relatedProgress,
-        status: CostActaStatus.SUBMITTED,
-      };
-      if (tenantId) {
-        costActaData.tenantId = tenantId;
-      }
-
       const newActa = await prisma.costActa.create({
         data: {
-          ...costActaData,
+          number,
+          period,
+          submissionDate: new Date(submissionDate),
+          billedAmount: Number(billedAmount),
+          totalContractValue: Number(totalContractValue),
+          periodValue: periodValue !== null && periodValue !== undefined ? Number(periodValue) : null,
+          advancePaymentPercentage: advancePaymentPercentage !== null && advancePaymentPercentage !== undefined ? Number(advancePaymentPercentage) : null,
+          relatedProgress,
+          status: CostActaStatus.SUBMITTED,
           attachments: {
             connect: attachments.map((att: { id: string }) => ({ id: att.id })),
           },
@@ -10365,21 +8602,6 @@ app.put(
         !Object.values(CostActaStatus).includes(prismaStatus)
       ) {
         return res.status(400).json({ error: "Estado inválido proporcionado." });
-      }
-
-      // Verificar que el cost acta pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const existingActa = await prisma.costActa.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
-      });
-
-      if (!existingActa) {
-        return res.status(404).json({ error: "El acta de costo no fue encontrada." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (existingActa as any).tenantId !== (req as any).tenant.id) {
-        return res.status(404).json({ error: "El acta de costo no fue encontrada." });
       }
 
       const updateData: Prisma.CostActaUpdateInput = {
@@ -10447,25 +8669,6 @@ app.post(
         });
       }
 
-      // Verificar que el cost acta pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const costActa = await prisma.costActa.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
-      });
-
-      if (!costActa) {
-        return res.status(404).json({
-          error: "El acta de costo no fue encontrada.",
-        });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (costActa as any).tenantId !== (req as any).tenant.id) {
-        return res.status(404).json({
-          error: "El acta de costo no fue encontrada.",
-        });
-      }
-
       const newObservation = await prisma.observation.create({
         data: {
           text,
@@ -10510,20 +8713,12 @@ app.post(
         });
       }
 
-      // Verificar que el acta pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const costActa = await prisma.costActa.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
+      // Verificar que el acta existe
+      const costActa = await prisma.costActa.findUnique({
+        where: { id },
       });
 
       if (!costActa) {
-        return res.status(404).json({
-          error: "Acta de cobro no encontrada.",
-        });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (costActa as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({
           error: "Acta de cobro no encontrada.",
         });
@@ -10586,16 +8781,10 @@ app.post(
           .json({ error: "El nombre del punto de control es obligatorio." });
       }
 
-      // Asignar tenantId si está disponible (después de migración)
-      const data: any = { name, description, location };
-      if (req.tenant) {
-        data.tenantId = req.tenant.id;
-      }
-
       const newPoint = await prisma.controlPoint.create({
-        data,
+        data: { name, description, location },
         include: {
-          photos: { include: { author: true }, orderBy: [{ order: "asc" }, { date: "asc" }] },
+          photos: { include: { author: true }, orderBy: { date: "asc" } },
         },
       });
 
@@ -10623,18 +8812,10 @@ app.post(
           .json({ error: "Faltan datos del autor o del archivo adjunto." });
       }
 
-      // Verificar que el control point pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const pointExists = await prisma.controlPoint.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
-        include: { photos: true },
+      const pointExists = await prisma.controlPoint.findUnique({
+        where: { id },
       });
       if (!pointExists) {
-        return res.status(404).json({ error: "Punto de control no encontrado." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (pointExists as any).tenantId !== (req as any).tenant.id) {
         return res.status(404).json({ error: "Punto de control no encontrado." });
       }
 
@@ -10645,14 +8826,10 @@ app.post(
         return res.status(404).json({ error: "Archivo adjunto no encontrado." });
       }
 
-      // Asignar el orden basado en el número de fotos existentes
-      const nextOrder = pointExists.photos.length;
-
       const newPhoto = await prisma.photoEntry.create({
         data: {
           notes,
           url: attachment.url,
-          order: nextOrder, // Asignar orden secuencial
           author: { connect: { id: resolvedAuthorId } },
           controlPoint: { connect: { id } },
           attachment: { connect: { id: attachmentId } },
@@ -10673,75 +8850,6 @@ app.post(
         });
       }
       res.status(500).json({ error: "No se pudo añadir la foto." });
-    }
-  }
-);
-
-// Endpoint para actualizar el orden de las fotos de un punto fijo
-app.put(
-  "/api/control-points/:id/photos/reorder",
-  authMiddleware,
-  requireEditor,
-  async (req: AuthRequest, res) => {
-    try {
-      const { id } = req.params;
-      const { photoIds } = req.body ?? {}; // Array de IDs en el nuevo orden
-
-      if (!Array.isArray(photoIds) || photoIds.length === 0) {
-        return res.status(400).json({ error: "Se requiere un array de IDs de fotos en el nuevo orden." });
-      }
-
-      // Verificar que el control point pertenezca al tenant
-      const where = withTenantFilter(req, { id } as any);
-      const pointExists = await prisma.controlPoint.findFirst({
-        where: Object.keys(where).length > 1 ? (where as any) : { id },
-        include: { photos: true },
-      });
-
-      if (!pointExists) {
-        return res.status(404).json({ error: "Punto de control no encontrado." });
-      }
-      
-      // Verificar que el tenant coincida si hay tenant
-      if ((req as any).tenant && (pointExists as any).tenantId !== (req as any).tenant.id) {
-        return res.status(404).json({ error: "Punto de control no encontrado." });
-      }
-
-      // Verificar que todos los IDs pertenezcan a este punto fijo
-      const photoIdsInPoint = pointExists.photos.map((p) => p.id);
-      const allIdsValid = photoIds.every((photoId: string) => photoIdsInPoint.includes(photoId));
-      if (!allIdsValid) {
-        return res.status(400).json({ error: "Algunos IDs de fotos no pertenecen a este punto fijo." });
-      }
-
-      // Actualizar el orden de cada foto en una transacción
-      await prisma.$transaction(
-        photoIds.map((photoId: string, index: number) =>
-          prisma.photoEntry.update({
-            where: { id: photoId },
-            data: { order: index },
-          })
-        )
-      );
-
-      // Obtener las fotos actualizadas
-      const updatedPoint = await prisma.controlPoint.findUnique({
-        where: { id },
-        include: {
-          photos: {
-            orderBy: [{ order: "asc" }, { date: "asc" }],
-            include: { author: true, attachment: true },
-          },
-        },
-      });
-
-      res.json({
-        message: "Orden de fotos actualizado correctamente.",
-        photos: updatedPoint?.photos || [],
-      });
-    } catch (error) {
-      console.error("Error al actualizar el orden de las fotos:", error);
-      res.status(500).json({ error: "No se pudo actualizar el orden de las fotos." });
     }
   }
 );
@@ -10822,7 +8930,7 @@ app.post(
               .filter((dep: string) => dep.length > 0)
           : [];
 
-        const taskData: any = {
+        return {
           id,
           taskId: id,
           name: safeName,
@@ -10836,31 +8944,16 @@ app.post(
             ? JSON.stringify(dependencyArray)
             : null,
         };
-        
-        // Asignar tenantId si está disponible
-        const tenantId = (req as any).tenant?.id;
-        if (tenantId) {
-          taskData.tenantId = tenantId;
-        }
-        
-        return taskData;
       });
 
-      const tenantId = (req as any).tenant?.id;
       await prisma.$transaction(async (tx) => {
-        // Eliminar solo las tareas del tenant actual
-        const deleteWhere: any = tenantId ? { tenantId } : {};
-        await tx.projectTask.deleteMany({ where: deleteWhere });
-        
+        await tx.projectTask.deleteMany();
         if (sanitizedTasks.length) {
           await tx.projectTask.createMany({ data: sanitizedTasks });
         }
       });
 
-      // Obtener solo las tareas del tenant actual
-      const whereClause: any = tenantId ? { tenantId } : undefined;
       const updatedTasks = await prisma.projectTask.findMany({
-        where: whereClause,
         orderBy: { outlineLevel: "asc" },
       });
 
@@ -10888,12 +8981,9 @@ app.get(
   "/api/admin/users",
   authMiddleware,
   requireAdmin,
-  async (req: AuthRequest, res) => {
+  async (_req: AuthRequest, res) => {
     try {
-      // Filtrar usuarios por tenant
-      const where = withTenantFilter(req);
       const users = await prisma.user.findMany({
-        where: Object.keys(where).length > 0 ? (where as any) : undefined,
         orderBy: { fullName: "asc" },
       });
       res.json(users.map(formatAdminUser));
@@ -10926,14 +9016,9 @@ app.post(
         });
       }
 
-      // Verificar si el usuario ya existe (considerando tenant)
-      const tenantId = (req as any).tenant?.id;
-      const whereClause: any = tenantId
-        ? { email: email.toLowerCase().trim(), tenantId }
-        : { email: email.toLowerCase().trim() };
-      
-      const existingUser = await prisma.user.findFirst({
-        where: whereClause,
+      // Verificar si el usuario ya existe
+      const existingUser = await prisma.user.findUnique({
+        where: { email: email.toLowerCase().trim() },
       });
 
       if (existingUser) {
@@ -10965,60 +9050,21 @@ app.post(
       const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
 
       // Crear el usuario
-      const userData: any = {
-        email: email.toLowerCase().trim(),
-        password: hashedPassword,
-        fullName: fullName.trim(),
+      const newUser = await prisma.user.create({
+        data: {
+          email: email.toLowerCase().trim(),
+          password: hashedPassword,
+          fullName: fullName.trim(),
         appRole: appRole as AppRole,
         projectRole: resolvedRole || "CONTRACTOR_REP", // Valor por defecto
         entity: entity ? entity.toUpperCase() : null,
         status: "active",
         canDownload: true, // Por defecto todos pueden descargar
-        mustUpdatePassword: true,
-      };
-      
-      // Asignar tenantId si está disponible
-      if (tenantId) {
-        userData.tenantId = tenantId;
-      }
-      
-      const newUser = await prisma.user.create({
-        data: userData,
+        },
       });
 
       // Registrar en auditoría
       const actorInfo = await resolveActorInfo(req);
-      const tenantName = (req as any).tenant?.name || null;
-      const emailChannelConfigured =
-        isEmailServiceConfigured() ||
-        Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM);
-      let invitationEmailSent = false;
-
-      if (emailChannelConfigured) {
-        try {
-          invitationEmailSent = await sendUserInvitationEmail({
-            to: newUser.email,
-            fullName: newUser.fullName,
-            temporaryPassword,
-            invitedByName: actorInfo.actorName || undefined,
-            invitedByEmail: actorInfo.actorEmail || undefined,
-            tenantName: tenantName || undefined,
-            appRole: newUser.appRole,
-            projectRole: newUser.projectRole,
-          });
-        } catch (mailError) {
-          logger.error("No se pudo enviar el correo de invitación", {
-            error: mailError instanceof Error ? mailError.message : String(mailError),
-            userId: newUser.id,
-            email: newUser.email,
-          });
-        }
-      } else {
-        logger.warn("Servicio de correo no configurado para invitaciones", {
-          userId: newUser.id,
-          email: newUser.email,
-        });
-      }
       const userDiff = createDiff(
         {},
         {
@@ -11042,7 +9088,6 @@ app.post(
       res.status(201).json({
         user: formatAdminUser(newUser),
         temporaryPassword,
-        invitationEmailSent,
       });
     } catch (error) {
       console.error("Error al invitar usuario:", error);
@@ -11432,14 +9477,8 @@ app.post("/api/auth/register", async (req, res) => {
       return res.status(400).json({ error: passwordError });
     }
 
-    // Buscar usuario considerando tenant (después de migración)
-    const tenantId = (req as any).tenant?.id;
-    const whereClause: any = tenantId 
-      ? { email: normalizedEmail, tenantId }
-      : { email: normalizedEmail };
-    
-    const existingUser = await prisma.user.findFirst({
-      where: whereClause,
+    const existingUser = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
     });
 
     if (existingUser) {
@@ -11458,23 +9497,17 @@ app.post("/api/auth/register", async (req, res) => {
       ? (normalizedAppRole as AppRole)
       : AppRole.viewer;
 
-    // Asignar tenantId si está disponible
-    const userData: any = {
-      email: normalizedEmail,
-      password: hashedPassword,
-      fullName,
-      projectRole: resolvedProjectRole,
-      appRole: resolvedAppRole,
-      status: "active",
-      tokenVersion: 0,
-      emailVerifiedAt: isEmailServiceConfigured() ? null : new Date(),
-    };
-    if (tenantId) {
-      userData.tenantId = tenantId;
-    }
-
     const newUser = await prisma.user.create({
-      data: userData,
+      data: {
+        email: normalizedEmail,
+        password: hashedPassword,
+        fullName,
+        projectRole: resolvedProjectRole,
+        appRole: resolvedAppRole,
+        status: "active",
+        tokenVersion: 0,
+        emailVerifiedAt: isEmailServiceConfigured() ? null : new Date(),
+      },
     });
 
     let verificationEmailSent = false;
@@ -11534,14 +9567,8 @@ app.post("/api/auth/login", async (req, res) => {
         .json({ error: "Email y contraseña son requeridos." });
     }
 
-    // Buscar usuario considerando tenant (después de migración)
-    const tenantId = (req as any).tenant?.id;
-    const whereClause: any = tenantId 
-      ? { email, tenantId }
-      : { email };
-    
-    const user = await prisma.user.findFirst({
-      where: whereClause,
+    const user = await prisma.user.findUnique({
+      where: { email },
     });
 
     console.log("User found:", user ? "yes" : "no");
@@ -11632,14 +9659,12 @@ app.post("/api/auth/login", async (req, res) => {
     res.cookie("jid", refreshToken, buildRefreshCookieOptions());
 
     const { password: _, ...userWithoutPassword } = user;
-    const forcePasswordChange = Boolean(user.mustUpdatePassword);
 
     console.log("Login successful, sending response");
 
     return res.json({
       accessToken,
       user: userWithoutPassword,
-      forcePasswordChange,
     });
   } catch (error) {
     console.error("Error en login:", error);
@@ -11654,7 +9679,7 @@ app.post("/api/auth/logout", (req, res) => {
 
 app.post("/api/auth/forgot-password", async (req, res) => {
   try {
-    const { email, baseUrl: requestedBaseUrl } = req.body || {};
+    const { email } = req.body;
 
     if (!email) {
       return res
@@ -11665,14 +9690,8 @@ app.post("/api/auth/forgot-password", async (req, res) => {
     const normalizedEmail = String(email).trim().toLowerCase();
 
     try {
-      // Buscar usuario considerando tenant si está disponible
-      const tenantId = (req as any).tenant?.id;
-      const whereClause: any = tenantId
-        ? { email: normalizedEmail, tenantId }
-        : { email: normalizedEmail };
-      
-      const user = await prisma.user.findFirst({
-        where: whereClause,
+      const user = await prisma.user.findUnique({
+        where: { email: normalizedEmail },
       });
 
       if (user) {
@@ -11695,18 +9714,12 @@ app.post("/api/auth/forgot-password", async (req, res) => {
           }),
         ]);
 
-        const preferredBaseUrl =
-          typeof requestedBaseUrl === "string" && requestedBaseUrl.trim()
-            ? requestedBaseUrl.trim().replace(/\/$/, "")
-            : undefined;
-
         if (isEmailServiceConfigured()) {
           try {
             await sendPasswordResetEmail({
               to: user.email,
               token,
               fullName: user.fullName,
-              baseUrl: preferredBaseUrl || getRequestBaseUrl(req) || undefined,
             });
           } catch (mailError) {
             logger.error("No se pudo enviar el correo de restablecimiento", {
@@ -11739,81 +9752,6 @@ app.post("/api/auth/forgot-password", async (req, res) => {
       error: error instanceof Error ? error.message : String(error),
     });
     res.status(500).json({ error: "Error interno del servidor." });
-  }
-});
-
-app.post("/api/auth/reset-password/:token", async (req, res) => {
-  const { token } = req.params;
-  const { password } = req.body;
-
-  if (!token || !password) {
-    return res
-      .status(400)
-      .json({ error: "Token y nueva contraseña son requeridos." });
-  }
-
-  try {
-    const passwordError = await validatePasswordStrength(password);
-    if (passwordError) {
-      return res.status(400).json({ error: passwordError });
-    }
-
-    const tokenHash = hashToken(token);
-
-    const resetToken = await prisma.passwordResetToken.findUnique({
-      where: { tokenHash },
-      include: { user: true },
-    });
-
-    if (!resetToken || !resetToken.user) {
-      return res.status(400).json({ error: "Token inválido o no encontrado." });
-    }
-
-    if (resetToken.usedAt) {
-      return res
-        .status(400)
-        .json({ error: "Este token ya fue utilizado, solicita uno nuevo." });
-    }
-
-    if (resetToken.expiresAt < new Date()) {
-      return res.status(400).json({
-        error: "El token ha expirado. Solicita un nuevo enlace de restablecimiento.",
-      });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 12);
-
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: resetToken.userId },
-        data: {
-          password: hashedPassword,
-          tokenVersion: resetToken.user.tokenVersion + 1,
-          emailVerifiedAt: resetToken.user.emailVerifiedAt ?? new Date(),
-          mustUpdatePassword: false,
-        },
-      }),
-      prisma.passwordResetToken.update({
-        where: { id: resetToken.id },
-        data: { usedAt: new Date() },
-      }),
-      prisma.passwordResetToken.deleteMany({
-        where: {
-          userId: resetToken.userId,
-          id: { not: resetToken.id },
-        },
-      }),
-    ]);
-
-    res.json({ success: true });
-  } catch (error) {
-    logger.error("Error al restablecer contraseña", {
-      error: error instanceof Error ? error.message : String(error),
-      tokenHash: hashToken(token),
-    });
-    res
-      .status(500)
-      .json({ error: "No fue posible restablecer la contraseña." });
   }
 });
 
@@ -11859,21 +9797,7 @@ app.post(
 
       console.log("Refresh token cookie set");
 
-      // Devolver accessToken y datos del usuario para mantener la sesión
-      return res.json({ 
-        accessToken,
-        user: {
-          id: user.id,
-          email: user.email,
-          fullName: user.fullName,
-          appRole: user.appRole,
-          projectRole: user.projectRole,
-          status: user.status,
-          avatarUrl: user.avatarUrl,
-          mustUpdatePassword: user.mustUpdatePassword,
-        },
-        forcePasswordChange: Boolean(user.mustUpdatePassword),
-      });
+      return res.json({ accessToken });
     } catch (error) {
       console.error("Error en refresh token:", error);
       res.status(500).json({ error: "Error al refrescar el token" });
@@ -11901,7 +9825,6 @@ app.get("/api/auth/me", authMiddleware, async (req: AuthRequest, res) => {
         avatarUrl: true,
         status: true,
         canDownload: true,
-        mustUpdatePassword: true,
         lastLoginAt: true,
         emailVerifiedAt: true,
         createdAt: true,
@@ -11982,7 +9905,6 @@ app.post(
         data: {
           password: hashedNewPassword,
           tokenVersion: user.tokenVersion + 1,
-          mustUpdatePassword: false,
         },
       });
 
