@@ -1020,9 +1020,9 @@ interface SignatureOverlayParticipant {
 
 const SIGNATURE_OVERLAY_CONSTANTS = {
   PAGE_MARGIN: 48,
-  SIGNATURE_BOX_HEIGHT: 110,
+  SIGNATURE_BOX_HEIGHT: 150,
   SIGNATURE_BOX_GAP: 16,
-  SIGNATURE_LINE_OFFSET: 72,
+  SIGNATURE_LINE_OFFSET: 122,
   SIGNATURE_SECTION_START_Y: 48 + 17.5,
 };
 
@@ -1271,7 +1271,7 @@ const overlaySignatureStatuses = async (
 
       // Limpiar el área del estado antes de dibujar el nuevo texto
       // para evitar que se monte encima del texto anterior
-      const statusBackgroundHeight = 16;
+      const statusBackgroundHeight = 24;
       const statusBackgroundY = convertTopToPdfLibY(statusTextTop + statusBackgroundHeight);
       
       page.drawRectangle({
@@ -2864,10 +2864,10 @@ app.post(
           }
           if (signerIndex < 0) signerIndex = 0; // último recurso
           const MARGIN = 48; // Debe coincidir con pdfExport
-          const BOX_H = 110;
+          const BOX_H = 150;
           const GAP = 16;
-          const LINE_Y = 72; // línea de firma relativa al inicio del box
-          const LINE_X = 70; // desplazamiento respecto al margen izquierdo
+          const LINE_Y = 122; // línea de firma relativa al inicio del box
+          const LINE_X = 90; // desplazamiento respecto al margen izquierdo
           y =
             y === undefined ? MARGIN + signerIndex * (BOX_H + GAP) + LINE_Y : y;
           x = x === undefined ? MARGIN + LINE_X : x;

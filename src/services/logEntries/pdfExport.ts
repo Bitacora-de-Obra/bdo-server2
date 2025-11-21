@@ -97,6 +97,17 @@ const formatDateTime = (input: Date) =>
     minute: "2-digit",
   }).format(input);
 
+const decodeBase64Signature = (value?: string | null): Buffer | null => {
+  if (!value) return null;
+  const parts = value.split("base64,");
+  const payload = parts.length > 1 ? parts[1] : value;
+  try {
+    return Buffer.from(payload, "base64");
+  } catch (_error) {
+    return null;
+  }
+};
+
 export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
   const { prisma, logEntryId, uploadsDir, baseUrl, tenantId } = options;
   const entry = await prisma.logEntry.findUnique({
@@ -749,7 +760,49 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
       });
     }
 
-    const signatureBoxHeight = 110;
+    const signedParticipantIds = signatureParticipants
+      .filter((participant) => participant.status === "SIGNED")
+      .map((participant) => participant.id);
+
+    const signatureImages = new Map<string, Buffer>();
+    if (signedParticipantIds.length) {
+      const userSignatures = await prisma.userSignature.findMany({
+        where: { userId: { in: signedParticipantIds } },
+        select: {
+          userId: true,
+          storagePath: true,
+          signature: true,
+          url: true,
+        },
+      });
+      const storage = getStorage();
+
+      for (const userSignature of userSignatures) {
+        let buffer: Buffer | null = null;
+
+        if (userSignature.storagePath) {
+          try {
+            buffer = await storage.read(userSignature.storagePath);
+          } catch (error) {
+            console.warn("No se pudo leer firma desde storagePath", {
+              userId: userSignature.userId,
+              storagePath: userSignature.storagePath,
+              error,
+            });
+          }
+        }
+
+        if (!buffer) {
+          buffer = decodeBase64Signature(userSignature.signature);
+        }
+
+        if (buffer) {
+          signatureImages.set(userSignature.userId, buffer);
+        }
+      }
+    }
+
+    const signatureBoxHeight = 150;
     const signatureBoxWidth =
       pageWidth - doc.page.margins.left - doc.page.margins.right;
 
@@ -817,10 +870,42 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         .fontSize(10)
         .text("Firma:", doc.page.margins.left + 16, currentY + 58);
 
-      doc
-        .moveTo(doc.page.margins.left + 70, currentY + 72)
-        .lineTo(doc.page.margins.left + signatureBoxWidth - 16, currentY + 72)
-        .stroke();
+      const signatureAreaTop = currentY + 78;
+      const signatureAreaHeight = 50;
+      const signatureBuffer = participant.id
+        ? signatureImages.get(participant.id)
+        : null;
+
+      if (signatureBuffer) {
+        const maxSignatureWidth = signatureBoxWidth - 140;
+        const maxSignatureHeight = signatureAreaHeight;
+        try {
+          doc
+            .image(signatureBuffer, doc.page.margins.left + 90, signatureAreaTop, {
+              fit: [maxSignatureWidth, maxSignatureHeight],
+            });
+        } catch (error) {
+          console.warn("No se pudo renderizar la firma manuscrita en PDF", {
+            signerId: participant.id,
+            error,
+          });
+          doc
+            .moveTo(doc.page.margins.left + 90, signatureAreaTop + signatureAreaHeight - 8)
+            .lineTo(
+              doc.page.margins.left + signatureBoxWidth - 16,
+              signatureAreaTop + signatureAreaHeight - 8
+            )
+            .stroke();
+        }
+      } else {
+        doc
+          .moveTo(doc.page.margins.left + 90, signatureAreaTop + signatureAreaHeight - 8)
+          .lineTo(
+            doc.page.margins.left + signatureBoxWidth - 16,
+            signatureAreaTop + signatureAreaHeight - 8
+          )
+          .stroke();
+      }
 
       doc.y = currentY + signatureBoxHeight + 16;
       if (index === signatureParticipants.length - 1) {
