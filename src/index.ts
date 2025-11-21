@@ -1355,6 +1355,7 @@ const LOG_ENTRY_FIELD_LABELS: Record<string, string> = {
 const logEntryResponseInclude = {
   author: true,
   attachments: true,
+  signedPdf: true,
   comments: {
     include: { author: true },
     orderBy: { timestamp: "asc" },
