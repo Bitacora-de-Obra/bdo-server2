@@ -109,8 +109,6 @@ const decodeBase64Signature = (value?: string | null): Buffer | null => {
   }
 };
 
-type PdfDocInstance = InstanceType<typeof PDFDocument>;
-
 const isPng = (buffer: Buffer): boolean =>
   buffer.length > 8 &&
   buffer[0] === 0x89 &&
@@ -164,6 +162,26 @@ const trimPngWhitespace = (buffer: Buffer): Buffer => {
 
 const prepareSignatureBuffer = (buffer: Buffer): Buffer =>
   isPng(buffer) ? trimPngWhitespace(buffer) : buffer;
+
+type PdfDocInstance = InstanceType<typeof PDFDocument>;
+
+const getImageDimensions = (
+  doc: PdfDocInstance,
+  buffer: Buffer
+): { width: number; height: number } | null => {
+  const docAny = doc as any;
+  if (docAny && typeof docAny.openImage === "function") {
+    try {
+      const img = docAny.openImage(buffer);
+      if (img?.width && img?.height) {
+        return { width: img.width, height: img.height };
+      }
+    } catch (_error) {
+      // Ignorar y retornar null
+    }
+  }
+  return null;
+};
 
 export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
   const { prisma, logEntryId, uploadsDir, baseUrl, tenantId } = options;
@@ -929,7 +947,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
 
       const signatureLineY = currentY + signatureBoxHeight - 22;
       const signatureAreaHeight = 70;
-      const signatureAreaTop = signatureLineY - signatureAreaHeight;
+      const signatureAreaTop = signatureLineY - signatureAreaHeight + 4;
       const signatureAreaX = doc.page.margins.left + 150;
       const signatureAreaWidth = signatureBoxWidth - (signatureAreaX - doc.page.margins.left) - 16;
       const signatureBuffer = participant.id
@@ -938,6 +956,28 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
 
       if (signatureBuffer) {
         try {
+          const imageDimensions = getImageDimensions(doc, signatureBuffer);
+          const naturalWidth = imageDimensions?.width || signatureAreaWidth;
+          const naturalHeight = imageDimensions?.height || signatureAreaHeight;
+          const maxSignatureWidth = signatureAreaWidth - 8;
+          const maxSignatureHeight = signatureAreaHeight - 6;
+          const scale =
+            naturalWidth && naturalHeight
+              ? Math.min(
+                  maxSignatureWidth / naturalWidth,
+                  maxSignatureHeight / naturalHeight,
+                  1
+                )
+              : 1;
+          const renderWidth = naturalWidth * scale;
+          const renderHeight = naturalHeight * scale;
+          const renderX =
+            signatureAreaX + Math.max(0, (signatureAreaWidth - renderWidth) / 2);
+          const renderY = Math.max(
+            signatureAreaTop,
+            signatureLineY - renderHeight + 1
+          ); // apoyar la base de la firma sobre la línea
+
           // Limpiar el área para evitar fantasmas detrás
           doc.save();
           doc
@@ -945,15 +985,14 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
               signatureAreaX - 8,
               signatureAreaTop - 6,
               signatureAreaWidth + 16,
-              signatureAreaHeight + 16
+              signatureAreaHeight + 12
             )
             .fill("#FFFFFF");
           doc.restore();
 
-          doc.image(signatureBuffer, signatureAreaX, signatureAreaTop, {
-            cover: [signatureAreaWidth, signatureAreaHeight],
-            align: "center",
-            valign: "bottom",
+          doc.image(signatureBuffer, renderX, renderY, {
+            width: renderWidth,
+            height: renderHeight,
           });
         } catch (error) {
           console.warn("No se pudo renderizar la firma manuscrita en PDF", {
