@@ -10,7 +10,7 @@ const getLogoUrl = () => {
   }
   
   // Si no, usar el logo desde el frontend (ubicado en /logo.png en la carpeta public)
-  const frontendUrl = process.env.APP_BASE_URL || process.env.FRONTEND_URL || "https://bdigitales.com";
+  const frontendUrl = process.env.APP_BASE_URL || process.env.FRONTEND_URL || "https://mutis.bdigitales.com";
   // Usar el logo desde la carpeta public (nombre fijo, sin hash)
   return `${frontendUrl.replace(/\/$/, "")}/logo.png`;
 };
@@ -217,4 +217,3 @@ export const getEmailInfoBox = (content: string, type: 'info' | 'warning' = 'inf
     ${content}
   </div>`;
 };
-

@@ -81,6 +81,7 @@ scripts/users-to-import.json
 scripts/*restore*.sql
 scripts/*backup*.sql
 uploads/extracted-project.json
+RENDER_ENV_VARS.sh
 
 # Generated files
 *.generated.*

@@ -147,7 +147,7 @@ const getAppBaseUrl = () => {
   }
   // En producción, usar el dominio principal por defecto
   if (process.env.NODE_ENV === "production") {
-    return "https://bdigitales.com";
+    return "https://mutis.bdigitales.com";
   }
   const port = process.env.PORT || "4001";
   return `http://localhost:${port}`;
