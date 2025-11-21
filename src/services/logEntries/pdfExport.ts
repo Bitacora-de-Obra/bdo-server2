@@ -871,8 +871,8 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         .text("Firma:", doc.page.margins.left + 16, currentY + 58);
 
       const signatureLineY = currentY + signatureBoxHeight - 24;
-      const signatureAreaHeight = 36;
-      const signatureAreaTop = signatureLineY - signatureAreaHeight + 8;
+      const signatureAreaHeight = 40;
+      const signatureAreaTop = signatureLineY - signatureAreaHeight + 6;
       const signatureAreaX = doc.page.margins.left + 90;
       const signatureAreaWidth = signatureBoxWidth - 106;
       const signatureBuffer = participant.id
@@ -883,26 +883,39 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         const maxSignatureWidth = signatureAreaWidth - 14;
         const maxSignatureHeight = signatureAreaHeight;
         try {
-          // Limpiar el área para evitar que texto/estados se vean detrás
+          const image = doc.openImage(signatureBuffer as any);
+          const naturalWidth = image?.width || maxSignatureWidth;
+          const naturalHeight = image?.height || maxSignatureHeight;
+          const scale =
+            naturalWidth && naturalHeight
+              ? Math.min(
+                  maxSignatureWidth / naturalWidth,
+                  maxSignatureHeight / naturalHeight,
+                  1
+                )
+              : 1;
+          const renderWidth = naturalWidth * scale;
+          const renderHeight = naturalHeight * scale;
+          const renderX =
+            signatureAreaX + Math.max(0, (maxSignatureWidth - renderWidth) / 2);
+          const renderY = signatureLineY - renderHeight + 2; // que descanse sobre la línea
+
+          // Limpiar el área para evitar fantasmas detrás
           doc.save();
           doc
             .rect(
               signatureAreaX - 6,
-              signatureAreaTop - 4,
+              signatureAreaTop - 6,
               signatureAreaWidth + 12,
-              signatureAreaHeight + 8
+              signatureAreaHeight + 12
             )
             .fill("#FFFFFF");
           doc.restore();
 
-          doc.image(
-            signatureBuffer,
-            signatureAreaX,
-            signatureAreaTop,
-            {
-              fit: [maxSignatureWidth, maxSignatureHeight],
-            }
-          );
+          doc.image(signatureBuffer, renderX, renderY, {
+            width: renderWidth,
+            height: renderHeight,
+          });
         } catch (error) {
           console.warn("No se pudo renderizar la firma manuscrita en PDF", {
             signerId: participant.id,
