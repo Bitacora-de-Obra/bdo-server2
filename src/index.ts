@@ -108,6 +108,7 @@ import {
   sendTestEmail,
   sendUserInvitationEmail,
 } from "./services/email";
+import { getRequestBaseUrl } from "./utils/requestUrl";
 import { buildUserNotifications } from "./services/notifications";
 import { PDFDocument, rgb } from "pdf-lib";
 import {
@@ -11655,6 +11656,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
               to: user.email,
               token,
               fullName: user.fullName,
+              baseUrl: getRequestBaseUrl(req) ?? undefined,
             });
           } catch (mailError) {
             logger.error("No se pudo enviar el correo de restablecimiento", {
