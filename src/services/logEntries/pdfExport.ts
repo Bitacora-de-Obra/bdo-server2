@@ -885,23 +885,25 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         })
         .fillColor("#000000");
 
+      // Área de firma centrada y más amplia para evitar que se vea comprimida
+      const signatureAreaTop = currentY + 70;
+      const signatureAreaHeight = 70;
+      const signatureAreaX = doc.page.margins.left + 24;
+      const signatureAreaWidth =
+        signatureBoxWidth - (signatureAreaX - doc.page.margins.left) - 24;
+      const signatureLineY = signatureAreaTop + signatureAreaHeight - 10;
+
       doc
         .font("Helvetica")
         .fontSize(10)
-        .text("Firma:", doc.page.margins.left + 16, currentY + 58);
-
-      const signatureLineY = currentY + signatureBoxHeight - 24;
-      const signatureAreaHeight = 44;
-      const signatureAreaTop = signatureLineY - signatureAreaHeight + 6;
-      const signatureAreaX = doc.page.margins.left + 150;
-      const signatureAreaWidth = signatureBoxWidth - (signatureAreaX - doc.page.margins.left) - 16;
+        .text("Firma:", doc.page.margins.left + 16, signatureAreaTop - 18);
       const signatureBuffer = participant.id
         ? signatureImages.get(participant.id)
         : null;
 
       if (signatureBuffer) {
-        const maxSignatureWidth = signatureAreaWidth - 14;
-        const maxSignatureHeight = signatureAreaHeight;
+        const maxSignatureWidth = signatureAreaWidth - 16;
+        const maxSignatureHeight = signatureAreaHeight - 12;
         try {
           const imageDimensions = getImageDimensions(doc, signatureBuffer);
           const naturalWidth = imageDimensions?.width || maxSignatureWidth;
@@ -918,7 +920,8 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
           const renderHeight = naturalHeight * scale;
           const renderX =
             signatureAreaX + Math.max(0, (maxSignatureWidth - renderWidth) / 2);
-          const renderY = signatureLineY - renderHeight + 6; // apoyar la firma sobre la línea
+          const renderY =
+            signatureAreaTop + Math.max(0, (maxSignatureHeight - renderHeight) / 2);
 
           // Limpiar el área para evitar fantasmas detrás
           doc.save();
