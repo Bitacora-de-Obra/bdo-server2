@@ -108,6 +108,24 @@ const decodeBase64Signature = (value?: string | null): Buffer | null => {
   }
 };
 
+const getImageDimensions = (
+  doc: PDFKit.PDFDocument | PDFDocument,
+  buffer: Buffer
+): { width: number; height: number } | null => {
+  const docAny = doc as any;
+  if (docAny && typeof docAny.openImage === "function") {
+    try {
+      const img = docAny.openImage(buffer);
+      if (img?.width && img?.height) {
+        return { width: img.width, height: img.height };
+      }
+    } catch (_error) {
+      // Ignorar y retornar null
+    }
+  }
+  return null;
+};
+
 export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
   const { prisma, logEntryId, uploadsDir, baseUrl, tenantId } = options;
   const entry = await prisma.logEntry.findUnique({
@@ -883,9 +901,9 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         const maxSignatureWidth = signatureAreaWidth - 14;
         const maxSignatureHeight = signatureAreaHeight;
         try {
-          const image = doc.openImage(signatureBuffer as any);
-          const naturalWidth = image?.width || maxSignatureWidth;
-          const naturalHeight = image?.height || maxSignatureHeight;
+          const imageDimensions = getImageDimensions(doc, signatureBuffer);
+          const naturalWidth = imageDimensions?.width || maxSignatureWidth;
+          const naturalHeight = imageDimensions?.height || maxSignatureHeight;
           const scale =
             naturalWidth && naturalHeight
               ? Math.min(

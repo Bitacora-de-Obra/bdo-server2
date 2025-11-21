@@ -4445,16 +4445,7 @@ app.post(
         
         console.log("DEBUG: tenantId detectado:", tenantId);
         
-        // Generar folioNumber: obtener el máximo folioNumber del tenant y sumar 1
-        const maxFolioResult = await prisma.$queryRawUnsafe<Array<{ maxFolio: bigint | null }>>(
-          `SELECT MAX(folioNumber) as maxFolio FROM LogEntry WHERE tenantId = ?`,
-          tenantId
-        );
-        const maxFolio = maxFolioResult[0]?.maxFolio;
-        const nextFolioNumber = maxFolio ? Number(maxFolio) + 1 : 1;
-        console.log("DEBUG: folioNumber generado:", nextFolioNumber);
-        
-        const logEntryData: any = {
+        const logEntryDataBase: any = {
           title,
           description,
           type: prismaType,
@@ -4466,7 +4457,6 @@ app.post(
           activityEndDate: activityEndValue,
           isConfidential: parseBooleanInput(isConfidential),
           scheduleDay: parsedScheduleDay,
-          folioNumber: nextFolioNumber, // Generado automáticamente por tenant
           tenant: { connect: { id: tenantId } }, // Usar relación en lugar de tenantId directo
           author: { connect: { id: userId } },
           project: { connect: { id: projectId } },
@@ -4501,26 +4491,81 @@ app.post(
           weatherReport: weatherReport && weatherReport !== "" ? (typeof weatherReport === "string" ? JSON.parse(weatherReport) : weatherReport) : null,
           socialActivities: socialActivities && socialActivities !== "" ? (typeof socialActivities === "string" ? JSON.parse(socialActivities) : socialActivities) : null,
         };
-        
-        logEntry = await prisma.logEntry.create({
-          data: {
-            ...logEntryData,
-            assignees: {
-              connect: (Array.isArray(assigneeIds) ? assigneeIds : [])
-                .filter((id) => typeof id === "string" && id.trim().length > 0)
-                .map((id) => ({ id })),
-            },
-            attachments: {
-              create: attachmentRecords.map((att) => ({
-                fileName: att.fileName,
-                url: att.url,
-                size: att.size,
-                type: att.type,
-                storagePath: att.storagePath,
-              })),
-            },
-          },
-        });
+
+        const MAX_FOLIO_RETRIES = 5;
+        let lastFolioError: any = null;
+
+        for (let attempt = 0; attempt < MAX_FOLIO_RETRIES; attempt++) {
+          // Generar folioNumber: obtener el máximo folioNumber del tenant y sumar 1
+          const maxFolioResult = await prisma.$queryRawUnsafe<
+            Array<{ maxFolio: bigint | null }>
+          >(
+            `SELECT MAX(folioNumber) as maxFolio FROM LogEntry WHERE tenantId = ?`,
+            tenantId
+          );
+          const maxFolio = maxFolioResult[0]?.maxFolio;
+          const nextFolioNumber = maxFolio ? Number(maxFolio) + 1 : 1;
+          console.log(
+            `DEBUG: folioNumber generado (intento ${attempt + 1}):`,
+            nextFolioNumber
+          );
+
+          try {
+            logEntry = await prisma.logEntry.create({
+              data: {
+                ...logEntryDataBase,
+                folioNumber: nextFolioNumber, // Generado automáticamente por tenant
+                assignees: {
+                  connect: (Array.isArray(assigneeIds) ? assigneeIds : [])
+                    .filter(
+                      (id) => typeof id === "string" && id.trim().length > 0
+                    )
+                    .map((id) => ({ id })),
+                },
+                attachments: {
+                  create: attachmentRecords.map((att) => ({
+                    fileName: att.fileName,
+                    url: att.url,
+                    size: att.size,
+                    type: att.type,
+                    storagePath: att.storagePath,
+                  })),
+                },
+              },
+            });
+            lastFolioError = null;
+            break; // éxito
+          } catch (prismaError: any) {
+            lastFolioError = prismaError;
+            const target = (prismaError.meta as any)?.target;
+            const isFolioConstraint =
+              prismaError?.code === "P2002" &&
+              (Array.isArray(target)
+                ? target.includes("LogEntry_folioNumber_tenantId_key") ||
+                  target.includes("folioNumber_tenantId")
+                : typeof target === "string" &&
+                  target.includes("folioNumber_tenantId"));
+
+            if (isFolioConstraint) {
+              console.warn(
+                `⚠️ Conflicto de folio (intento ${attempt + 1}). Recalculando...`
+              );
+              // Reintentar con el siguiente número
+              continue;
+            }
+
+            // Otros errores se relanzan
+            throw prismaError;
+          }
+        }
+
+        if (!logEntry) {
+          console.error(
+            "❌ No se pudo generar folio único después de múltiples intentos",
+            lastFolioError
+          );
+          throw lastFolioError || new Error("No se pudo generar folio único.");
+        }
       console.log("✅ LogEntry creado exitosamente:", { id: logEntry.id, title: logEntry.title });
       
       // Registrar la creación inicial en el historial
