@@ -4601,14 +4601,20 @@ app.post(
           if (prismaError.code === "P2002") {
             const target = (prismaError.meta as any)?.target;
             const isEntryDateConstraint = 
-              (Array.isArray(target) && target.includes("LogEntry_projectId_entryDate_key")) ||
-              (typeof target === "string" && target === "LogEntry_projectId_entryDate_key");
+              (Array.isArray(target) && (
+                target.includes("LogEntry_projectId_entryDate_key") ||
+                target.includes("LogEntry_projectId_entryDate_type_key")
+              )) ||
+              (typeof target === "string" && (
+                target === "LogEntry_projectId_entryDate_key" ||
+                target === "LogEntry_projectId_entryDate_type_key"
+              ));
             
             if (isEntryDateConstraint) {
               console.log("✅ Error de constraint de fecha detectado, retornando 409");
               return res.status(409).json({
                 error:
-                  "Ya existe una bitácora registrada para este proyecto en la fecha seleccionada.",
+                  "Ya existe una bitácora registrada para este proyecto, fecha y tipo.",
               });
             }
           }
@@ -4785,14 +4791,20 @@ app.post(
         if (error.code === "P2002") {
           const target = (error.meta as any)?.target;
           const isEntryDateConstraint = 
-            (Array.isArray(target) && target.includes("LogEntry_projectId_entryDate_key")) ||
-            (typeof target === "string" && target === "LogEntry_projectId_entryDate_key");
+            (Array.isArray(target) && (
+              target.includes("LogEntry_projectId_entryDate_key") ||
+              target.includes("LogEntry_projectId_entryDate_type_key")
+            )) ||
+            (typeof target === "string" && (
+              target === "LogEntry_projectId_entryDate_key" ||
+              target === "LogEntry_projectId_entryDate_type_key"
+            ));
           
           if (isEntryDateConstraint) {
-            console.log("✅ Error de constraint de fecha detectado en catch externo, retornando 409");
+            console.log("✅ Error de constraint de fecha/tipo detectado en catch externo, retornando 409");
             return res.status(409).json({
               error:
-                "Ya existe una bitácora registrada para este proyecto en la fecha seleccionada.",
+                "Ya existe una bitácora para este proyecto, fecha y tipo.",
             });
           }
         }
