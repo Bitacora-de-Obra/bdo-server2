@@ -822,7 +822,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
       }
     }
 
-    const signatureBoxHeight = 140;
+    const signatureBoxHeight = 200;
     const signatureBoxWidth =
       pageWidth - doc.page.margins.left - doc.page.margins.right;
 
@@ -885,13 +885,13 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         })
         .fillColor("#000000");
 
-      // Área de firma centrada y más amplia para evitar que se vea comprimida
-      const signatureAreaTop = currentY + 70;
-      const signatureAreaHeight = 70;
+      // Área de firma amplia para evitar compresión y dar aire alrededor
+      const signatureAreaTop = currentY + 78;
+      const signatureAreaHeight = 110;
       const signatureAreaX = doc.page.margins.left + 24;
       const signatureAreaWidth =
         signatureBoxWidth - (signatureAreaX - doc.page.margins.left) - 24;
-      const signatureLineY = signatureAreaTop + signatureAreaHeight - 10;
+      const signatureLineY = signatureAreaTop + signatureAreaHeight - 12;
 
       doc
         .font("Helvetica")
@@ -902,8 +902,8 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         : null;
 
       if (signatureBuffer) {
-        const maxSignatureWidth = signatureAreaWidth - 16;
-        const maxSignatureHeight = signatureAreaHeight - 12;
+        const maxSignatureWidth = signatureAreaWidth - 20;
+        const maxSignatureHeight = signatureAreaHeight - 20;
         try {
           const imageDimensions = getImageDimensions(doc, signatureBuffer);
           const naturalWidth = imageDimensions?.width || maxSignatureWidth;
@@ -921,16 +921,17 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
           const renderX =
             signatureAreaX + Math.max(0, (maxSignatureWidth - renderWidth) / 2);
           const renderY =
-            signatureAreaTop + Math.max(0, (maxSignatureHeight - renderHeight) / 2);
+            signatureAreaTop +
+            Math.max(0, signatureAreaHeight - renderHeight - 8); // apoyar firma sobre la línea sin que la tape
 
           // Limpiar el área para evitar fantasmas detrás
           doc.save();
           doc
             .rect(
-              signatureAreaX - 8,
-              signatureAreaTop - 6,
-              signatureAreaWidth + 16,
-              signatureAreaHeight + 16
+              signatureAreaX - 10,
+              signatureAreaTop - 8,
+              signatureAreaWidth + 20,
+              signatureAreaHeight + 20
             )
             .fill("#FFFFFF");
           doc.restore();
