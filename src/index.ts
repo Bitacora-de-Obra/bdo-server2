@@ -4319,13 +4319,16 @@ app.post(
         entryStatusMap[entryStatusReverseMap[status] || "Borrador"] ||
         "DRAFT";
 
-      entryDateValue = entryDate ? new Date(entryDate) : new Date();
-      const activityStartValue = activityStartDate
-        ? new Date(activityStartDate)
-        : entryDateValue;
-      const activityEndValue = activityEndDate
-        ? new Date(activityEndDate)
-        : entryDateValue;
+      // Normalizar fechas a día completo sin efectos de zona horaria:
+      // se fija el mediodía UTC para que nunca se desplace a días adyacentes.
+      const normalizeDateOnly = (value: string | Date | undefined) => {
+        const d = value ? new Date(value) : new Date();
+        return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12, 0, 0));
+      };
+
+      entryDateValue = normalizeDateOnly(entryDate);
+      const activityStartValue = normalizeDateOnly(activityStartDate) || entryDateValue;
+      const activityEndValue = normalizeDateOnly(activityEndDate) || entryDateValue;
 
       const storage = getStorage();
       const attachmentRecords: {
