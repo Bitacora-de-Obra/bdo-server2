@@ -925,7 +925,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
         .font("Helvetica-Bold")
         .fontSize(10)
         .fillColor("#000000")
-        .text("Firma:", signatureAreaX, signatureAreaTop - 10, {
+        .text("Firma:", signatureAreaX, signatureAreaTop + 4, {
           width: signatureAreaWidth,
         })
         .fillColor("#000000");
