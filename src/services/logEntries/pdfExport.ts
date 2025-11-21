@@ -4,7 +4,6 @@ import fsSync from "fs";
 import PDFDocument from "pdfkit";
 import { PrismaClient } from "@prisma/client";
 import { getStorage } from "../../storage";
-import { PNG } from "pngjs";
 import {
   normalizeEquipmentEntries,
   normalizeListItems,
@@ -71,7 +70,6 @@ interface LogEntryPdfOptions {
   logEntryId: string;
   uploadsDir: string;
   baseUrl: string;
-  tenantId?: string; // Para validar tenant (el log entry ya debería estar validado, pero esto es una capa adicional)
 }
 
 const sanitizeFileName = (value: string) =>
@@ -98,93 +96,12 @@ const formatDateTime = (input: Date) =>
     minute: "2-digit",
   }).format(input);
 
-const decodeBase64Signature = (value?: string | null): Buffer | null => {
-  if (!value) return null;
-  const parts = value.split("base64,");
-  const payload = parts.length > 1 ? parts[1] : value;
-  try {
-    return Buffer.from(payload, "base64");
-  } catch (_error) {
-    return null;
-  }
-};
-
-const isPng = (buffer: Buffer): boolean =>
-  buffer.length > 8 &&
-  buffer[0] === 0x89 &&
-  buffer[1] === 0x50 &&
-  buffer[2] === 0x4e &&
-  buffer[3] === 0x47 &&
-  buffer[4] === 0x0d &&
-  buffer[5] === 0x0a &&
-  buffer[6] === 0x1a &&
-  buffer[7] === 0x0a;
-
-const trimPngWhitespace = (buffer: Buffer): Buffer => {
-  try {
-    const png = PNG.sync.read(buffer);
-    let minX = png.width;
-    let minY = png.height;
-    let maxX = -1;
-    let maxY = -1;
-
-    for (let y = 0; y < png.height; y += 1) {
-      for (let x = 0; x < png.width; x += 1) {
-        const idx = (png.width * y + x) << 2;
-        const r = png.data[idx];
-        const g = png.data[idx + 1];
-        const b = png.data[idx + 2];
-        const a = png.data[idx + 3];
-        const isInk = a > 10 && (r < 245 || g < 245 || b < 245);
-        if (isInk) {
-          if (x < minX) minX = x;
-          if (y < minY) minY = y;
-          if (x > maxX) maxX = x;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-
-    if (maxX === -1 || maxY === -1) {
-      return buffer;
-    }
-
-    const trimmedWidth = maxX - minX + 1;
-    const trimmedHeight = maxY - minY + 1;
-    const trimmed = new PNG({ width: trimmedWidth, height: trimmedHeight });
-    PNG.bitblt(png, trimmed, minX, minY, trimmedWidth, trimmedHeight, 0, 0);
-    return PNG.sync.write(trimmed);
-  } catch (error) {
-    console.warn("No se pudo recortar espacios en blanco de la firma", error);
-    return buffer;
-  }
-};
-
-const prepareSignatureBuffer = (buffer: Buffer): Buffer =>
-  isPng(buffer) ? trimPngWhitespace(buffer) : buffer;
-
-type PdfDocInstance = InstanceType<typeof PDFDocument>;
-
-const getImageDimensions = (
-  doc: PdfDocInstance,
-  buffer: Buffer
-): { width: number; height: number } | null => {
-  const docAny = doc as any;
-  if (docAny && typeof docAny.openImage === "function") {
-    try {
-      const img = docAny.openImage(buffer);
-      if (img?.width && img?.height) {
-        return { width: img.width, height: img.height };
-      }
-    } catch (_error) {
-      // Ignorar y retornar null
-    }
-  }
-  return null;
-};
-
-export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
-  const { prisma, logEntryId, uploadsDir, baseUrl, tenantId } = options;
+export const generateLogEntryPdf = async ({
+  prisma,
+  logEntryId,
+  uploadsDir,
+  baseUrl,
+}: LogEntryPdfOptions) => {
   const entry = await prisma.logEntry.findUnique({
     where: { id: logEntryId },
     include: {
@@ -211,8 +128,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
               entity: true,
             }
           }
-        },
-        orderBy: { signedAt: "asc" },
+        }
       },
       assignees: {
         select: {
@@ -235,7 +151,7 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
             }
           }
         },
-        orderBy: [{ assignedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        orderBy: { assignedAt: "asc" },
       },
     },
   });
@@ -835,60 +751,18 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
       });
     }
 
-    const signedParticipantIds = signatureParticipants
-      .filter((participant) => participant.status === "SIGNED")
-      .map((participant) => participant.id);
-
-    const signatureImages = new Map<string, Buffer>();
-    if (signedParticipantIds.length) {
-      const userSignatures = await prisma.userSignature.findMany({
-        where: { userId: { in: signedParticipantIds } },
-        select: {
-          userId: true,
-          storagePath: true,
-          signature: true,
-          url: true,
-        },
-      });
-      const storage = getStorage();
-
-      for (const userSignature of userSignatures) {
-        let buffer: Buffer | null = null;
-
-        if (userSignature.storagePath) {
-          try {
-            buffer = await storage.read(userSignature.storagePath);
-          } catch (error) {
-            console.warn("No se pudo leer firma desde storagePath", {
-              userId: userSignature.userId,
-              storagePath: userSignature.storagePath,
-              error,
-            });
-          }
-        }
-
-        if (!buffer) {
-          buffer = decodeBase64Signature(userSignature.signature);
-        }
-
-        if (buffer) {
-          signatureImages.set(userSignature.userId, prepareSignatureBuffer(buffer));
-        }
-      }
-    }
-
-    const signatureBoxHeight = 140;
+    const signatureBoxHeight = 110;
     const signatureBoxWidth =
       pageWidth - doc.page.margins.left - doc.page.margins.right;
 
-    signatureParticipants.forEach((participant, index) => {
+    for (let index = 0; index < signatureParticipants.length; index++) {
+      const participant = signatureParticipants[index];
       if (
         doc.y + signatureBoxHeight >
         doc.page.height - doc.page.margins.bottom
       ) {
         doc.addPage();
       }
-
       const currentY = doc.y;
       doc
         .rect(
@@ -898,14 +772,12 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
           signatureBoxHeight
         )
         .stroke();
-
       const nameLabel = participant.fullName || "Firmante";
       const roleLabel = getDisplayRole(
         participant.cargo,
         participant.projectRole,
         participant.entity
       );
-
       const statusLabelBase =
         signatureTaskStatusLabels[participant.status] || participant.status;
       const statusDetail =
@@ -914,14 +786,12 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
           : statusLabelBase;
       const statusColor =
         signatureTaskStatusColors[participant.status] || "#1F2937";
-
       doc
         .font("Helvetica-Bold")
         .fontSize(11)
         .text(nameLabel, doc.page.margins.left + 16, currentY + 12, {
           width: signatureBoxWidth - 32,
         });
-
       doc
         .font("Helvetica")
         .fontSize(10)
@@ -930,7 +800,6 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
           width: signatureBoxWidth - 32,
         })
         .fillColor("#000000");
-
       doc
         .font("Helvetica")
         .fontSize(10)
@@ -939,99 +808,56 @@ export const generateLogEntryPdf = async (options: LogEntryPdfOptions) => {
           width: signatureBoxWidth - 32,
         })
         .fillColor("#000000");
-
       doc
         .font("Helvetica")
         .fontSize(10)
         .text("Firma:", doc.page.margins.left + 16, currentY + 58);
-
-      const signatureLineY = currentY + signatureBoxHeight - 22;
-      const signatureAreaHeight = 70;
-      const signatureAreaTop = signatureLineY - signatureAreaHeight + 4;
-      const signatureAreaX = doc.page.margins.left + 150;
-      const signatureAreaWidth = signatureBoxWidth - (signatureAreaX - doc.page.margins.left) - 16;
-      const signatureBuffer = participant.id
-        ? signatureImages.get(participant.id)
-        : undefined;
-
-      if (signatureBuffer) {
+      // --- Agregar firma manuscrita si existe ---
+      if (participant.status === "SIGNED") {
         try {
-          const imageDimensions = getImageDimensions(doc, signatureBuffer);
-          const naturalWidth = imageDimensions?.width || signatureAreaWidth;
-          const naturalHeight = imageDimensions?.height || signatureAreaHeight;
-          const maxSignatureWidth = signatureAreaWidth - 8;
-          const maxSignatureHeight = signatureAreaHeight - 6;
-          const scale =
-            naturalWidth && naturalHeight
-              ? Math.min(
-                  maxSignatureWidth / naturalWidth,
-                  maxSignatureHeight / naturalHeight,
-                  1
-                )
-              : 1;
-          const renderWidth = naturalWidth * scale;
-          const renderHeight = naturalHeight * scale;
-          const renderX =
-            signatureAreaX + Math.max(0, (signatureAreaWidth - renderWidth) / 2);
-          const renderY = Math.max(
-            signatureAreaTop,
-            signatureLineY - renderHeight + 1
-          ); // apoyar la base de la firma sobre la línea
-
-          // Limpiar el área para evitar fantasmas detrás
-          doc.save();
-          doc
-            .rect(
-              signatureAreaX - 8,
-              signatureAreaTop - 6,
-              signatureAreaWidth + 16,
-              signatureAreaHeight + 12
-            )
-            .fill("#FFFFFF");
-          doc.restore();
-
-          doc.image(signatureBuffer, renderX, renderY, {
-            width: renderWidth,
-            height: renderHeight,
-          });
-        } catch (error) {
-          console.warn("No se pudo renderizar la firma manuscrita en PDF", {
-            signerId: participant.id,
-            error,
-          });
-        }
+          const possiblePaths = [
+            path.join(uploadsDir, `user-signatures/${participant.id}.png`),
+            path.join(uploadsDir, `signature-${participant.id}.png`),
+            path.join(uploadsDir, `user-signatures/${participant.id}.jpg`),
+            path.join(uploadsDir, `signature-${participant.id}.jpg`)
+          ];
+          let signatureBuffer: Buffer | undefined = undefined;
+          for (const p of possiblePaths) {
+            if (fsSync.existsSync(p)) {
+              signatureBuffer = await fs.readFile(p);
+              break;
+            }
+          }
+          if (signatureBuffer) {
+            const maxWidth = signatureBoxWidth - 120;
+            const maxHeight = 36;
+            // Anclar la base de la imagen justo sobre la línea
+            const lineY = currentY + 72;
+            const imageY = lineY - maxHeight - 2; // 2px de margen entre base de firma y línea
+            const imageX = doc.page.margins.left + 70 + ((signatureBoxWidth - 86 - maxWidth) / 2);
+            doc.image(signatureBuffer, imageX, imageY, {
+              fit: [maxWidth, maxHeight],
+              align: 'center',
+              valign: 'bottom',
+            });
+          }
+        } catch (e) {}
       }
-
       doc
-        .moveTo(signatureAreaX, signatureLineY)
-        .lineTo(signatureAreaX + signatureAreaWidth, signatureLineY)
+        .moveTo(doc.page.margins.left + 70, currentY + 72)
+        .lineTo(doc.page.margins.left + signatureBoxWidth - 16, currentY + 72)
         .stroke();
-
       doc.y = currentY + signatureBoxHeight + 16;
       if (index === signatureParticipants.length - 1) {
         doc.moveDown();
       }
-    });
+    }
 
     doc.end();
   });
 
   const stats = await fs.stat(filePath);
-  
-  // Organizar PDFs generados por tenant, año y mes
-  const now = new Date();
-  const year = now.getFullYear().toString();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  
-  // Construir path con tenant si está disponible
-  const pathParts: string[] = [];
-  if (options.tenantId) {
-    const normalizedTenantId = options.tenantId.replace(/[^a-zA-Z0-9_-]/g, "");
-    pathParts.push('tenants', normalizedTenantId);
-  }
-  pathParts.push("generated", "log-entries", year, month, fileName);
-  
-  const storagePath = path.posix.join(...pathParts);
+  const storagePath = path.posix.join(GENERATED_SUBDIR, fileName);
   
   // Upload file to storage
   const storage = getStorage();
