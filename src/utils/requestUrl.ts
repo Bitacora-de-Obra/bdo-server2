@@ -13,9 +13,23 @@ const getHeaderValue = (value?: string | string[] | null): string | null => {
  * priorizando Origin para respetar el subdominio con el que el usuario accedió.
  */
 export const getRequestBaseUrl = (req: Request): string | null => {
+  const parseUrl = (value: string) => {
+    try {
+      const url = new URL(value);
+      return `${url.protocol}//${url.host}`.replace(/\/$/, "");
+    } catch {
+      return value.replace(/\/$/, "");
+    }
+  };
+
   const origin = getHeaderValue(req.headers.origin);
   if (origin) {
-    return origin.replace(/\/$/, "");
+    return parseUrl(origin);
+  }
+
+  const referer = getHeaderValue(req.headers.referer);
+  if (referer) {
+    return parseUrl(referer);
   }
 
   const forwardedProto = getHeaderValue(req.headers["x-forwarded-proto"]);
